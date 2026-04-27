@@ -197,7 +197,7 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-  int port = argc > 1 ? std::stoi(argv[1]) : 3000;
+  int port = argc > 1 ? std::stoi(argv[1]) : 3100;
   std::string machinesDir = argc > 2 ? argv[2] : "examples/machines";
   http::Server server;
   RealityService service(machinesDir);

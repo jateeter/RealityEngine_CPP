@@ -10,8 +10,8 @@ package downloads.
 
 ## What This Repo Provides
 
-- Native C++ Reality Engine service on port `3000` by default.
-- Native C++ Perception Engine service on port `3001` by default.
+- Native C++ Reality Engine service on port `3100` by default.
+- Native C++ Perception Engine service on port `3101` by default.
 - Startup loading of all machine JSON files from
   `../RealityEngine_AI/examples/machines`.
 - Shared Qdrant deployment model with `RealityEngine_AI` and `localAIStack`.

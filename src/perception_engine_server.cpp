@@ -144,8 +144,8 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-  int port = argc > 1 ? std::stoi(argv[1]) : 3001;
-  std::string realityUrl = argc > 2 ? argv[2] : "http://localhost:3000";
+  int port = argc > 1 ? std::stoi(argv[1]) : 3101;
+  std::string realityUrl = argc > 2 ? argv[2] : "http://localhost:3100";
   http::Server server;
   PerceptionService service(realityUrl);
   service.mount(server);

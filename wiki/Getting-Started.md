@@ -41,8 +41,8 @@ make e2e
 The default service URLs are:
 
 ```text
-Reality Engine    http://localhost:3000
-Perception Engine http://localhost:3001
+Reality Engine    http://localhost:3100
+Perception Engine http://localhost:3101
 Qdrant            http://localhost:4333
 ```
 
@@ -51,4 +51,3 @@ Stop services:
 ```bash
 ./stop.sh
 ```
-

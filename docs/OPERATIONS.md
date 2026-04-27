@@ -56,8 +56,8 @@ Important variables:
 
 | Variable | Default |
 | --- | --- |
-| `REALITY_ENGINE_PORT` | `3000` |
-| `PERCEPTION_ENGINE_PORT` | `3001` |
+| `REALITY_ENGINE_PORT` | `3100` |
+| `PERCEPTION_ENGINE_PORT` | `3101` |
 | `MACHINES_DIR` | `../RealityEngine_AI/examples/machines` |
 | `QDRANT_URL` | `http://localhost:4333` |
 | `QDRANT_STORAGE_DIR` | `../localAIStack/volumes/qdrant` |
@@ -89,4 +89,3 @@ Runtime files are ignored by git:
 | `logs/perception_engine.log` | Perception Engine service log. |
 | `run/reality_engine.pid` | Reality Engine PID file. |
 | `run/perception_engine.pid` | Perception Engine PID file. |
-
