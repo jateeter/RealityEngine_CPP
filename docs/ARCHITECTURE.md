@@ -10,7 +10,7 @@
 | `OutputArbiter` | `reality::OutputArbiter` | `AND`, `OR`, `PASSTHROUGH` output decisions. |
 | `Machine` | `reality::Machine` | Runs all sequences, applies arbiter, returns `MachineTransitionResult`. |
 | `PreceptionEngine` | `reality::PreceptionEngine` | Extracts machine input from the universal perceptual space and merges outputs. |
-| `PerceptualSpaceSimulator` | `reality::PerceptualSpaceSimulator` | Snapshot -> process -> merge loop for interconnected machines. |
+| `PerceptualSpaceSimulator` | `reality::PerceptualSpaceSimulator` | Snapshot -> parallel per-machine process -> deterministic merge loop for interconnected machines. |
 | `perception.engine.PerceptionEngine` | `reality::PerceptionEngine` | Assembles persistent vectors from test/simulated/sensor sources. |
 
 ## Services
@@ -56,6 +56,9 @@ without changing the domain layer.
   evaluated, preventing same-cycle cascades.
 - Perceptual simulation is input-atomic: all machine inputs are snapshotted
   before any output is merged back into shared space.
+- Machine transitions fan out across a bounded set of worker threads. Critical
+  event sequences inside one machine still transition serially; parallelism is
+  only between machines, and output merging keeps deterministic machine order.
 - Machine JSON uses the existing `RealityEngine_AI/examples/machines/*.json`
   schema.
 

@@ -1,12 +1,15 @@
 #include "reality/reality.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <set>
 #include <stdexcept>
+#include <thread>
 
 namespace reality {
 
@@ -17,6 +20,8 @@ long long now_ms() {
 
 std::string make_id(const std::string& prefix) {
   static std::mt19937_64 rng{std::random_device{}()};
+  static std::mutex rngMutex;
+  std::lock_guard<std::mutex> lock(rngMutex);
   return prefix + "-" + std::to_string(now_ms()) + "-" + std::to_string(rng() % 1000000000ULL);
 }
 
@@ -432,23 +437,88 @@ SimulationStep PerceptualSpaceSimulator::process_immediate(const Vector& vector,
   return result;
 }
 SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optional<ComparatorType> overrideType) {
-  std::map<std::string, Vector> snapshots;
-  for (const auto& [id, m] : machines) snapshots[id] = space.extract_machine_input(*m.perceptualMapping);
-  std::vector<std::pair<std::string, Vector>> pending;
+  struct MachinePhaseJob {
+    std::string id;
+    Machine* machine = nullptr;
+    Vector snapshot;
+    PerceptualMapping mapping;
+  };
+  struct MachinePhaseResult {
+    std::string id;
+    std::string name;
+    Vector snapshot;
+    PerceptualMapping mapping;
+    MachineTransitionResult transition;
+    std::vector<Vector> pendingOutputs;
+  };
+
+  std::vector<MachinePhaseJob> jobs;
+  jobs.reserve(machines.size());
+  for (auto& [id, m] : machines) {
+    auto mapping = *m.perceptualMapping;
+    jobs.push_back({id, &m, space.extract_machine_input(mapping), mapping});
+  }
+
+  std::vector<MachinePhaseResult> results(jobs.size());
+  std::atomic_size_t nextJob{0};
+  std::exception_ptr firstException;
+  std::mutex exceptionMutex;
+
+  auto worker = [&]() {
+    while (true) {
+      size_t index = nextJob.fetch_add(1);
+      if (index >= jobs.size()) break;
+      try {
+        auto& job = jobs[index];
+        auto transition = job.machine->process_input(job.snapshot, overrideType);
+        std::vector<Vector> pendingOutputs;
+        if (transition.arbiterMetadata.shouldOutput) {
+          for (const auto& [_, sr] : transition.sequenceResults) {
+            for (const auto& out : sr.assertedOutputs) pendingOutputs.push_back(out.vector);
+          }
+        }
+        results[index] = {
+          job.id,
+          job.machine->name,
+          job.snapshot,
+          job.mapping,
+          std::move(transition),
+          std::move(pendingOutputs)
+        };
+      } catch (...) {
+        std::lock_guard<std::mutex> lock(exceptionMutex);
+        if (!firstException) firstException = std::current_exception();
+      }
+    }
+  };
+
+  unsigned int hardwareThreads = std::thread::hardware_concurrency();
+  size_t workerCount = std::min(jobs.size(), static_cast<size_t>(hardwareThreads == 0 ? 2 : hardwareThreads));
+  std::vector<std::thread> workers;
+  workers.reserve(workerCount);
+  for (size_t i = 0; i < workerCount; ++i) workers.emplace_back(worker);
+  for (auto& thread : workers) thread.join();
+  if (firstException) std::rethrow_exception(firstException);
+
   SimulationStep step;
   step.stepNumber = stepNumber;
   step.timestamp = now_ms();
-  for (auto& [id, m] : machines) {
-    auto transition = m.process_input(snapshots[id], overrideType);
-    if (transition.arbiterMetadata.shouldOutput) {
-      for (const auto& [_, sr] : transition.sequenceResults) for (const auto& out : sr.assertedOutputs) pending.push_back({id, out.vector});
-    }
-    auto mapping = *m.perceptualMapping;
-    MachineStepResult msr{id, m.name, snapshots[id], transition.machineOutput ? std::optional<Vector>(transition.machineOutput->vector) : std::nullopt, mapping.input, std::nullopt, transition};
-    if (msr.outputVector) msr.outputRegion = mapping.output;
-    step.machineResults[id] = msr;
+  for (auto& result : results) {
+    MachineStepResult msr{
+      result.id,
+      result.name,
+      result.snapshot,
+      result.transition.machineOutput ? std::optional<Vector>(result.transition.machineOutput->vector) : std::nullopt,
+      result.mapping.input,
+      std::nullopt,
+      result.transition
+    };
+    if (msr.outputVector) msr.outputRegion = result.mapping.output;
+    step.machineResults[result.id] = msr;
   }
-  for (const auto& [id, output] : pending) space.merge_machine_output(output, *machines[id].perceptualMapping);
+  for (const auto& result : results) {
+    for (const auto& output : result.pendingOutputs) space.merge_machine_output(output, result.mapping);
+  }
   step.perceptualSpace = space.vector();
   for (const auto& [id, msr] : step.machineResults) {
     step.activeRegions.push_back({msr.inputRegion.offset, msr.inputRegion.length, id, "input"});

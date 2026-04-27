@@ -1,6 +1,6 @@
 CXX ?= g++
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -pedantic -Iinclude
-LDFLAGS ?=
+LDFLAGS ?= -pthread
 
 BIN_DIR := bin
 SRC := src/reality.cpp src/http.cpp

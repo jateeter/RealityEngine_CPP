@@ -12,7 +12,7 @@ service layer.
 | `Machine` | Groups sequences and applies an output arbiter. |
 | `OutputArbiter` | Implements `AND`, `OR`, and `PASSTHROUGH` output behavior. |
 | `PreceptionEngine` | Extracts machine-local input from the universal space. |
-| `PerceptualSpaceSimulator` | Runs snapshot, process, merge simulation phases. |
+| `PerceptualSpaceSimulator` | Runs snapshot, parallel per-machine process, merge simulation phases. |
 | `PerceptionEngine` | Assembles persistent vectors from sources. |
 
 ## Binaries
@@ -29,6 +29,15 @@ service layer.
 1. Perception Engine assembles a vector using the configured deployment dimension.
 2. Perception Engine posts it to Reality Engine `POST /api/perceive`.
 3. Reality Engine snapshots mapped machine inputs.
-4. Machines process their local vectors.
-5. Outputs are merged back into perceptual space.
+4. Machines process their local vectors across a bounded worker fan-out.
+5. Outputs are merged back into perceptual space in deterministic machine order.
 6. Perception Engine can carry the merged perceptual space forward.
+
+## Machine Parallelism
+
+`PerceptualSpaceSimulator::run_phases()` snapshots all machine inputs before
+starting any transition work. Each machine then runs independently against its
+snapshot, while critical event sequences inside that machine remain serialized
+through `Machine::process_input()`. Shared perceptual-space writes happen only
+after all machine transitions finish, preserving input atomicity and avoiding
+cross-machine clock coupling.
