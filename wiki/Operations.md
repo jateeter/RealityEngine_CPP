@@ -35,7 +35,14 @@ Common overrides:
 ```bash
 REALITY_ENGINE_PORT=3100
 PERCEPTION_ENGINE_PORT=3101
+VECTOR_DIMENSION=768
 MACHINES_DIR=../RealityEngine_AI/examples/machines
 QDRANT_URL=http://localhost:4333
 QDRANT_STORAGE_DIR=../localAIStack/volumes/qdrant
+LOCAL_AI_API_URL=http://localhost:4000
+LOCAL_AI_MACHINES_DIR=../localAIStack/data/machines
+LOCAL_AI_BOOTSTRAP=false
 ```
+
+Set `LOCAL_AI_BOOTSTRAP=true` when the C++ Perception Engine should register
+localAIStack-compatible sensors and import bridge machines during startup.

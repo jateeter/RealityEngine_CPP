@@ -1,11 +1,48 @@
 #include "reality/http.hpp"
 #include "reality/reality.hpp"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <set>
 
 using namespace reality;
 
 namespace {
+
+struct LocalAISensorSpec {
+  std::string sensorId;
+  std::string name;
+  RegionMapping region;
+  long ttlMs = 30000;
+};
+
+const std::vector<LocalAISensorSpec>& localai_sensor_specs() {
+  static const std::vector<LocalAISensorSpec> specs{
+    {"localai_rag_retrieval", "localai/rag_retrieval", {52, 4}, 30000},
+    {"localai_rag_grading", "localai/rag_grading", {56, 4}, 30000},
+    {"localai_agent_activity", "localai/agent_activity", {64, 4}, 30000},
+  };
+  return specs;
+}
+
+const std::vector<std::string>& localai_machine_files() {
+  static const std::vector<std::string> files{
+    "rag_corrective_cycle.json",
+    "session_rag_context.json",
+    "session_agent_context.json",
+    "ai_load_bridge.json",
+    "agent_activity_classifier.json",
+  };
+  return files;
+}
+
+bool truthy_env(const char* value) {
+  if (!value) return false;
+  std::string v(value);
+  return v == "1" || v == "true" || v == "TRUE" || v == "yes" || v == "YES";
+}
 
 Json parse_body(const http::Request& req) {
   return req.body.empty() ? Json::Object{} : json::parse(req.body);
@@ -17,6 +54,7 @@ http::Response ok(const Json& value) {
 
 SourceConfig source_from_json(const Json& j) {
   SourceConfig s;
+  s.id = j.at("id").as_string();
   s.kind = j.at("type").as_string(j.at("kind").as_string("simulated"));
   s.name = j.at("name").as_string("source");
   s.active = j.at("active").as_bool(true);
@@ -33,6 +71,7 @@ SourceConfig source_from_json(const Json& j) {
   } else if (s.kind == "sensor") {
     s.sensorId = j.at("sensorId").as_string();
     s.lastValue = json::to_numbers(j.at("lastValue"));
+    if (j.at("lastUpdated").is_number()) s.lastUpdated = static_cast<long long>(j.at("lastUpdated").as_number());
     s.ttlMs = static_cast<long>(j.at("ttlMs").as_number(5000));
   } else {
     s.kind = "simulated";
@@ -44,9 +83,32 @@ SourceConfig source_from_json(const Json& j) {
   return s;
 }
 
+SourceConfig sensor_source(const LocalAISensorSpec& spec) {
+  SourceConfig s;
+  s.kind = "sensor";
+  s.name = spec.name;
+  s.region = spec.region;
+  s.active = true;
+  s.sensorId = spec.sensorId;
+  s.ttlMs = spec.ttlMs;
+  return s;
+}
+
 class PerceptionService {
 public:
-  explicit PerceptionService(std::string realityUrl) : realityEngineUrl(std::move(realityUrl)) {}
+  PerceptionService(std::string realityUrl, std::string localAIUrl, std::string localAIMachinesDir, int vectorDimension, bool bootstrapLocalAI)
+      : realityEngineUrl(std::move(realityUrl)),
+        localAIBaseUrl(std::move(localAIUrl)),
+        localAIMachinesDirectory(std::move(localAIMachinesDir)),
+        engine(vectorDimension) {
+    if (bootstrapLocalAI) {
+      try {
+        bootstrap_localai();
+      } catch (const std::exception& e) {
+        std::cerr << "localAI bootstrap skipped: " << e.what() << "\n";
+      }
+    }
+  }
 
   void mount(http::Server& server) {
     server.route("GET", "/", [](const http::Request&) {
@@ -57,6 +119,15 @@ public:
     });
     server.route("GET", "/api/state", [this](const http::Request&) {
       return ok(engine.state_json(lastPush, autoRunning, autoIntervalMs));
+    });
+    server.route("GET", "/api/integrations/localai/status", [this](const http::Request&) {
+      return ok(localai_status());
+    });
+    server.route("POST", "/api/integrations/localai/bootstrap", [this](const http::Request&) {
+      return ok(bootstrap_localai());
+    });
+    server.route("POST", "/api/signals", [this](const http::Request& req) {
+      return ingest_signal(parse_body(req));
     });
     server.route("POST", "/api/push", [this](const http::Request&) {
       return do_push();
@@ -119,6 +190,166 @@ public:
   }
 
 private:
+  bool sensor_exists(const std::string& sensorId) const {
+    for (const auto& s : engine.get_sources()) {
+      if (s.kind == "sensor" && s.sensorId == sensorId) return true;
+    }
+    return false;
+  }
+
+  std::optional<SourceConfig> sensor_source_by_id(const std::string& sensorId) const {
+    for (const auto& s : engine.get_sources()) {
+      if (s.kind == "sensor" && s.sensorId == sensorId) return s;
+    }
+    return std::nullopt;
+  }
+
+  std::set<std::string> existing_machine_names() const {
+    std::set<std::string> names;
+    try {
+      Json data = json::parse(http::get(realityEngineUrl + "/api/machines"));
+      for (const auto& m : data.at("machines").is_array() ? data.at("machines").array() : Json::Array{}) {
+        names.insert(m.at("name").as_string());
+      }
+    } catch (...) {
+    }
+    return names;
+  }
+
+  Json localai_status() const {
+    Json health = nullptr;
+    bool reachable = false;
+    try {
+      health = json::parse(http::get(localAIBaseUrl + "/health"));
+      reachable = true;
+    } catch (const std::exception& e) {
+      health = Json::Object{{"error", e.what()}};
+    }
+
+    Json::Array sensors;
+    for (const auto& spec : localai_sensor_specs()) {
+      sensors.push_back(Json::Object{
+        {"sensorId", spec.sensorId},
+        {"name", spec.name},
+        {"region", to_json(spec.region)},
+        {"registered", sensor_exists(spec.sensorId)},
+      });
+    }
+
+    return Json::Object{
+      {"localAIBaseUrl", localAIBaseUrl},
+      {"reachable", reachable},
+      {"health", health},
+      {"sensors", sensors},
+      {"machineDirectory", localAIMachinesDirectory},
+    };
+  }
+
+  Json bootstrap_localai() {
+    Json::Array registeredSensors;
+    Json::Array skippedSensors;
+    for (const auto& spec : localai_sensor_specs()) {
+      if (sensor_exists(spec.sensorId)) {
+        skippedSensors.emplace_back(spec.sensorId);
+        continue;
+      }
+      auto src = engine.add_source(sensor_source(spec));
+      registeredSensors.push_back(to_json(src));
+    }
+
+    Json::Array importedMachines;
+    Json::Array skippedMachines;
+    Json::Array failedMachines;
+    auto names = existing_machine_names();
+    for (const auto& filename : localai_machine_files()) {
+      std::filesystem::path path = std::filesystem::path(localAIMachinesDirectory) / filename;
+      try {
+        std::ifstream in(path);
+        if (!in) {
+          failedMachines.push_back(Json::Object{{"file", filename}, {"error", "not found"}});
+          continue;
+        }
+        std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        Machine machine = load_machine_from_json_string(raw);
+        if (names.count(machine.name)) {
+          skippedMachines.emplace_back(machine.name);
+          continue;
+        }
+        Json response = json::parse(http::post_json(realityEngineUrl + "/api/machines", raw));
+        importedMachines.push_back(response.at("machine").is_object() ? response.at("machine") : machine.to_json());
+        names.insert(machine.name);
+      } catch (const std::exception& e) {
+        failedMachines.push_back(Json::Object{{"file", filename}, {"error", e.what()}});
+      }
+    }
+
+    return Json::Object{
+      {"success", true},
+      {"registeredSensors", registeredSensors},
+      {"skippedSensors", skippedSensors},
+      {"importedMachines", importedMachines},
+      {"skippedMachines", skippedMachines},
+      {"failedMachines", failedMachines},
+      {"localAIBaseUrl", localAIBaseUrl},
+      {"machineDirectory", localAIMachinesDirectory},
+    };
+  }
+
+  http::Response ingest_signal(const Json& body) {
+    Vector values = json::to_numbers(body.at("values"));
+    if (values.empty()) return http::error_response("values must be a non-empty array", 400);
+
+    bool updated = false;
+    SourceConfig source;
+    if (body.at("sensorId").is_string()) {
+      const std::string sensorId = body.at("sensorId").as_string();
+      updated = engine.update_sensor_value(sensorId, values);
+      if (updated) source = sensor_source_by_id(sensorId).value_or(source);
+      if (!updated && body.at("region").is_object()) {
+        source.kind = "sensor";
+        source.name = body.at("name").as_string(sensorId);
+        source.sensorId = sensorId;
+        source.region = {
+          static_cast<int>(body.at("region").at("offset").as_number()),
+          static_cast<int>(body.at("region").at("length").as_number()),
+        };
+        source.active = body.at("active").as_bool(true);
+        source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
+        source.lastValue = values;
+        source.lastUpdated = now_ms();
+        source = engine.add_source(source);
+        updated = true;
+      }
+      if (!updated) return http::error_response("No sensor source with sensorId \"" + sensorId + "\"", 404);
+    } else if (body.at("region").is_object()) {
+      source.kind = "sensor";
+      source.name = body.at("name").as_string("external/signal");
+      source.sensorId = body.at("name").as_string(make_id("external-sensor"));
+      source.region = {
+        static_cast<int>(body.at("region").at("offset").as_number()),
+        static_cast<int>(body.at("region").at("length").as_number()),
+      };
+      source.active = true;
+      source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
+      source.lastValue = values;
+      source.lastUpdated = now_ms();
+      source = engine.add_source(source);
+      updated = true;
+    } else {
+      return http::error_response("signal requires sensorId or region", 400);
+    }
+
+    Json response = Json::Object{
+      {"success", true},
+      {"timestamp", static_cast<double>(now_ms())},
+      {"source", source.id.empty() ? Json(nullptr) : to_json(source)},
+    };
+    if (body.at("triggerPush").as_bool(false)) {
+      response.object()["push"] = json::parse(do_push().body);
+    }
+    return ok(response);
+  }
+
   http::Response do_push() {
     Vector vector = engine.assemble_vector();
     Json payload = Json::Object{{"vector", json::numbers(vector)}, {"matchAlgorithmOverride", to_string(engine.matchAlgorithm == MatchAlgorithm::Equals ? ComparatorType::Equals : ComparatorType::Gte)}};
@@ -134,8 +365,10 @@ private:
     }
   }
 
-  PerceptionEngine engine;
   std::string realityEngineUrl;
+  std::string localAIBaseUrl;
+  std::string localAIMachinesDirectory;
+  PerceptionEngine engine;
   bool autoRunning = false;
   long autoIntervalMs = 1000;
   std::optional<long long> lastPush;
@@ -146,8 +379,12 @@ private:
 int main(int argc, char** argv) {
   int port = argc > 1 ? std::stoi(argv[1]) : 3101;
   std::string realityUrl = argc > 2 ? argv[2] : "http://localhost:3100";
+  std::string localAIUrl = argc > 3 ? argv[3] : (std::getenv("LOCAL_AI_API_URL") ? std::getenv("LOCAL_AI_API_URL") : "http://localhost:4000");
+  std::string localAIMachinesDir = argc > 4 ? argv[4] : (std::getenv("LOCAL_AI_MACHINES_DIR") ? std::getenv("LOCAL_AI_MACHINES_DIR") : "../localAIStack/data/machines");
+  int vectorDimension = argc > 5 ? std::stoi(argv[5]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 768);
+  bool bootstrapLocalAI = truthy_env(std::getenv("LOCAL_AI_BOOTSTRAP"));
   http::Server server;
-  PerceptionService service(realityUrl);
+  PerceptionService service(realityUrl, localAIUrl, localAIMachinesDir, vectorDimension, bootstrapLocalAI);
   service.mount(server);
   server.listen(port);
   return 0;

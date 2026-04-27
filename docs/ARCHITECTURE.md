@@ -9,9 +9,9 @@
 | `CriticalEventSequence` | `reality::CriticalEventSequence` | Deferred activation over active vectors; initial vectors remain armed. |
 | `OutputArbiter` | `reality::OutputArbiter` | `AND`, `OR`, `PASSTHROUGH` output decisions. |
 | `Machine` | `reality::Machine` | Runs all sequences, applies arbiter, returns `MachineTransitionResult`. |
-| `PreceptionEngine` | `reality::PreceptionEngine` | Extracts machine input from a 256D universal perceptual space and merges outputs. |
+| `PreceptionEngine` | `reality::PreceptionEngine` | Extracts machine input from the universal perceptual space and merges outputs. |
 | `PerceptualSpaceSimulator` | `reality::PerceptualSpaceSimulator` | Snapshot -> process -> merge loop for interconnected machines. |
-| `perception.engine.PerceptionEngine` | `reality::PerceptionEngine` | Assembles persistent 256D vectors from test/simulated/sensor sources. |
+| `perception.engine.PerceptionEngine` | `reality::PerceptionEngine` | Assembles persistent vectors from test/simulated/sensor sources. |
 
 ## Services
 
@@ -26,6 +26,9 @@ The operational scripts launch them in dependency order:
 2. `start.sh` verifies `/api/health`.
 3. `start.sh` verifies `/api/machines` returns a nonzero machine count.
 4. Perception Engine starts and points at the local Reality Engine URL.
+5. If `LOCAL_AI_BOOTSTRAP=true`, Perception Engine registers localAIStack-style
+   sensor sources and imports local AI bridge machines into the Reality Engine
+   when they are available.
 
 The HTTP layer is deliberately small and blocking. It is meant as a portable
 baseline for API and behavior equivalence. A production hardening pass can swap
@@ -63,3 +66,16 @@ Qdrant is owned and operated by `localAIStack`, exposed on host port `4333`, and
 stored at `../localAIStack/volumes/qdrant`. This repo verifies Qdrant and its
 expected collections during startup but does not start, stop, or delete Qdrant
 data.
+
+## Local AI Signal Model
+
+External AI systems integrate through Perception Engine sensor sources. A
+sensor source owns a region of the configured perceptual space and supplies
+values with TTL expiry. Deployment defaults to `VECTOR_DIMENSION=768`, matching
+the current `RealityEngine_AI` stack. The C++ service supports the localAIStack bridge sensors at
+`[52:56]`, `[56:60]`, and `[64:68]`, plus generic ad hoc signal writes through
+`POST /api/signals`.
+
+The Reality Engine is not coupled to localAIStack, Ollama, LangGraph, or any
+specific model provider. It only observes the assembled vector that the
+Perception Engine pushes into `/api/perceive`.

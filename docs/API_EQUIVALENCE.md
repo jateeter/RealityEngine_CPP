@@ -13,7 +13,7 @@ Base path: `/api`
 | --- | --- | --- |
 | `GET /health` | Implemented | Same `status`, `timestamp`, `version` shape. |
 | `GET /config` | Implemented | Static C++ config for now. |
-| `PUT /config/dimension` | Documented gap | Native engine currently fixed to 256D. |
+| `PUT /config/dimension` | Documented gap | Native engine dimension is configured at process startup through `VECTOR_DIMENSION`. |
 | `PUT /config/threshold` | Documented gap | Comparators carry thresholds per vector. |
 | `POST /vectors`, `GET/DELETE /vectors/:id`, `POST /vectors/search` | Documented gap | VectorStore/Qdrant replacement not included in first port. |
 | `POST/GET/DELETE /sequences...` | Documented gap | Sequence CRUD will be added after machine-level parity. |
@@ -66,6 +66,9 @@ Base path: `/api`
 | --- | --- | --- |
 | `GET /health` | Implemented | Same shape. |
 | `GET /state` | Implemented | Sources, assembled vector, global step, auto config. |
+| `GET /integrations/localai/status` | C++ extension | Reports configured local AI API health and localAIStack-compatible sensor registration. |
+| `POST /integrations/localai/bootstrap` | C++ extension | Registers localAIStack-compatible sensors and imports bridge machines when available. |
+| `POST /signals` | C++ extension | Generic external-signal write path over sensor sources; optionally triggers `/api/push`. |
 | `POST /push` | Implemented | Posts to Reality Engine `/api/perceive`. |
 | `POST /auto/start`, `POST /auto/stop` | State-compatible | Tracks auto state; background scheduler is planned. |
 | `PATCH /config` | Implemented | Supports `gte` and `equals`. |
@@ -87,3 +90,7 @@ Production parity still needs:
 - Background auto-push scheduler.
 - Checkpoint persistence and export route.
 - More complete JSON patch semantics for perception sources.
+
+The local AI endpoints are C++ extensions around the existing sensor source
+model. They preserve Scala/Node Perception Engine behavior while making
+localAIStack and custom AI gateways easier to connect.

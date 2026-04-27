@@ -482,8 +482,11 @@ int PerceptualSpaceSimulator::current_step() const { return currentStep; }
 bool PerceptualSpaceSimulator::is_running() const { return running; }
 long PerceptualSpaceSimulator::step_delay_ms() const { return configuredStepDelayMs; }
 
+PerceptionEngine::PerceptionEngine(int vectorDimension)
+  : dimension(vectorDimension), persistentVector(static_cast<size_t>(vectorDimension), 0.0) {}
+
 SourceConfig PerceptionEngine::add_source(SourceConfig source) {
-  source.id = make_id("source");
+  if (source.id.empty()) source.id = make_id("source");
   sources[source.id] = source;
   testStep[source.id] = 0;
   if (source.pattern == SimPattern::RandomWalk) walkState[source.id] = Vector(static_cast<size_t>(source.region.length), source.dcOffset);
@@ -518,7 +521,7 @@ Vector PerceptionEngine::assemble_vector() const {
   return out;
 }
 void PerceptionEngine::update_from_perceptual_space(const Vector& values) {
-  persistentVector.assign(256, 0.0);
+  persistentVector.assign(static_cast<size_t>(dimension), 0.0);
   for (size_t i = 0; i < persistentVector.size() && i < values.size(); ++i) persistentVector[i] = values[i];
 }
 void PerceptionEngine::advance() {
@@ -539,7 +542,7 @@ void PerceptionEngine::advance() {
 }
 void PerceptionEngine::reset() {
   globalStep = 0;
-  persistentVector.assign(256, 0.0);
+  persistentVector.assign(static_cast<size_t>(dimension), 0.0);
   for (auto& [id, s] : sources) {
     if (s.kind == "test") { testStep[id] = 0; s.active = true; }
     if (s.pattern == SimPattern::RandomWalk) walkState[id] = Vector(static_cast<size_t>(s.region.length), s.dcOffset);
@@ -584,7 +587,7 @@ Vector PerceptionEngine::source_values(const SourceConfig& s) const {
 Json PerceptionEngine::state_json(std::optional<long long> lastPush, bool autoRunning, long autoIntervalMs) const {
   Json::Array srcs;
   for (const auto& [_, s] : sources) srcs.push_back(to_json(s));
-  return Json::Object{{"sources", srcs}, {"assembledVector", json::numbers(assemble_vector())}, {"globalStep", static_cast<double>(globalStep)}, {"auto", Json::Object{{"running", autoRunning}, {"intervalMs", static_cast<double>(autoIntervalMs)}}}, {"lastPush", lastPush ? Json(static_cast<double>(*lastPush)) : Json(nullptr)}, {"matchAlgorithm", to_string(matchAlgorithm)}};
+  return Json::Object{{"sources", srcs}, {"assembledVector", json::numbers(assemble_vector())}, {"globalStep", static_cast<double>(globalStep)}, {"auto", Json::Object{{"running", autoRunning}, {"intervalMs", static_cast<double>(autoIntervalMs)}}}, {"lastPush", lastPush ? Json(static_cast<double>(*lastPush)) : Json(nullptr)}, {"matchAlgorithm", to_string(matchAlgorithm)}, {"vectorSize", static_cast<double>(dimension)}};
 }
 
 static RegionMapping parse_region(const Json& j) {

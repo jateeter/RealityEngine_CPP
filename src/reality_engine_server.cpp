@@ -1,6 +1,7 @@
 #include "reality/http.hpp"
 #include "reality/reality.hpp"
 
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 
@@ -10,7 +11,8 @@ namespace {
 
 class RealityService {
 public:
-  explicit RealityService(const std::string& machinesDir) : simulator(256), preception(256), machinesDirectory(machinesDir) {
+  RealityService(const std::string& machinesDir, int vectorDimension)
+      : dimension(vectorDimension), simulator(vectorDimension), preception(vectorDimension), machinesDirectory(machinesDir) {
     for (const auto& m : load_machines_from_directory(machinesDir)) add_machine(m);
   }
 
@@ -21,8 +23,8 @@ public:
     server.route("GET", "/api/health", [](const http::Request&) {
       return ok(Json::Object{{"status", "healthy"}, {"timestamp", static_cast<double>(now_ms())}, {"version", "1.0.0-cpp"}});
     });
-    server.route("GET", "/api/config", [](const http::Request&) {
-      return ok(Json::Object{{"vectorDimension", 256.0}, {"matchThreshold", 0.5}, {"qdrantUrl", ""}, {"collectionName", "reality-vectors"}});
+    server.route("GET", "/api/config", [this](const http::Request&) {
+      return ok(Json::Object{{"vectorDimension", static_cast<double>(dimension)}, {"matchThreshold", 0.5}, {"qdrantUrl", ""}, {"collectionName", "reality-vectors"}});
     });
     server.route("POST", "/api/engine/reset", [this](const http::Request&) {
       for (auto& [_, m] : machines) m.reset();
@@ -186,6 +188,7 @@ private:
   }
 
   std::map<std::string, Machine> machines;
+  int dimension = 768;
   PerceptualSpaceSimulator simulator;
   PreceptionEngine preception;
   std::string machinesDirectory;
@@ -199,8 +202,9 @@ private:
 int main(int argc, char** argv) {
   int port = argc > 1 ? std::stoi(argv[1]) : 3100;
   std::string machinesDir = argc > 2 ? argv[2] : "examples/machines";
+  int vectorDimension = argc > 3 ? std::stoi(argv[3]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 768);
   http::Server server;
-  RealityService service(machinesDir);
+  RealityService service(machinesDir, vectorDimension);
   service.mount(server);
   server.listen(port);
   return 0;

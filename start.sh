@@ -22,12 +22,16 @@ fi
 
 REALITY_ENGINE_PORT="${REALITY_ENGINE_PORT:-3100}"
 PERCEPTION_ENGINE_PORT="${PERCEPTION_ENGINE_PORT:-3101}"
+VECTOR_DIMENSION="${VECTOR_DIMENSION:-768}"
 MACHINES_DIR="${MACHINES_DIR:-../RealityEngine_AI/examples/machines}"
 QDRANT_URL="${QDRANT_URL:-http://localhost:4333}"
 QDRANT_GRPC_URL="${QDRANT_GRPC_URL:-http://localhost:4334}"
 QDRANT_STORAGE_DIR="${QDRANT_STORAGE_DIR:-../localAIStack/volumes/qdrant}"
 QDRANT_LOCALAI_COLLECTION="${QDRANT_LOCALAI_COLLECTION:-localai_docs}"
 QDRANT_REALITY_COLLECTION="${QDRANT_REALITY_COLLECTION:-reality-vectors}"
+LOCAL_AI_API_URL="${LOCAL_AI_API_URL:-http://localhost:4000}"
+LOCAL_AI_MACHINES_DIR="${LOCAL_AI_MACHINES_DIR:-../localAIStack/data/machines}"
+LOCAL_AI_BOOTSTRAP="${LOCAL_AI_BOOTSTRAP:-false}"
 
 RUN_DIR="$ROOT_DIR/run"
 LOG_DIR="$ROOT_DIR/logs"
@@ -40,10 +44,16 @@ Usage: ./start.sh [--no-build] [--allow-missing-qdrant]
 Starts RealityEngine_CPP native services:
   - Reality Engine API    : http://localhost:${REALITY_ENGINE_PORT}
   - Perception Engine API : http://localhost:${PERCEPTION_ENGINE_PORT}
+  - Vector dimension      : ${VECTOR_DIMENSION}
 
 Qdrant is shared with localAIStack and is verified but not managed here:
   - REST    : ${QDRANT_URL}
   - Storage : ${QDRANT_STORAGE_DIR}
+
+Optional local AI integration:
+  - API       : ${LOCAL_AI_API_URL}
+  - Machines  : ${LOCAL_AI_MACHINES_DIR}
+  - Bootstrap : ${LOCAL_AI_BOOTSTRAP}
 USAGE
 }
 
@@ -144,6 +154,18 @@ else
   warn "Qdrant storage directory not found yet: $QDRANT_STORAGE_DIR"
 fi
 
+info "Checking optional local AI API at $LOCAL_AI_API_URL..."
+if curl -sf "$LOCAL_AI_API_URL/health" >/dev/null 2>&1; then
+  ok "local AI API reachable"
+else
+  warn "local AI API not reachable; perception external-signal endpoints still available"
+fi
+
+if [ "$LOCAL_AI_BOOTSTRAP" = "true" ] || [ "$LOCAL_AI_BOOTSTRAP" = "1" ] || [ "$LOCAL_AI_BOOTSTRAP" = "yes" ]; then
+  [ -d "$LOCAL_AI_MACHINES_DIR" ] || warn "local AI machine directory not found: $LOCAL_AI_MACHINES_DIR"
+  info "local AI bootstrap enabled; Perception Engine will register localAIStack sensors and import bridge machines"
+fi
+
 if command -v python3 >/dev/null 2>&1 && curl -sf "$QDRANT_URL/collections" >/tmp/re_cpp_qdrant_collections.json 2>/dev/null; then
   python3 - /tmp/re_cpp_qdrant_collections.json "$QDRANT_LOCALAI_COLLECTION" "$QDRANT_REALITY_COLLECTION" <<'PY' || true
 import json, sys
@@ -168,9 +190,11 @@ check_port_free "$REALITY_ENGINE_PORT" "$RUN_DIR/reality_engine.pid"
 check_port_free "$PERCEPTION_ENGINE_PORT" "$RUN_DIR/perception_engine.pid"
 
 export QDRANT_URL QDRANT_GRPC_URL QDRANT_STORAGE_DIR QDRANT_LOCALAI_COLLECTION QDRANT_REALITY_COLLECTION
+export LOCAL_AI_API_URL LOCAL_AI_MACHINES_DIR LOCAL_AI_BOOTSTRAP
+export VECTOR_DIMENSION
 
 info "Starting Reality Engine on port $REALITY_ENGINE_PORT..."
-nohup "$ROOT_DIR/bin/reality_engine_server" "$REALITY_ENGINE_PORT" "$MACHINES_DIR" \
+nohup "$ROOT_DIR/bin/reality_engine_server" "$REALITY_ENGINE_PORT" "$MACHINES_DIR" "$VECTOR_DIMENSION" \
   > "$LOG_DIR/reality_engine.log" 2>&1 &
 echo $! > "$RUN_DIR/reality_engine.pid"
 
@@ -194,7 +218,7 @@ fi
 ok "Loaded $MACHINE_COUNT machine(s) from $MACHINES_DIR"
 
 info "Starting Perception Engine on port $PERCEPTION_ENGINE_PORT..."
-nohup "$ROOT_DIR/bin/perception_engine_server" "$PERCEPTION_ENGINE_PORT" "http://localhost:${REALITY_ENGINE_PORT}" \
+nohup "$ROOT_DIR/bin/perception_engine_server" "$PERCEPTION_ENGINE_PORT" "http://localhost:${REALITY_ENGINE_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" \
   > "$LOG_DIR/perception_engine.log" 2>&1 &
 echo $! > "$RUN_DIR/perception_engine.pid"
 
@@ -210,6 +234,8 @@ echo "RealityEngine_CPP Running"
 echo "=================================================="
 printf "  %-24s %s\n" "Reality Engine" "http://localhost:${REALITY_ENGINE_PORT}"
 printf "  %-24s %s\n" "Perception Engine" "http://localhost:${PERCEPTION_ENGINE_PORT}"
+printf "  %-24s %s\n" "Vector dimension" "${VECTOR_DIMENSION}"
+printf "  %-24s %s\n" "local AI API" "${LOCAL_AI_API_URL}"
 printf "  %-24s %s\n" "Qdrant shared store" "${QDRANT_URL}"
 printf "  %-24s %s\n" "Qdrant data repo" "${QDRANT_STORAGE_DIR}"
 echo ""

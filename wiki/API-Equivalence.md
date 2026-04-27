@@ -21,6 +21,8 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 - Reset.
 - Source list/create/update/delete.
 - Sensor value push.
+- localAIStack-compatible status/bootstrap endpoints.
+- Generic external signal ingestion through `POST /api/signals`.
 - Machine proxy.
 
 ## Known Gaps
@@ -33,4 +35,3 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 - Full merge-patch behavior for perception sources.
 
 See `docs/API_EQUIVALENCE.md` in the repo for the detailed endpoint table.
-

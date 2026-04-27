@@ -303,6 +303,7 @@ struct SourceConfig {
 
 class PerceptionEngine {
 public:
+  explicit PerceptionEngine(int vectorDimension = 256);
   MatchAlgorithm matchAlgorithm = MatchAlgorithm::Gte;
   long long globalStep = 0;
 
@@ -322,7 +323,8 @@ private:
   std::map<std::string, SourceConfig> sources;
   std::map<std::string, int> testStep;
   std::map<std::string, Vector> walkState;
-  Vector persistentVector = Vector(256, 0.0);
+  int dimension = 256;
+  Vector persistentVector;
 };
 
 Machine load_machine_from_json_string(const std::string& raw, std::optional<std::string> id = std::nullopt);
@@ -337,4 +339,3 @@ Json to_json(const SimulationStep& step);
 Json to_json(const SourceConfig& source);
 
 } // namespace reality
-

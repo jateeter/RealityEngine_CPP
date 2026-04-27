@@ -13,6 +13,7 @@ behavioral model and keeps operational compatibility with the shared
 - [Architecture](Architecture)
 - [Operations](Operations)
 - [API Equivalence](API-Equivalence)
+- [Local AI Integration](Local-AI-Integration)
 - [E2E Testing](E2E-Testing)
 - [Shared Qdrant](Shared-Qdrant)
 - [Roadmap](Roadmap)
@@ -26,4 +27,3 @@ make e2e
 ./start.sh
 ./stop.sh
 ```
-

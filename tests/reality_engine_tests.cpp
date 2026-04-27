@@ -66,7 +66,23 @@ int main() {
     pe.remove_source(added.id);
   }
 
+  {
+    PerceptionEngine pe;
+    SourceConfig sensor;
+    sensor.kind = "sensor";
+    sensor.id = "stable-source-id";
+    sensor.name = "localai/rag_retrieval";
+    sensor.sensorId = "localai_rag_retrieval";
+    sensor.region = {52, 4};
+    sensor.ttlMs = 30000;
+    auto added = pe.add_source(sensor);
+    assert(added.id == "stable-source-id");
+    assert(pe.update_sensor_value("localai_rag_retrieval", {0.4, 0.8, 0.0, 0.0}));
+    auto assembled = pe.assemble_vector();
+    assert(assembled[52] == 0.4);
+    assert(assembled[53] == 0.8);
+  }
+
   std::cout << "RealityEngine_CPP smoke tests passed\n";
   return 0;
 }
-

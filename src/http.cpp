@@ -157,58 +157,58 @@ static std::tuple<std::string, int, std::string> parse_url(const std::string& ur
   return {host, port, path};
 }
 
-std::string post_json(const std::string& url, const std::string& body) {
-  auto [host, port, path] = parse_url(url);
+static int connect_url(const std::string& host, int port) {
   addrinfo hints{}, *res = nullptr;
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0) throw std::runtime_error("getaddrinfo failed");
-  int fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-  if (fd < 0) throw std::runtime_error("socket failed");
-  if (::connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
-    freeaddrinfo(res);
+
+  int fd = -1;
+  for (addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
+    fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (fd < 0) continue;
+    if (::connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
+      freeaddrinfo(res);
+      return fd;
+    }
     ::close(fd);
-    throw std::runtime_error("connect failed");
+    fd = -1;
   }
   freeaddrinfo(res);
-  std::ostringstream req;
-  req << "POST " << path << " HTTP/1.1\r\nHost: " << host << "\r\nContent-Type: application/json\r\nContent-Length: " << body.size() << "\r\nConnection: close\r\n\r\n" << body;
-  std::string rawReq = req.str();
-  ::send(fd, rawReq.data(), rawReq.size(), 0);
+  throw std::runtime_error("connect failed");
+}
+
+static std::string read_all(int fd) {
   std::string raw;
   char buf[4096];
   ssize_t n;
   while ((n = ::recv(fd, buf, sizeof(buf), 0)) > 0) raw.append(buf, static_cast<size_t>(n));
-  ::close(fd);
   auto split = raw.find("\r\n\r\n");
   return split == std::string::npos ? raw : raw.substr(split + 4);
 }
 
+std::string post_json(const std::string& url, const std::string& body) {
+  auto [host, port, path] = parse_url(url);
+  int fd = connect_url(host, port);
+  std::ostringstream req;
+  req << "POST " << path << " HTTP/1.1\r\nHost: " << host << "\r\nContent-Type: application/json\r\nContent-Length: " << body.size() << "\r\nConnection: close\r\n\r\n" << body;
+  std::string rawReq = req.str();
+  ::send(fd, rawReq.data(), rawReq.size(), 0);
+  std::string bodyText = read_all(fd);
+  ::close(fd);
+  return bodyText;
+}
+
 std::string get(const std::string& url) {
   auto [host, port, path] = parse_url(url);
-  addrinfo hints{}, *res = nullptr;
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0) throw std::runtime_error("getaddrinfo failed");
-  int fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-  if (fd < 0) throw std::runtime_error("socket failed");
-  if (::connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
-    freeaddrinfo(res);
-    ::close(fd);
-    throw std::runtime_error("connect failed");
-  }
-  freeaddrinfo(res);
+  int fd = connect_url(host, port);
   std::ostringstream req;
   req << "GET " << path << " HTTP/1.1\r\nHost: " << host << "\r\nConnection: close\r\n\r\n";
   std::string rawReq = req.str();
   ::send(fd, rawReq.data(), rawReq.size(), 0);
-  std::string raw;
-  char buf[4096];
-  ssize_t n;
-  while ((n = ::recv(fd, buf, sizeof(buf), 0)) > 0) raw.append(buf, static_cast<size_t>(n));
+  std::string bodyText = read_all(fd);
   ::close(fd);
-  auto split = raw.find("\r\n\r\n");
-  return split == std::string::npos ? raw : raw.substr(split + 4);
+  return bodyText;
 }
 
 } // namespace reality::http

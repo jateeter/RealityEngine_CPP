@@ -29,6 +29,7 @@ Startup performs these steps:
 8. Verifies nonzero machine loading through `GET /api/machines`.
 9. Starts Perception Engine.
 10. Waits for `GET /api/health`.
+11. Reports optional local AI API reachability at `LOCAL_AI_API_URL`.
 
 ## Stop
 
@@ -58,11 +59,19 @@ Important variables:
 | --- | --- |
 | `REALITY_ENGINE_PORT` | `3100` |
 | `PERCEPTION_ENGINE_PORT` | `3101` |
+| `VECTOR_DIMENSION` | `768` |
 | `MACHINES_DIR` | `../RealityEngine_AI/examples/machines` |
 | `QDRANT_URL` | `http://localhost:4333` |
 | `QDRANT_STORAGE_DIR` | `../localAIStack/volumes/qdrant` |
 | `QDRANT_LOCALAI_COLLECTION` | `localai_docs` |
 | `QDRANT_REALITY_COLLECTION` | `reality-vectors` |
+| `LOCAL_AI_API_URL` | `http://localhost:4000` |
+| `LOCAL_AI_MACHINES_DIR` | `../localAIStack/data/machines` |
+| `LOCAL_AI_BOOTSTRAP` | `false` |
+
+Set `LOCAL_AI_BOOTSTRAP=true` to register the default localAIStack sensor
+sources and import bridge machines into the C++ Reality Engine when the
+Perception Engine starts.
 
 ## Qdrant Ownership
 

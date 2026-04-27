@@ -38,8 +38,10 @@ native services, and confirms that machines loaded successfully from
 
 The Reality Engine service listens under `/api/...`, mirroring the Scala
 RealityEngine API. The Perception Engine service listens under `/api/...` and
-pushes assembled 256-dimensional vectors to `POST /api/perceive` on the Reality
-Engine.
+pushes assembled reality vectors to `POST /api/perceive` on the Reality Engine.
+Deployment defaults to `VECTOR_DIMENSION=768` to match the current
+RealityEngine_AI/localAIStack layout; domain classes still support smaller
+test dimensions.
 
 Operational defaults live in [.env.example](.env.example). Copy it to `.env`
 to override ports or paths.
@@ -53,6 +55,7 @@ RealityEngine_AI and localAIStack deployment model.
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [API Equivalence](docs/API_EQUIVALENCE.md)
+- [Local AI Integration](docs/LOCAL_AI_INTEGRATION.md)
 - [Operations](docs/OPERATIONS.md)
 - [E2E Testing](docs/E2E_TESTING.md)
 - [GitHub Wiki Source](wiki/Home.md)
@@ -62,7 +65,7 @@ RealityEngine_AI and localAIStack deployment model.
 Implemented in this first C++ repo:
 
 - RealityVector, CriticalEventSequence, Machine, OutputArbiter.
-- Universal 256-dimensional PreceptionEngine extraction and output merge.
+- Configurable universal PreceptionEngine extraction and output merge.
 - PerceptualSpaceSimulator snapshot -> process -> merge loop.
 - PerceptionEngine source assembly for test, simulated, and sensor sources.
 - Native HTTP endpoints for the high-traffic Scala/Akka route shapes.
