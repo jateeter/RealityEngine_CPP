@@ -1,0 +1,7 @@
+build/
+bin/
+logs/
+run/
+*.o
+*.dSYM/
+.DS_Store

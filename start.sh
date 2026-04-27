@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+info() { echo -e "${YELLOW}i${NC} $1"; }
+ok() { echo -e "${GREEN}✓${NC} $1"; }
+warn() { echo -e "${RED}!${NC} $1"; }
+die() { warn "$1"; exit 1; }
+
+if [ -f .env ]; then
+  # shellcheck disable=SC1091
+  source .env
+fi
+
+REALITY_ENGINE_PORT="${REALITY_ENGINE_PORT:-3000}"
+PERCEPTION_ENGINE_PORT="${PERCEPTION_ENGINE_PORT:-3001}"
+MACHINES_DIR="${MACHINES_DIR:-../RealityEngine_AI/examples/machines}"
+QDRANT_URL="${QDRANT_URL:-http://localhost:4333}"
+QDRANT_GRPC_URL="${QDRANT_GRPC_URL:-http://localhost:4334}"
+QDRANT_STORAGE_DIR="${QDRANT_STORAGE_DIR:-../localAIStack/volumes/qdrant}"
+QDRANT_LOCALAI_COLLECTION="${QDRANT_LOCALAI_COLLECTION:-localai_docs}"
+QDRANT_REALITY_COLLECTION="${QDRANT_REALITY_COLLECTION:-reality-vectors}"
+
+RUN_DIR="$ROOT_DIR/run"
+LOG_DIR="$ROOT_DIR/logs"
+mkdir -p "$RUN_DIR" "$LOG_DIR"
+
+usage() {
+  cat <<USAGE
+Usage: ./start.sh [--no-build] [--allow-missing-qdrant]
+
+Starts RealityEngine_CPP native services:
+  - Reality Engine API    : http://localhost:${REALITY_ENGINE_PORT}
+  - Perception Engine API : http://localhost:${PERCEPTION_ENGINE_PORT}
+
+Qdrant is shared with localAIStack and is verified but not managed here:
+  - REST    : ${QDRANT_URL}
+  - Storage : ${QDRANT_STORAGE_DIR}
+USAGE
+}
+
+NO_BUILD=false
+ALLOW_MISSING_QDRANT=false
+for arg in "$@"; do
+  case "$arg" in
+    --no-build) NO_BUILD=true ;;
+    --allow-missing-qdrant) ALLOW_MISSING_QDRANT=true ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "Unknown argument: $arg" ;;
+  esac
+done
+
+check_port_free() {
+  local port="$1"
+  local pid_file="$2"
+  if [ -f "$pid_file" ]; then
+    local pid
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$pid" ] && ps -p "$pid" >/dev/null 2>&1; then
+      die "Service already running from $pid_file (PID $pid). Use ./stop.sh first."
+    fi
+    rm -f "$pid_file"
+  fi
+
+  if lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    lsof -iTCP:"$port" -sTCP:LISTEN
+    die "Port $port is already in use."
+  fi
+}
+
+wait_for_http() {
+  local url="$1"
+  local name="$2"
+  local i
+  for i in $(seq 1 30); do
+    if curl -sf "$url" >/dev/null 2>&1; then
+      ok "$name ready at $url"
+      return 0
+    fi
+    sleep 0.3
+  done
+  return 1
+}
+
+machine_count_from_api() {
+  local url="$1"
+  curl -sf "$url/api/machines" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print(len(data.get("machines", [])))
+except Exception:
+    print(0)
+'
+}
+
+echo "=================================================="
+echo "RealityEngine_CPP - Starting Native Services"
+echo "=================================================="
+echo ""
+
+if [ "$NO_BUILD" = false ]; then
+  info "Building C++ services..."
+  make >/dev/null
+  ok "Build complete"
+else
+  [ -x bin/reality_engine_server ] || die "bin/reality_engine_server missing. Run make or omit --no-build."
+  [ -x bin/perception_engine_server ] || die "bin/perception_engine_server missing. Run make or omit --no-build."
+fi
+
+[ -d "$MACHINES_DIR" ] || die "Machine directory not found: $MACHINES_DIR"
+ok "Machine repository: $MACHINES_DIR"
+
+info "Checking unified Qdrant at $QDRANT_URL..."
+if curl -sf "$QDRANT_URL/collections" >/dev/null 2>&1 || curl -sf "$QDRANT_URL/healthz" >/dev/null 2>&1; then
+  ok "Unified Qdrant reachable"
+else
+  if [ "$ALLOW_MISSING_QDRANT" = true ]; then
+    warn "Qdrant not reachable; continuing because --allow-missing-qdrant was provided"
+  else
+    cat <<EOF
+
+RealityEngine_CPP uses the same unified Qdrant instance as RealityEngine_AI and localAIStack.
+Start localAIStack first, then retry:
+
+  cd ../localAIStack && ./scripts/start.sh
+
+EOF
+    exit 1
+  fi
+fi
+
+if [ -d "$QDRANT_STORAGE_DIR" ]; then
+  ok "Qdrant storage repository: $QDRANT_STORAGE_DIR"
+else
+  warn "Qdrant storage directory not found yet: $QDRANT_STORAGE_DIR"
+fi
+
+if command -v python3 >/dev/null 2>&1 && curl -sf "$QDRANT_URL/collections" >/tmp/re_cpp_qdrant_collections.json 2>/dev/null; then
+  python3 - /tmp/re_cpp_qdrant_collections.json "$QDRANT_LOCALAI_COLLECTION" "$QDRANT_REALITY_COLLECTION" <<'PY' || true
+import json, sys
+path = sys.argv[1]
+expected = set(sys.argv[2:])
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    names = {c.get("name") for c in data.get("result", {}).get("collections", [])}
+except Exception:
+    names = set()
+missing = sorted(expected - names)
+if missing:
+    print("! Qdrant collections not present yet: " + ", ".join(missing))
+else:
+    print("✓ Qdrant collections present: " + ", ".join(sorted(expected)))
+PY
+  rm -f /tmp/re_cpp_qdrant_collections.json
+fi
+
+check_port_free "$REALITY_ENGINE_PORT" "$RUN_DIR/reality_engine.pid"
+check_port_free "$PERCEPTION_ENGINE_PORT" "$RUN_DIR/perception_engine.pid"
+
+export QDRANT_URL QDRANT_GRPC_URL QDRANT_STORAGE_DIR QDRANT_LOCALAI_COLLECTION QDRANT_REALITY_COLLECTION
+
+info "Starting Reality Engine on port $REALITY_ENGINE_PORT..."
+nohup "$ROOT_DIR/bin/reality_engine_server" "$REALITY_ENGINE_PORT" "$MACHINES_DIR" \
+  > "$LOG_DIR/reality_engine.log" 2>&1 &
+echo $! > "$RUN_DIR/reality_engine.pid"
+
+if ! wait_for_http "http://localhost:${REALITY_ENGINE_PORT}/api/health" "Reality Engine"; then
+  tail -40 "$LOG_DIR/reality_engine.log" || true
+  ./stop.sh >/dev/null 2>&1 || true
+  die "Reality Engine failed to become healthy"
+fi
+
+info "Verifying RealityEngine_AI example machines loaded..."
+if ! command -v python3 >/dev/null 2>&1; then
+  ./stop.sh >/dev/null 2>&1 || true
+  die "python3 is required to verify startup machine loading"
+fi
+MACHINE_COUNT="$(machine_count_from_api "http://localhost:${REALITY_ENGINE_PORT}")"
+if [ "${MACHINE_COUNT:-0}" -le 0 ]; then
+  tail -60 "$LOG_DIR/reality_engine.log" || true
+  ./stop.sh >/dev/null 2>&1 || true
+  die "Reality Engine started but loaded 0 machines from $MACHINES_DIR"
+fi
+ok "Loaded $MACHINE_COUNT machine(s) from $MACHINES_DIR"
+
+info "Starting Perception Engine on port $PERCEPTION_ENGINE_PORT..."
+nohup "$ROOT_DIR/bin/perception_engine_server" "$PERCEPTION_ENGINE_PORT" "http://localhost:${REALITY_ENGINE_PORT}" \
+  > "$LOG_DIR/perception_engine.log" 2>&1 &
+echo $! > "$RUN_DIR/perception_engine.pid"
+
+if ! wait_for_http "http://localhost:${PERCEPTION_ENGINE_PORT}/api/health" "Perception Engine"; then
+  tail -40 "$LOG_DIR/perception_engine.log" || true
+  ./stop.sh >/dev/null 2>&1 || true
+  die "Perception Engine failed to become healthy"
+fi
+
+echo ""
+echo "=================================================="
+echo "RealityEngine_CPP Running"
+echo "=================================================="
+printf "  %-24s %s\n" "Reality Engine" "http://localhost:${REALITY_ENGINE_PORT}"
+printf "  %-24s %s\n" "Perception Engine" "http://localhost:${PERCEPTION_ENGINE_PORT}"
+printf "  %-24s %s\n" "Qdrant shared store" "${QDRANT_URL}"
+printf "  %-24s %s\n" "Qdrant data repo" "${QDRANT_STORAGE_DIR}"
+echo ""
+echo "Logs:"
+echo "  $LOG_DIR/reality_engine.log"
+echo "  $LOG_DIR/perception_engine.log"
+echo ""
+echo "Stop with: ./stop.sh"
