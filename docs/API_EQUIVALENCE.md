@@ -94,3 +94,7 @@ Production parity still needs:
 The local AI endpoints are C++ extensions around the existing sensor source
 model. They preserve Scala/Node Perception Engine behavior while making
 localAIStack and custom AI gateways easier to connect.
+
+`POST /api/push` is single-flight in the C++ service. A second concurrent push
+returns `409` with `error: "push already in progress"` so source advancement,
+`globalStep`, and persistent-vector carry-forward cannot race.

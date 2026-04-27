@@ -16,6 +16,7 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 
 - Health and state.
 - Push to Reality Engine.
+- Single-flight push protection; concurrent pushes return `409`.
 - Auto state start/stop flags.
 - Match algorithm config.
 - Reset.

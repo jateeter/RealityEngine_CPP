@@ -2,9 +2,11 @@
 #include "reality/reality.hpp"
 
 #include <cstdlib>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <set>
 
 using namespace reality;
@@ -118,6 +120,7 @@ public:
       return ok(Json::Object{{"status", "healthy"}, {"timestamp", static_cast<double>(now_ms())}});
     });
     server.route("GET", "/api/state", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       return ok(engine.state_json(lastPush, autoRunning, autoIntervalMs));
     });
     server.route("GET", "/api/integrations/localai/status", [this](const http::Request&) {
@@ -134,35 +137,42 @@ public:
     });
     server.route("POST", "/api/auto/start", [this](const http::Request& req) {
       auto body = parse_body(req);
+      std::lock_guard<std::mutex> lock(stateMutex);
       autoIntervalMs = static_cast<long>(body.at("intervalMs").as_number(1000));
       if (autoIntervalMs <= 0) autoIntervalMs = 1000;
       autoRunning = true;
       return ok(Json::Object{{"success", true}, {"intervalMs", static_cast<double>(autoIntervalMs)}});
     });
     server.route("POST", "/api/auto/stop", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       autoRunning = false;
       return ok(Json::Object{{"success", true}});
     });
     server.route("PATCH", "/api/config", [this](const http::Request& req) {
       auto body = parse_body(req);
+      std::lock_guard<std::mutex> lock(stateMutex);
       if (body.at("matchAlgorithm").is_string()) engine.matchAlgorithm = match_algorithm_from_string(body.at("matchAlgorithm").as_string());
       return ok(Json::Object{{"success", true}, {"matchAlgorithm", to_string(engine.matchAlgorithm)}});
     });
     server.route("POST", "/api/reset", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       engine.reset();
       lastPush.reset();
       return ok(Json::Object{{"success", true}});
     });
     server.route("GET", "/api/sources", [this](const http::Request&) {
       Json::Array arr;
+      std::lock_guard<std::mutex> lock(stateMutex);
       for (const auto& s : engine.get_sources()) arr.push_back(to_json(s));
       return ok(Json::Object{{"sources", arr}});
     });
     server.route("POST", "/api/sources", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       auto src = engine.add_source(source_from_json(parse_body(req)));
       return ok(Json::Object{{"source", to_json(src)}});
     });
     server.route("PATCH", "/api/sources/:id", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       auto existing = engine.get_source(req.pathParams.at("id"));
       if (!existing) return http::error_response("Source not found", 404);
       engine.remove_source(req.pathParams.at("id"));
@@ -172,10 +182,12 @@ public:
       return ok(Json::Object{{"source", to_json(added)}});
     });
     server.route("DELETE", "/api/sources/:id", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       return ok(Json::Object{{"success", engine.remove_source(req.pathParams.at("id"))}});
     });
     server.route("POST", "/api/sensors/:sensorId", [this](const http::Request& req) {
       auto values = json::to_numbers(parse_body(req).at("values"));
+      std::lock_guard<std::mutex> lock(stateMutex);
       bool found = engine.update_sensor_value(req.pathParams.at("sensorId"), values);
       if (!found) return http::error_response("No sensor source with sensorId \"" + req.pathParams.at("sensorId") + "\"", 404);
       return ok(Json::Object{{"success", true}, {"sensorId", req.pathParams.at("sensorId")}, {"timestamp", static_cast<double>(now_ms())}});
@@ -227,13 +239,16 @@ private:
     }
 
     Json::Array sensors;
-    for (const auto& spec : localai_sensor_specs()) {
-      sensors.push_back(Json::Object{
-        {"sensorId", spec.sensorId},
-        {"name", spec.name},
-        {"region", to_json(spec.region)},
-        {"registered", sensor_exists(spec.sensorId)},
-      });
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      for (const auto& spec : localai_sensor_specs()) {
+        sensors.push_back(Json::Object{
+          {"sensorId", spec.sensorId},
+          {"name", spec.name},
+          {"region", to_json(spec.region)},
+          {"registered", sensor_exists(spec.sensorId)},
+        });
+      }
     }
 
     return Json::Object{
@@ -248,13 +263,16 @@ private:
   Json bootstrap_localai() {
     Json::Array registeredSensors;
     Json::Array skippedSensors;
-    for (const auto& spec : localai_sensor_specs()) {
-      if (sensor_exists(spec.sensorId)) {
-        skippedSensors.emplace_back(spec.sensorId);
-        continue;
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      for (const auto& spec : localai_sensor_specs()) {
+        if (sensor_exists(spec.sensorId)) {
+          skippedSensors.emplace_back(spec.sensorId);
+          continue;
+        }
+        auto src = engine.add_source(sensor_source(spec));
+        registeredSensors.push_back(to_json(src));
       }
-      auto src = engine.add_source(sensor_source(spec));
-      registeredSensors.push_back(to_json(src));
     }
 
     Json::Array importedMachines;
@@ -299,44 +317,47 @@ private:
     Vector values = json::to_numbers(body.at("values"));
     if (values.empty()) return http::error_response("values must be a non-empty array", 400);
 
-    bool updated = false;
     SourceConfig source;
-    if (body.at("sensorId").is_string()) {
-      const std::string sensorId = body.at("sensorId").as_string();
-      updated = engine.update_sensor_value(sensorId, values);
-      if (updated) source = sensor_source_by_id(sensorId).value_or(source);
-      if (!updated && body.at("region").is_object()) {
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      bool updated = false;
+      if (body.at("sensorId").is_string()) {
+        const std::string sensorId = body.at("sensorId").as_string();
+        updated = engine.update_sensor_value(sensorId, values);
+        if (updated) source = sensor_source_by_id(sensorId).value_or(source);
+        if (!updated && body.at("region").is_object()) {
+          source.kind = "sensor";
+          source.name = body.at("name").as_string(sensorId);
+          source.sensorId = sensorId;
+          source.region = {
+            static_cast<int>(body.at("region").at("offset").as_number()),
+            static_cast<int>(body.at("region").at("length").as_number()),
+          };
+          source.active = body.at("active").as_bool(true);
+          source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
+          source.lastValue = values;
+          source.lastUpdated = now_ms();
+          source = engine.add_source(source);
+          updated = true;
+        }
+        if (!updated) return http::error_response("No sensor source with sensorId \"" + sensorId + "\"", 404);
+      } else if (body.at("region").is_object()) {
         source.kind = "sensor";
-        source.name = body.at("name").as_string(sensorId);
-        source.sensorId = sensorId;
+        source.name = body.at("name").as_string("external/signal");
+        source.sensorId = body.at("name").as_string(make_id("external-sensor"));
         source.region = {
           static_cast<int>(body.at("region").at("offset").as_number()),
           static_cast<int>(body.at("region").at("length").as_number()),
         };
-        source.active = body.at("active").as_bool(true);
+        source.active = true;
         source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
         source.lastValue = values;
         source.lastUpdated = now_ms();
         source = engine.add_source(source);
         updated = true;
+      } else {
+        return http::error_response("signal requires sensorId or region", 400);
       }
-      if (!updated) return http::error_response("No sensor source with sensorId \"" + sensorId + "\"", 404);
-    } else if (body.at("region").is_object()) {
-      source.kind = "sensor";
-      source.name = body.at("name").as_string("external/signal");
-      source.sensorId = body.at("name").as_string(make_id("external-sensor"));
-      source.region = {
-        static_cast<int>(body.at("region").at("offset").as_number()),
-        static_cast<int>(body.at("region").at("length").as_number()),
-      };
-      source.active = true;
-      source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
-      source.lastValue = values;
-      source.lastUpdated = now_ms();
-      source = engine.add_source(source);
-      updated = true;
-    } else {
-      return http::error_response("signal requires sensorId or region", 400);
     }
 
     Json response = Json::Object{
@@ -351,24 +372,59 @@ private:
   }
 
   http::Response do_push() {
-    Vector vector = engine.assemble_vector();
-    Json payload = Json::Object{{"vector", json::numbers(vector)}, {"matchAlgorithmOverride", to_string(engine.matchAlgorithm == MatchAlgorithm::Equals ? ComparatorType::Equals : ComparatorType::Gte)}};
+    bool expected = false;
+    if (!pushInFlight.compare_exchange_strong(expected, true)) {
+      return http::json_response(json::stringify(Json::Object{
+        {"success", false},
+        {"step", nullptr},
+        {"timestamp", static_cast<double>(now_ms())},
+        {"globalStep", current_global_step()},
+        {"error", "push already in progress"},
+      }), 409);
+    }
+
+    struct PushGuard {
+      std::atomic_bool& flag;
+      ~PushGuard() { flag.store(false); }
+    } guard{pushInFlight};
+
+    Vector vector;
+    MatchAlgorithm matchAlgorithm;
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      vector = engine.assemble_vector();
+      matchAlgorithm = engine.matchAlgorithm;
+    }
+    Json payload = Json::Object{{"vector", json::numbers(vector)}, {"matchAlgorithmOverride", to_string(matchAlgorithm == MatchAlgorithm::Equals ? ComparatorType::Equals : ComparatorType::Gte)}};
     try {
       std::string raw = http::post_json(realityEngineUrl + "/api/perceive", json::stringify(payload));
       Json parsed = json::parse(raw);
-      if (parsed.at("perceptualSpace").is_array()) engine.update_from_perceptual_space(json::to_numbers(parsed.at("perceptualSpace")));
-      engine.advance();
-      lastPush = now_ms();
-      return ok(Json::Object{{"success", true}, {"step", parsed}, {"timestamp", static_cast<double>(*lastPush)}, {"globalStep", static_cast<double>(engine.globalStep)}, {"error", nullptr}});
+      long long ts = now_ms();
+      long long step = 0;
+      {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        if (parsed.at("perceptualSpace").is_array()) engine.update_from_perceptual_space(json::to_numbers(parsed.at("perceptualSpace")));
+        engine.advance();
+        lastPush = ts;
+        step = engine.globalStep;
+      }
+      return ok(Json::Object{{"success", true}, {"step", parsed}, {"timestamp", static_cast<double>(ts)}, {"globalStep", static_cast<double>(step)}, {"error", nullptr}});
     } catch (const std::exception& e) {
-      return ok(Json::Object{{"success", false}, {"step", nullptr}, {"timestamp", static_cast<double>(now_ms())}, {"globalStep", static_cast<double>(engine.globalStep)}, {"error", e.what()}});
+      return ok(Json::Object{{"success", false}, {"step", nullptr}, {"timestamp", static_cast<double>(now_ms())}, {"globalStep", current_global_step()}, {"error", e.what()}});
     }
+  }
+
+  Json current_global_step() const {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    return static_cast<double>(engine.globalStep);
   }
 
   std::string realityEngineUrl;
   std::string localAIBaseUrl;
   std::string localAIMachinesDirectory;
   PerceptionEngine engine;
+  mutable std::mutex stateMutex;
+  std::atomic_bool pushInFlight{false};
   bool autoRunning = false;
   long autoIntervalMs = 1000;
   std::optional<long long> lastPush;
