@@ -66,7 +66,7 @@ Implemented in this first C++ repo:
 
 - RealityVector, CriticalEventSequence, Machine, OutputArbiter.
 - Configurable universal PreceptionEngine extraction and output merge.
-- PerceptualSpaceSimulator snapshot -> process -> merge loop.
+- PerceptualSpaceSimulator snapshot -> parallel process -> deterministic merge loop.
 - PerceptionEngine source assembly for test, simulated, and sensor sources.
 - Native HTTP endpoints for the high-traffic Scala/Akka route shapes.
 - Machine JSON loading for the existing `examples/machines/*.json` format.

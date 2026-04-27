@@ -59,6 +59,10 @@ without changing the domain layer.
 - Machine transitions fan out across a bounded set of worker threads. Critical
   event sequences inside one machine still transition serially; parallelism is
   only between machines, and output merging keeps deterministic machine order.
+- Output merge planning uses futures, but shared perceptual-space writes remain
+  serialized. Pending outputs are ordered by output region offset, region length,
+  machine id, and output index. When regions overlap, later operations in that
+  deterministic order win for the overlapping elements.
 - Machine JSON uses the existing `RealityEngine_AI/examples/machines/*.json`
   schema.
 

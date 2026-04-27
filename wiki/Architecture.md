@@ -41,3 +41,11 @@ snapshot, while critical event sequences inside that machine remain serialized
 through `Machine::process_input()`. Shared perceptual-space writes happen only
 after all machine transitions finish, preserving input atomicity and avoiding
 cross-machine clock coupling.
+
+## Output Merge Policy
+
+Output merge planning is scheduled with futures, but writes into the shared
+perceptual space are serialized. Pending outputs are ordered by output region
+offset, region length, machine id, and output index. If output regions overlap,
+the later operation in that deterministic order wins for the overlapping
+elements.

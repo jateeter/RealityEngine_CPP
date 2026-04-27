@@ -5,7 +5,9 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
+#include <iterator>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -451,6 +453,12 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     MachineTransitionResult transition;
     std::vector<Vector> pendingOutputs;
   };
+  struct PendingMerge {
+    RegionMapping region;
+    std::string machineId;
+    size_t outputIndex = 0;
+    Vector output;
+  };
 
   std::vector<MachinePhaseJob> jobs;
   jobs.reserve(machines.size());
@@ -516,8 +524,34 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     if (msr.outputVector) msr.outputRegion = result.mapping.output;
     step.machineResults[result.id] = msr;
   }
+
+  std::vector<std::future<std::vector<PendingMerge>>> mergeFutures;
+  mergeFutures.reserve(results.size());
   for (const auto& result : results) {
-    for (const auto& output : result.pendingOutputs) space.merge_machine_output(output, result.mapping);
+    const MachinePhaseResult* resultPtr = &result;
+    mergeFutures.push_back(std::async(std::launch::async, [resultPtr]() {
+      std::vector<PendingMerge> merges;
+      merges.reserve(resultPtr->pendingOutputs.size());
+      for (size_t i = 0; i < resultPtr->pendingOutputs.size(); ++i) {
+        merges.push_back({resultPtr->mapping.output, resultPtr->id, i, resultPtr->pendingOutputs[i]});
+      }
+      return merges;
+    }));
+  }
+
+  std::vector<PendingMerge> pendingMerges;
+  for (auto& future : mergeFutures) {
+    auto merges = future.get();
+    pendingMerges.insert(pendingMerges.end(), std::make_move_iterator(merges.begin()), std::make_move_iterator(merges.end()));
+  }
+  std::sort(pendingMerges.begin(), pendingMerges.end(), [](const PendingMerge& a, const PendingMerge& b) {
+    if (a.region.offset != b.region.offset) return a.region.offset < b.region.offset;
+    if (a.region.length != b.region.length) return a.region.length < b.region.length;
+    if (a.machineId != b.machineId) return a.machineId < b.machineId;
+    return a.outputIndex < b.outputIndex;
+  });
+  for (const auto& merge : pendingMerges) {
+    space.merge_machine_output(merge.output, PerceptualMapping{{0, 0}, merge.region});
   }
   step.perceptualSpace = space.vector();
   for (const auto& [id, msr] : step.machineResults) {

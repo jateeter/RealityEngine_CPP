@@ -22,6 +22,19 @@ static Machine make_rs_like_machine() {
   return m;
 }
 
+static Machine make_output_machine(const std::string& id, double outputValue) {
+  PerceptualMapping mapping{{0, 1}, {20, 1}};
+  Machine m("Output " + id, "deterministic merge test", ArbiterRule::Passthrough, mapping, id);
+  CriticalEventSequence seq("Immediate output", "seq-" + id);
+
+  RealityVector start({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, "start-" + id);
+  start.add_output_vector({"out-" + id, {outputValue}, {{"description", "merge policy output"}}, now_ms()});
+
+  seq.add_vector(start);
+  m.add_sequence(seq);
+  return m;
+}
+
 int main() {
   {
     RealityVector v({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, "v");
@@ -50,6 +63,18 @@ int main() {
     ps[1] = 1.0;
     auto s2 = sim.process_immediate(ps);
     assert(s2.perceptualSpace[10] == 1.0);
+  }
+
+  {
+    PerceptualSpaceSimulator sim(256);
+    sim.add_machine(make_output_machine("machine-b", 0.8));
+    sim.add_machine(make_output_machine("machine-a", 0.2));
+    Vector ps(256, 0.0);
+    ps[0] = 1.0;
+    auto step = sim.process_immediate(ps);
+    assert(step.machineResults.count("machine-a") == 1);
+    assert(step.machineResults.count("machine-b") == 1);
+    assert(step.perceptualSpace[20] == 0.8);
   }
 
   {
