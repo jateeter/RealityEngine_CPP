@@ -17,7 +17,8 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 - Health and state.
 - Push to Reality Engine.
 - Single-flight push protection; concurrent pushes return `409` with
-  `coalesced: true`, then the worker performs one compact follow-up push.
+  `coalesced: true`, then the worker performs at most one compact follow-up
+  push.
 - Reset shares the push guard; reset during an active push returns `409`.
 - Auto state start/stop flags.
 - Match algorithm config.
@@ -30,10 +31,9 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 
 ## Concurrency Notes
 
-Reality Engine protects machine CRUD/import, reset, simulation, diagnostics,
-and `/api/perceive` through a service read/write lock. Read-only registry/state
-routes can share access, while stateful transitions and registry mutations take
-exclusive access.
+Reality Engine separates machine-registry ownership from mutable simulator
+ownership. Registry-only reads can run while `/api/perceive` owns simulator
+state. Machine CRUD/import and reset lock both state owners.
 
 Perception Engine serializes sensor/source writes and uses a single-flight
 push/reset guard. Push execution runs through a bounded worker queue with

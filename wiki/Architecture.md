@@ -30,15 +30,17 @@ The service HTTP layer uses Boost.Asio/Beast. `reality::http::Server` keeps the
 small internal route API used by the services while Beast handles request
 parsing, response writing, connection management, and PE-to-RE/localAI client
 calls. Accepted sockets are processed by a bounded worker pool instead of
-detached per-connection threads. Outbound client calls reuse persistent HTTP/1.1
-connections per host and port.
+detached per-connection threads. Keep-alive sessions have request-count and
+idle-time limits. Outbound client calls reuse a persistent HTTP/1.1 connection
+pool per host and port, with bounded connect/read/write timeouts.
 
 ## Data Flow
 
 1. Perception Engine assembles a vector using the configured deployment dimension.
 2. Perception Engine posts it to Reality Engine `POST /api/perceive`.
 3. Reality Engine snapshots mapped machine inputs.
-4. Machines process their local vectors through a persistent bounded worker pool.
+4. Machines process their local vectors through a persistent bounded worker pool
+   with a bounded queue.
 5. Outputs are merged back into perceptual space in deterministic machine order.
 6. Perception Engine can carry the merged perceptual space forward.
 
@@ -62,11 +64,10 @@ elements.
 
 ## Service Concurrency
 
-Reality Engine HTTP handlers protect shared domain state through a service-level
-read/write lock. Read-only registry/state routes use shared ownership, while
-machine CRUD, JSON imports, resets, stateful machine processing, simulation
-operations, and `/api/perceive` use exclusive ownership over `machines`,
-`simulator`, and `preception` state.
+Reality Engine HTTP handlers protect the machine registry with a read/write
+lock and mutable simulation state with a simulator lock. `/api/perceive` owns
+the simulator lock but does not block registry-only reads such as
+`GET /api/machines`. Machine CRUD/import and reset lock both state owners.
 
 Perception Engine sensor/source writes are mutexed. `/api/push` is
 single-flight, and `/api/reset` uses that same guard so reset cannot interleave
@@ -76,8 +77,9 @@ PE-to-RE push execution runs through a bounded worker queue with capacity `1`.
 The HTTP push request waits for the queued job result to preserve API shape,
 while duplicate concurrent pushes return `409` with `coalesced: true`. The
 worker performs one compact follow-up push after the in-flight push completes,
-which preserves single-flight source advancement without dropping late sensor
-updates. Queue saturation returns `429`.
+which preserves single-flight source advancement. The follow-up is capped at one
+compact push per active push cycle so duplicate callers cannot keep the worker
+in an unbounded drain loop. Queue saturation returns `429`.
 
 `POST /api/perceive` and `POST /api/push` accept `compact: true` or
 `includeMachineResults: false` to omit per-machine transition details from the

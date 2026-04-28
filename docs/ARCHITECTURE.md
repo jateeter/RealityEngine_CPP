@@ -34,9 +34,13 @@ The HTTP layer uses Boost.Asio/Beast. `reality::http::Server` preserves the
 small internal route API used by the services while delegating request parsing,
 response writing, connection management, and client calls to Beast. Accepted
 server connections are handled by a bounded worker pool instead of a detached
-thread per connection. The client path keeps persistent HTTP/1.1 connections per
-host and port, so frequent PE-to-RE calls avoid repeated TCP setup. The domain
-layer remains independent of the transport implementation.
+thread per connection. Keep-alive sessions have request-count and idle-time
+limits so one idle client cannot pin a request worker indefinitely. The client
+path keeps a small persistent HTTP/1.1 connection pool per host and port, so
+frequent PE-to-RE calls avoid repeated TCP setup without serializing all
+outbound traffic through one socket. Outbound connect/read/write operations are
+bounded by `HTTP_CLIENT_TIMEOUT_MS`. The domain layer remains independent of the
+transport implementation.
 
 ## Repository Layout
 
@@ -60,9 +64,11 @@ layer remains independent of the transport implementation.
   evaluated, preventing same-cycle cascades.
 - Perceptual simulation is input-atomic: all machine inputs are snapshotted
   before any output is merged back into shared space.
-- Machine transitions fan out through a persistent bounded worker pool. Critical
-  event sequences inside one machine still transition serially; parallelism is
-  only between machines, and output merging keeps deterministic machine order.
+- Machine transitions fan out through a persistent bounded worker pool with a
+  bounded queue. Critical event sequences inside one machine still transition
+  serially; parallelism is only between machines, and output merging keeps
+  deterministic machine order. Runtime metrics are exposed at
+  `GET /api/runtime/metrics`.
 - Output merge planning is built directly after transition futures complete, so
   small merge batches do not pay extra `std::async` scheduling cost. Shared
   perceptual-space writes remain serialized. Pending outputs are ordered by
@@ -70,19 +76,21 @@ layer remains independent of the transport implementation.
   regions overlap, later operations in that deterministic order win for the
   overlapping elements.
 - Reality Engine HTTP handlers protect shared domain state with a service-level
-  read/write lock. Read-only registry/state routes use shared ownership, while
-  machine CRUD, JSON imports, resets, stateful machine processing, simulation
-  operations, and `/api/perceive` use exclusive ownership over `machines`,
-  `simulator`, and `preception` state.
+  read/write lock for the machine registry plus a simulator lock for mutable
+  perceptual simulation state. `/api/perceive` owns the simulator lock but does
+  not block registry-only read routes such as `GET /api/machines`. Machine CRUD
+  and reset operations lock both the registry and simulator because they update
+  both machine copies.
 - Perception Engine sensor/source writes are mutexed. `/api/push` is
   single-flight, and `/api/reset` uses that same guard so reset cannot interleave
   with a push after the vector snapshot but before source advancement.
 - Perception Engine runs PE-to-RE push execution through a bounded worker queue
   with capacity `1`. The HTTP push request waits for the queued job result.
   Duplicate concurrent push attempts return `409` with `coalesced: true`; the
-  worker performs one compact follow-up push after the in-flight push completes,
-  preserving single-flight state advancement while avoiding lost signal updates.
-  Queue saturation is reported with `429`.
+  worker performs at most one compact follow-up push after the in-flight push
+  completes. This preserves single-flight state advancement and prevents a noisy
+  caller from keeping the worker in an unbounded coalesced-drain loop. Queue
+  saturation is reported with `429`.
 - `POST /api/perceive` and `POST /api/push` accept `compact: true` or
   `includeMachineResults: false` to omit per-machine transition details from
   the response. The full merged perceptual space remains present so PE state can

@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <chrono>
 #include <utility>
 
 namespace reality::http {
@@ -24,6 +25,13 @@ namespace asio = boost::asio;
 namespace beast = boost::beast;
 namespace beast_http = boost::beast::http;
 using tcp = asio::ip::tcp;
+using namespace std::chrono_literals;
+
+static int env_int(const char* name, int fallback, int minimum = 1) {
+  const char* value = std::getenv(name);
+  if (!value) return fallback;
+  return std::max(minimum, std::atoi(value));
+}
 
 static std::pair<std::regex, std::vector<std::string>> compile_pattern(const std::string& pattern) {
   std::vector<std::string> params;
@@ -75,7 +83,7 @@ Response Server::handle(Request req) const {
   return res;
 }
 
-static void write_response(tcp::socket& socket, const Response& res, bool keepAlive) {
+static void write_response(beast::tcp_stream& stream, const Response& res, bool keepAlive, int timeoutMs) {
   beast_http::response<beast_http::string_body> out;
   out.version(11);
   out.result(static_cast<unsigned>(res.status));
@@ -84,28 +92,31 @@ static void write_response(tcp::socket& socket, const Response& res, bool keepAl
   out.body() = res.body;
   out.keep_alive(keepAlive);
   out.prepare_payload();
-  beast_http::write(socket, out);
+  stream.expires_after(std::chrono::milliseconds(timeoutMs));
+  beast_http::write(stream, out);
 }
 
-static void handle_session(tcp::socket socket, const Server& server) {
+static void handle_session(tcp::socket socket, const Server& server, int timeoutMs, int maxRequests) {
+  beast::tcp_stream stream(std::move(socket));
   beast::flat_buffer buffer;
   try {
-    while (true) {
+    for (int handled = 0; handled < maxRequests; ++handled) {
       beast_http::request<beast_http::string_body> request;
-      beast_http::read(socket, buffer, request);
-      bool keepAlive = request.keep_alive();
-      write_response(socket, server.handle(to_request(request)), keepAlive);
+      stream.expires_after(std::chrono::milliseconds(timeoutMs));
+      beast_http::read(stream, buffer, request);
+      bool keepAlive = request.keep_alive() && handled + 1 < maxRequests;
+      write_response(stream, server.handle(to_request(request)), keepAlive, timeoutMs);
       if (!keepAlive) break;
     }
   } catch (const std::exception& e) {
     try {
-      write_response(socket, error_response(e.what(), 500), false);
+      write_response(stream, error_response(e.what(), 500), false, timeoutMs);
     } catch (...) {
     }
   }
 
   beast::error_code ec;
-  socket.shutdown(tcp::socket::shutdown_send, ec);
+  stream.socket().shutdown(tcp::socket::shutdown_send, ec);
 }
 
 void Server::listen(int port) {
@@ -123,10 +134,11 @@ void Server::listen(int port) {
   acceptor.listen(asio::socket_base::max_listen_connections, ec);
   if (ec) throw std::runtime_error("listen failed: " + ec.message());
 
-  const char* workersEnv = std::getenv("HTTP_WORKERS");
-  const char* backlogEnv = std::getenv("HTTP_QUEUE_CAPACITY");
-  size_t workerCount = workersEnv ? static_cast<size_t>(std::max(1, std::atoi(workersEnv))) : static_cast<size_t>(std::max(2u, std::thread::hardware_concurrency()));
-  size_t queueCapacity = backlogEnv ? static_cast<size_t>(std::max(1, std::atoi(backlogEnv))) : workerCount * 64;
+  size_t defaultWorkers = static_cast<size_t>(std::max(2u, std::thread::hardware_concurrency()));
+  size_t workerCount = static_cast<size_t>(env_int("HTTP_WORKERS", static_cast<int>(defaultWorkers)));
+  size_t queueCapacity = static_cast<size_t>(env_int("HTTP_QUEUE_CAPACITY", static_cast<int>(workerCount * 64)));
+  int timeoutMs = env_int("HTTP_SESSION_TIMEOUT_MS", 5000, 100);
+  int maxRequests = env_int("HTTP_MAX_KEEPALIVE_REQUESTS", 32, 1);
   std::mutex queueMutex;
   std::condition_variable queueCondition;
   std::deque<tcp::socket> queue;
@@ -143,7 +155,7 @@ void Server::listen(int port) {
           socket = std::move(queue.front());
           queue.pop_front();
         }
-        handle_session(std::move(socket), *this);
+        handle_session(std::move(socket), *this, timeoutMs, maxRequests);
       }
     });
   }
@@ -193,13 +205,13 @@ public:
   PersistentConnection(std::string host, std::string port)
       : host(std::move(host)), port(std::move(port)), stream(std::make_unique<beast::tcp_stream>(ioc)) {}
 
-  std::string request(const std::string& method, const std::string& target, const std::string& body) {
+  std::string request(const std::string& method, const std::string& target, const std::string& body, int timeoutMs) {
     std::lock_guard<std::mutex> lock(mutex);
     try {
-      return request_once(method, target, body);
+      return request_once(method, target, body, timeoutMs);
     } catch (...) {
       reconnect();
-      return request_once(method, target, body);
+      return request_once(method, target, body, timeoutMs);
     }
   }
 
@@ -209,8 +221,8 @@ public:
   }
 
 private:
-  std::string request_once(const std::string& method, const std::string& target, const std::string& body) {
-    connect_if_needed();
+  std::string request_once(const std::string& method, const std::string& target, const std::string& body, int timeoutMs) {
+    connect_if_needed(timeoutMs);
 
     beast_http::request<beast_http::string_body> req;
     req.version(11);
@@ -224,19 +236,22 @@ private:
       req.body() = body;
     }
     req.prepare_payload();
+    stream->expires_after(std::chrono::milliseconds(timeoutMs));
     beast_http::write(*stream, req);
 
     beast::flat_buffer buffer;
     beast_http::response<beast_http::string_body> res;
+    stream->expires_after(std::chrono::milliseconds(timeoutMs));
     beast_http::read(*stream, buffer, res);
     if (!res.keep_alive()) connected = false;
     return res.body();
   }
 
-  void connect_if_needed() {
+  void connect_if_needed(int timeoutMs) {
     if (connected && stream->socket().is_open()) return;
     tcp::resolver resolver{ioc};
     auto const results = resolver.resolve(host, port);
+    stream->expires_after(std::chrono::milliseconds(timeoutMs));
     stream->connect(results);
     connected = true;
   }
@@ -263,19 +278,27 @@ private:
 };
 
 static std::mutex clientMutex;
-static std::map<std::string, std::unique_ptr<PersistentConnection>> clients;
+static std::map<std::string, std::vector<std::unique_ptr<PersistentConnection>>> clients;
+static std::map<std::string, size_t> clientCursor;
 
 static std::string request_body(const std::string& method, const std::string& url, const std::string& body) {
   auto [host, port, target] = parse_url(url);
   std::string key = host + ":" + port;
+  size_t poolSize = static_cast<size_t>(env_int("HTTP_CLIENT_POOL_SIZE", 4));
+  int timeoutMs = env_int("HTTP_CLIENT_TIMEOUT_MS", 5000, 100);
   PersistentConnection* client = nullptr;
   {
     std::lock_guard<std::mutex> lock(clientMutex);
-    auto& ptr = clients[key];
-    if (!ptr) ptr = std::make_unique<PersistentConnection>(host, port);
-    client = ptr.get();
+    auto& pool = clients[key];
+    if (pool.empty()) {
+      pool.reserve(poolSize);
+      for (size_t i = 0; i < poolSize; ++i) pool.push_back(std::make_unique<PersistentConnection>(host, port));
+      clientCursor[key] = 0;
+    }
+    size_t index = clientCursor[key]++ % pool.size();
+    client = pool[index].get();
   }
-  return client->request(method, target, body);
+  return client->request(method, target, body, timeoutMs);
 }
 
 std::string post_json(const std::string& url, const std::string& body) {
@@ -288,8 +311,9 @@ std::string get(const std::string& url) {
 
 void close_persistent_connections() {
   std::lock_guard<std::mutex> lock(clientMutex);
-  for (auto& [_, client] : clients) client->close();
+  for (auto& [_, pool] : clients) for (auto& client : pool) client->close();
   clients.clear();
+  clientCursor.clear();
 }
 
 } // namespace reality::http

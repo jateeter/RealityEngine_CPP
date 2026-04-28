@@ -70,6 +70,12 @@ Important variables:
 | `LOCAL_AI_BOOTSTRAP` | `false` |
 | `HTTP_WORKERS` | max of `2` and hardware concurrency |
 | `HTTP_QUEUE_CAPACITY` | `HTTP_WORKERS * 64` |
+| `HTTP_SESSION_TIMEOUT_MS` | `5000` |
+| `HTTP_MAX_KEEPALIVE_REQUESTS` | `32` |
+| `HTTP_CLIENT_TIMEOUT_MS` | `5000` |
+| `HTTP_CLIENT_POOL_SIZE` | `4` |
+| `DOMAIN_WORKERS` | max of `2` and hardware concurrency |
+| `DOMAIN_QUEUE_CAPACITY` | `DOMAIN_WORKERS * 256` |
 
 Set `LOCAL_AI_BOOTSTRAP=true` to register the default localAIStack sensor
 sources and import bridge machines into the C++ Reality Engine when the
@@ -77,7 +83,19 @@ Perception Engine starts.
 
 `HTTP_WORKERS` and `HTTP_QUEUE_CAPACITY` apply to each native service process.
 They bound the Beast request-processing pool and accepted socket backlog inside
-the process.
+the process. `HTTP_SESSION_TIMEOUT_MS` and `HTTP_MAX_KEEPALIVE_REQUESTS` prevent
+idle keep-alive clients from occupying request workers indefinitely.
+
+`HTTP_CLIENT_TIMEOUT_MS` bounds outbound Beast client connect/read/write calls.
+`HTTP_CLIENT_POOL_SIZE` controls the persistent connection pool used per
+host:port for PE-to-RE and local AI HTTP calls.
+
+`DOMAIN_WORKERS` and `DOMAIN_QUEUE_CAPACITY` tune the Reality Engine machine
+transition worker pool. Runtime metrics are available from:
+
+```http
+GET /api/runtime/metrics
+```
 
 ## Qdrant Ownership
 

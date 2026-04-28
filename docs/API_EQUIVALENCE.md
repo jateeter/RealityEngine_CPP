@@ -100,7 +100,9 @@ returns `409` with `error: "push already in progress"` and `coalesced: true` so
 source advancement, `globalStep`, and persistent-vector carry-forward cannot
 race. The worker performs one compact follow-up push after the current push
 finishes, which captures any signal updates that arrived during the in-flight
-operation without advancing the same source cursors concurrently.
+operation without advancing the same source cursors concurrently. The follow-up
+is intentionally capped at one compact push per active push cycle so sustained
+duplicate callers cannot starve reset or the next normal push request.
 
 Push execution is dispatched through a bounded PE worker queue with capacity
 `1`. The route waits for the queued job result to preserve the synchronous API
@@ -127,8 +129,8 @@ If a push is already in progress, reset returns `409` rather than clearing state
 while the push is waiting on Reality Engine.
 
 Reality Engine machine CRUD/import, reset, simulation, diagnostics, and
-`POST /api/perceive` use a service-level read/write lock. Read-only registry and
-state routes can share access; stateful transitions and registry mutations take
-exclusive access. This keeps LocalAI bootstrap machine imports and direct
-machine CRUD from mutating machine state while a perception transition is
+`POST /api/perceive` use explicit state ownership. Registry-only reads can run
+while `/api/perceive` owns simulator state. Machine CRUD/import and reset lock
+both registry and simulator state, keeping LocalAI bootstrap imports and direct
+machine CRUD from mutating simulator machines while a perception transition is
 running.

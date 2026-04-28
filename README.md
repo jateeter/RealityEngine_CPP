@@ -69,7 +69,9 @@ Implemented in this first C++ repo:
 - PerceptualSpaceSimulator snapshot -> parallel process -> deterministic merge loop.
 - PerceptionEngine source assembly for test, simulated, and sensor sources.
 - Boost.Asio/Beast HTTP endpoints with bounded request workers and persistent
-  PE-to-RE client connections.
+  pooled PE-to-RE client connections.
+- Runtime controls for HTTP keep-alive limits, outbound timeouts, domain worker
+  capacity, and worker-pool metrics.
 - Compact `/api/perceive` and `/api/push` response mode for high-throughput
   integrations that do not need per-machine transition details.
 - Machine JSON loading for the existing `examples/machines/*.json` format.

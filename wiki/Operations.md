@@ -44,6 +44,12 @@ LOCAL_AI_MACHINES_DIR=../localAIStack/data/machines
 LOCAL_AI_BOOTSTRAP=false
 HTTP_WORKERS=
 HTTP_QUEUE_CAPACITY=
+HTTP_SESSION_TIMEOUT_MS=
+HTTP_MAX_KEEPALIVE_REQUESTS=
+HTTP_CLIENT_TIMEOUT_MS=
+HTTP_CLIENT_POOL_SIZE=
+DOMAIN_WORKERS=
+DOMAIN_QUEUE_CAPACITY=
 ```
 
 Set `LOCAL_AI_BOOTSTRAP=true` when the C++ Perception Engine should register
@@ -52,3 +58,7 @@ localAIStack-compatible sensors and import bridge machines during startup.
 `HTTP_WORKERS` defaults to the max of `2` and hardware concurrency.
 `HTTP_QUEUE_CAPACITY` defaults to `HTTP_WORKERS * 64`. Both apply per native
 service process and bound Beast request handling inside the process.
+`HTTP_SESSION_TIMEOUT_MS` and `HTTP_MAX_KEEPALIVE_REQUESTS` bound keep-alive
+sessions. `HTTP_CLIENT_TIMEOUT_MS` and `HTTP_CLIENT_POOL_SIZE` tune outbound
+persistent clients. `DOMAIN_WORKERS` and `DOMAIN_QUEUE_CAPACITY` tune the
+machine-transition worker pool.

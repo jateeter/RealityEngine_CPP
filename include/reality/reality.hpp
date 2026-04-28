@@ -245,6 +245,15 @@ struct SimulationStep {
   std::vector<ActiveRegion> activeRegions;
 };
 
+struct WorkerPoolMetrics {
+  size_t workers = 0;
+  size_t queued = 0;
+  size_t active = 0;
+  size_t completed = 0;
+  size_t rejected = 0;
+  size_t capacity = 0;
+};
+
 class PerceptualSpaceSimulator {
 public:
   explicit PerceptualSpaceSimulator(int dimension = 256);
@@ -338,5 +347,6 @@ Json to_json(const MachineTransitionResult& r);
 Json to_json(const SimulationStep& step);
 Json to_json(const SimulationStep& step, bool includeMachineResults);
 Json to_json(const SourceConfig& source);
+Json worker_pool_metrics_json();
 
 } // namespace reality

@@ -182,7 +182,7 @@ public:
         PerceptionService& service;
         ~ResetGuard() {
           std::lock_guard<std::mutex> lock(service.pushQueueMutex);
-          service.pushRequestedAgain = false;
+          service.coalescedPushRequests = 0;
           service.pushInFlight.store(false);
         }
       } guard{*this};
@@ -412,7 +412,7 @@ private:
     if (!pushInFlight.compare_exchange_strong(expected, true)) {
       {
         std::lock_guard<std::mutex> lock(pushQueueMutex);
-        pushRequestedAgain = true;
+        ++coalescedPushRequests;
       }
       return http::json_response(json::stringify(Json::Object{
         {"success", false},
@@ -510,16 +510,22 @@ private:
       while (true) {
         {
           std::lock_guard<std::mutex> lock(pushQueueMutex);
-          if (!pushRequestedAgain) {
+          if (coalescedPushRequests == 0) {
             pushInFlight.store(false);
             break;
           }
-          pushRequestedAgain = false;
+          coalescedPushRequests = 0;
         }
         try {
           execute_push(false);
         } catch (...) {
         }
+        {
+          std::lock_guard<std::mutex> lock(pushQueueMutex);
+          coalescedPushRequests = 0;
+          pushInFlight.store(false);
+        }
+        break;
       }
     }
   }
@@ -540,7 +546,7 @@ private:
   std::deque<std::unique_ptr<PushJob>> pushQueue;
   std::thread pushWorker;
   bool stopPushWorker = false;
-  bool pushRequestedAgain = false;
+  size_t coalescedPushRequests = 0;
   static constexpr size_t pushQueueCapacity = 1;
   bool autoRunning = false;
   long autoIntervalMs = 1000;

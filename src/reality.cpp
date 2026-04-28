@@ -1,8 +1,10 @@
 #include "reality/reality.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +12,7 @@
 #include <iostream>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <thread>
@@ -36,7 +39,10 @@ static std::string lower(std::string s) {
 class DomainWorkerPool {
 public:
   DomainWorkerPool() {
-    size_t n = static_cast<size_t>(std::max(2u, std::thread::hardware_concurrency()));
+    const char* workersEnv = std::getenv("DOMAIN_WORKERS");
+    const char* capacityEnv = std::getenv("DOMAIN_QUEUE_CAPACITY");
+    size_t n = workersEnv ? static_cast<size_t>(std::max(1, std::atoi(workersEnv))) : static_cast<size_t>(std::max(2u, std::thread::hardware_concurrency()));
+    queueCapacity = capacityEnv ? static_cast<size_t>(std::max(1, std::atoi(capacityEnv))) : n * 256;
     workers.reserve(n);
     for (size_t i = 0; i < n; ++i) {
       workers.emplace_back([this]() { run(); });
@@ -53,16 +59,32 @@ public:
   }
 
   template <typename Fn>
-  auto submit(Fn&& fn) -> std::future<decltype(fn())> {
+  auto submit(Fn&& fn) -> std::optional<std::future<decltype(fn())>> {
     using R = decltype(fn());
     auto task = std::make_shared<std::packaged_task<R()>>(std::forward<Fn>(fn));
     auto future = task->get_future();
     {
       std::lock_guard<std::mutex> lock(mutex);
+      if (jobs.size() >= queueCapacity) {
+        rejected.fetch_add(1, std::memory_order_relaxed);
+        return std::nullopt;
+      }
       jobs.push_back([task]() { (*task)(); });
     }
     cv.notify_one();
     return future;
+  }
+
+  WorkerPoolMetrics metrics() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return {
+      workers.size(),
+      jobs.size(),
+      active.load(std::memory_order_relaxed),
+      completed.load(std::memory_order_relaxed),
+      rejected.load(std::memory_order_relaxed),
+      queueCapacity
+    };
   }
 
 private:
@@ -76,14 +98,21 @@ private:
         job = std::move(jobs.front());
         jobs.pop_front();
       }
+      active.fetch_add(1, std::memory_order_relaxed);
       job();
+      active.fetch_sub(1, std::memory_order_relaxed);
+      completed.fetch_add(1, std::memory_order_relaxed);
     }
   }
 
-  std::mutex mutex;
+  mutable std::mutex mutex;
   std::condition_variable cv;
   std::deque<std::function<void()>> jobs;
   std::vector<std::thread> workers;
+  size_t queueCapacity = 0;
+  std::atomic_size_t active{0};
+  std::atomic_size_t completed{0};
+  std::atomic_size_t rejected{0};
   bool stopping = false;
 };
 
@@ -531,7 +560,7 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
   std::vector<std::future<MachinePhaseResult>> futures;
   futures.reserve(jobs.size());
   for (const auto& job : jobs) {
-    futures.push_back(domain_workers().submit([job, overrideType]() mutable {
+    auto future = domain_workers().submit([job, overrideType]() mutable {
       auto transition = job.machine->process_input(job.snapshot, overrideType);
       std::vector<Vector> pendingOutputs;
       if (transition.arbiterMetadata.shouldOutput) {
@@ -547,7 +576,9 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
         std::move(transition),
         std::move(pendingOutputs)
       };
-    }));
+    });
+    if (!future) throw std::runtime_error("Domain worker queue is full");
+    futures.push_back(std::move(*future));
   }
   for (size_t i = 0; i < futures.size(); ++i) results[i] = futures[i].get();
 
@@ -831,6 +862,18 @@ Json to_json(const SourceConfig& s) {
     o["pattern"] = to_string(s.pattern); o["frequency"] = s.frequency; o["amplitude"] = s.amplitude; o["dcOffset"] = s.dcOffset;
   }
   return o;
+}
+
+Json worker_pool_metrics_json() {
+  auto m = domain_workers().metrics();
+  return Json::Object{
+    {"workers", static_cast<double>(m.workers)},
+    {"queued", static_cast<double>(m.queued)},
+    {"active", static_cast<double>(m.active)},
+    {"completed", static_cast<double>(m.completed)},
+    {"rejected", static_cast<double>(m.rejected)},
+    {"capacity", static_cast<double>(m.capacity)}
+  };
 }
 
 } // namespace reality
