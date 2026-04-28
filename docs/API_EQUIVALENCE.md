@@ -98,3 +98,12 @@ localAIStack and custom AI gateways easier to connect.
 `POST /api/push` is single-flight in the C++ service. A second concurrent push
 returns `409` with `error: "push already in progress"` so source advancement,
 `globalStep`, and persistent-vector carry-forward cannot race.
+
+`POST /api/reset` in the Perception Engine shares the same single-flight guard.
+If a push is already in progress, reset returns `409` rather than clearing state
+while the push is waiting on Reality Engine.
+
+Reality Engine machine CRUD/import, reset, simulation, diagnostics, and
+`POST /api/perceive` share a service-level mutex. This keeps LocalAI bootstrap
+machine imports and direct machine CRUD from mutating machine state while a
+perception transition is running.

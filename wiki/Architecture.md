@@ -49,3 +49,14 @@ perceptual space are serialized. Pending outputs are ordered by output region
 offset, region length, machine id, and output index. If output regions overlap,
 the later operation in that deterministic order wins for the overlapping
 elements.
+
+## Service Concurrency
+
+Reality Engine HTTP handlers serialize shared domain state through a service
+mutex. Machine CRUD, JSON imports, resets, simulation operations, diagnostics,
+and `/api/perceive` cannot interleave on `machines`, `simulator`, or
+`preception` state.
+
+Perception Engine sensor/source writes are mutexed. `/api/push` is
+single-flight, and `/api/reset` uses that same guard so reset cannot interleave
+with a push after the vector snapshot but before source advancement.

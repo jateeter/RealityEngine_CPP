@@ -17,6 +17,7 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 - Health and state.
 - Push to Reality Engine.
 - Single-flight push protection; concurrent pushes return `409`.
+- Reset shares the push guard; reset during an active push returns `409`.
 - Auto state start/stop flags.
 - Match algorithm config.
 - Reset.
@@ -25,6 +26,12 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 - localAIStack-compatible status/bootstrap endpoints.
 - Generic external signal ingestion through `POST /api/signals`.
 - Machine proxy.
+
+## Concurrency Notes
+
+Reality Engine serializes machine CRUD/import, reset, simulation, diagnostics,
+and `/api/perceive` through a service mutex. Perception Engine serializes
+sensor/source writes and uses a single-flight push/reset guard.
 
 ## Known Gaps
 

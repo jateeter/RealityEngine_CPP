@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 
 using namespace reality;
 
@@ -24,19 +25,27 @@ public:
       return ok(Json::Object{{"status", "healthy"}, {"timestamp", static_cast<double>(now_ms())}, {"version", "1.0.0-cpp"}});
     });
     server.route("GET", "/api/config", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       return ok(Json::Object{{"vectorDimension", static_cast<double>(dimension)}, {"matchThreshold", 0.5}, {"qdrantUrl", ""}, {"collectionName", "reality-vectors"}});
     });
     server.route("POST", "/api/engine/reset", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       for (auto& [_, m] : machines) m.reset();
+      simulator.reset();
+      preception.reset();
       return ok(Json::Object{{"success", true}});
     });
-    server.route("GET", "/api/engine/stats", [this](const http::Request&) { return ok(Json::Object{{"stats", stats()}}); });
+    server.route("GET", "/api/engine/stats", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      return ok(Json::Object{{"stats", stats()}});
+    });
     server.route("GET", "/api/engine/active", [](const http::Request&) { return ok(Json::Object{{"activeVectors", Json::Object{}}}); });
     server.route("GET", "/api/engine/history", [](const http::Request&) { return ok(Json::Object{{"history", Json::Array{}}}); });
     server.route("POST", "/api/engine/process", [this](const http::Request& req) {
       auto body = parse_body(req);
       auto vec = json::to_numbers(body.at("vector"));
       Json::Array outputs;
+      std::lock_guard<std::mutex> lock(stateMutex);
       for (auto& [_, m] : machines) {
         auto r = m.process_input(vec);
         if (r.machineOutput) outputs.push_back(to_json(*r.machineOutput));
@@ -45,30 +54,36 @@ public:
     });
     server.route("GET", "/api/machines", [this](const http::Request&) {
       Json::Array arr;
+      std::lock_guard<std::mutex> lock(stateMutex);
       for (const auto& [_, m] : machines) arr.push_back(m.to_json());
       return ok(Json::Object{{"machines", arr}});
     });
     server.route("GET", "/api/machines/:id", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       return ok(Json::Object{{"machine", it->second.to_json(true)}});
     });
     server.route("POST", "/api/machines", [this](const http::Request& req) {
       Machine m = load_machine_from_json_string(req.body);
+      std::lock_guard<std::mutex> lock(stateMutex);
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
     });
     server.route("PUT", "/api/machines/:id", [this](const http::Request& req) {
       Machine m = load_machine_from_json_string(req.body, req.pathParams.at("id"));
+      std::lock_guard<std::mutex> lock(stateMutex);
       remove_machine(req.pathParams.at("id"));
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
     });
     server.route("DELETE", "/api/machines/:id", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       bool removed = remove_machine(req.pathParams.at("id"));
       return ok(Json::Object{{"success", removed}});
     });
     server.route("POST", "/api/machines/:id/process", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       auto body = parse_body(req);
@@ -77,6 +92,7 @@ public:
     });
     server.route("POST", "/api/machines/:id/process-universal", [this](const http::Request& req) {
       auto id = req.pathParams.at("id");
+      std::lock_guard<std::mutex> lock(stateMutex);
       auto it = machines.find(id);
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       auto body = parse_body(req);
@@ -87,12 +103,14 @@ public:
     server.route("POST", "/api/machines/process-universal/all", [this](const http::Request& req) {
       auto body = parse_body(req);
       auto universal = json::to_numbers(body.at("universalInputSpace"));
+      std::lock_guard<std::mutex> lock(stateMutex);
       auto resolved = preception.resolve_inputs_for_machines(universal, machines);
       Json::Object results;
       for (auto& [id, input] : resolved) results[id] = to_json(machines[id].process_input(input));
       return ok(Json::Object{{"results", results}});
     });
     server.route("POST", "/api/machines/:id/whatif", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       Machine copy = it->second;
@@ -100,6 +118,7 @@ public:
       return ok(to_json(result));
     });
     server.route("POST", "/api/machines/:id/whatif-universal", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       Machine copy = it->second;
@@ -120,26 +139,48 @@ public:
       if (!in) return http::error_response("Machine file not found: " + name, 404);
       std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
       Machine m = load_machine_from_json_string(raw, "machine-" + path.stem().string());
+      std::lock_guard<std::mutex> lock(stateMutex);
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}, {"message", "Machine loaded successfully"}});
     });
-    server.route("GET", "/api/machine-graph", [this](const http::Request&) { return ok(simulator.machine_graph_data()); });
+    server.route("GET", "/api/machine-graph", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      return ok(simulator.machine_graph_data());
+    });
     server.route("POST", "/api/perceptual-simulation/step", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       auto s = simulator.step();
       if (!s) return ok(Json::Object{{"done", true}, {"success", true}});
       return ok(Json::Object{{"success", true}, {"step", to_json(*s)}});
     });
-    server.route("POST", "/api/perceptual-simulation/reset", [this](const http::Request&) { simulator.reset(); return ok(Json::Object{{"success", true}}); });
-    server.route("POST", "/api/perceptual-simulation/start", [this](const http::Request&) { simulator.start(); return ok(Json::Object{{"success", true}}); });
-    server.route("POST", "/api/perceptual-simulation/stop", [this](const http::Request&) { simulator.stop(); return ok(Json::Object{{"success", true}}); });
-    server.route("GET", "/api/perceptual-simulation/state", [this](const http::Request&) { return ok(simulator.state_json()); });
+    server.route("POST", "/api/perceptual-simulation/reset", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      simulator.reset();
+      return ok(Json::Object{{"success", true}});
+    });
+    server.route("POST", "/api/perceptual-simulation/start", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      simulator.start();
+      return ok(Json::Object{{"success", true}});
+    });
+    server.route("POST", "/api/perceptual-simulation/stop", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      simulator.stop();
+      return ok(Json::Object{{"success", true}});
+    });
+    server.route("GET", "/api/perceptual-simulation/state", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      return ok(simulator.state_json());
+    });
     server.route("GET", "/api/perceptual-simulation/history", [this](const http::Request&) {
       Json::Array arr;
+      std::lock_guard<std::mutex> lock(stateMutex);
       for (const auto& s : simulator.history()) arr.push_back(to_json(s));
       return ok(Json::Object{{"history", arr}});
     });
     server.route("POST", "/api/perceptual-simulation/configure/chunk", [this](const http::Request& req) {
       auto body = parse_body(req);
+      std::lock_guard<std::mutex> lock(stateMutex);
       if (body.at("reset").as_bool(false)) buffer.clear();
       for (const auto& v : body.at("vectors").is_array() ? body.at("vectors").array() : Json::Array{}) buffer.push_back(json::to_numbers(v));
       const auto& cfg = body.at("config").is_object() ? body.at("config") : body;
@@ -150,17 +191,20 @@ public:
       return ok(Json::Object{{"success", true}, {"bufferedVectors", static_cast<double>(buffer.size())}});
     });
     server.route("POST", "/api/perceptual-simulation/configure/commit", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       simulator.configure(buffer, bufferedRegion, bufferedDelay);
       buffer.clear();
       return ok(Json::Object{{"success", true}});
     });
     server.route("POST", "/api/preception/diagnostic", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(stateMutex);
       return ok(preception.diagnostic_mapping(json::to_numbers(parse_body(req).at("universalInputSpace")), machines));
     });
     server.route("POST", "/api/perceive", [this](const http::Request& req) {
       auto body = parse_body(req);
       std::optional<ComparatorType> overrideType;
       if (body.at("matchAlgorithmOverride").is_string()) overrideType = comparator_from_string(body.at("matchAlgorithmOverride").as_string());
+      std::lock_guard<std::mutex> lock(stateMutex);
       auto step = simulator.process_immediate(json::to_numbers(body.at("vector")), overrideType);
       preception.perceptual_space().set_vector(step.perceptualSpace);
       return ok(to_json(step));
@@ -188,6 +232,7 @@ private:
   }
 
   std::map<std::string, Machine> machines;
+  mutable std::mutex stateMutex;
   int dimension = 768;
   PerceptualSpaceSimulator simulator;
   PreceptionEngine preception;

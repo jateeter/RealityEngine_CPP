@@ -155,6 +155,17 @@ public:
       return ok(Json::Object{{"success", true}, {"matchAlgorithm", to_string(engine.matchAlgorithm)}});
     });
     server.route("POST", "/api/reset", [this](const http::Request&) {
+      bool expected = false;
+      if (!pushInFlight.compare_exchange_strong(expected, true)) {
+        return http::json_response(json::stringify(Json::Object{
+          {"success", false},
+          {"error", "push already in progress"},
+        }), 409);
+      }
+      struct ResetGuard {
+        std::atomic_bool& flag;
+        ~ResetGuard() { flag.store(false); }
+      } guard{pushInFlight};
       std::lock_guard<std::mutex> lock(stateMutex);
       engine.reset();
       lastPush.reset();
