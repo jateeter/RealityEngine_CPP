@@ -3,11 +3,15 @@
 
 #include <cstdlib>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <mutex>
 #include <set>
+#include <thread>
 
 using namespace reality;
 
@@ -110,6 +114,16 @@ public:
         std::cerr << "localAI bootstrap skipped: " << e.what() << "\n";
       }
     }
+    pushWorker = std::thread([this]() { push_worker_loop(); });
+  }
+
+  ~PerceptionService() {
+    {
+      std::lock_guard<std::mutex> lock(pushQueueMutex);
+      stopPushWorker = true;
+    }
+    pushQueueCondition.notify_one();
+    if (pushWorker.joinable()) pushWorker.join();
   }
 
   void mount(http::Server& server) {
@@ -213,6 +227,10 @@ public:
   }
 
 private:
+  struct PushJob {
+    std::promise<http::Response> result;
+  };
+
   bool sensor_exists(const std::string& sensorId) const {
     for (const auto& s : engine.get_sources()) {
       if (s.kind == "sensor" && s.sensorId == sensorId) return true;
@@ -399,6 +417,26 @@ private:
       ~PushGuard() { flag.store(false); }
     } guard{pushInFlight};
 
+    auto job = std::make_unique<PushJob>();
+    auto future = job->result.get_future();
+    {
+      std::lock_guard<std::mutex> lock(pushQueueMutex);
+      if (pushQueue.size() >= pushQueueCapacity) {
+        return http::json_response(json::stringify(Json::Object{
+          {"success", false},
+          {"step", nullptr},
+          {"timestamp", static_cast<double>(now_ms())},
+          {"globalStep", current_global_step()},
+          {"error", "push queue is full"},
+        }), 429);
+      }
+      pushQueue.push_back(std::move(job));
+    }
+    pushQueueCondition.notify_one();
+    return future.get();
+  }
+
+  http::Response execute_push() {
     Vector vector;
     MatchAlgorithm matchAlgorithm;
     {
@@ -425,6 +463,39 @@ private:
     }
   }
 
+  void push_worker_loop() {
+    while (true) {
+      std::unique_ptr<PushJob> job;
+      {
+        std::unique_lock<std::mutex> lock(pushQueueMutex);
+        pushQueueCondition.wait(lock, [this]() { return stopPushWorker || !pushQueue.empty(); });
+        if (stopPushWorker && pushQueue.empty()) return;
+        job = std::move(pushQueue.front());
+        pushQueue.pop_front();
+      }
+
+      try {
+        job->result.set_value(execute_push());
+      } catch (const std::exception& e) {
+        job->result.set_value(ok(Json::Object{
+          {"success", false},
+          {"step", nullptr},
+          {"timestamp", static_cast<double>(now_ms())},
+          {"globalStep", current_global_step()},
+          {"error", e.what()},
+        }));
+      } catch (...) {
+        job->result.set_value(ok(Json::Object{
+          {"success", false},
+          {"step", nullptr},
+          {"timestamp", static_cast<double>(now_ms())},
+          {"globalStep", current_global_step()},
+          {"error", "unknown push worker error"},
+        }));
+      }
+    }
+  }
+
   Json current_global_step() const {
     std::lock_guard<std::mutex> lock(stateMutex);
     return static_cast<double>(engine.globalStep);
@@ -436,6 +507,12 @@ private:
   PerceptionEngine engine;
   mutable std::mutex stateMutex;
   std::atomic_bool pushInFlight{false};
+  std::mutex pushQueueMutex;
+  std::condition_variable pushQueueCondition;
+  std::deque<std::unique_ptr<PushJob>> pushQueue;
+  std::thread pushWorker;
+  bool stopPushWorker = false;
+  static constexpr size_t pushQueueCapacity = 1;
   bool autoRunning = false;
   long autoIntervalMs = 1000;
   std::optional<long long> lastPush;

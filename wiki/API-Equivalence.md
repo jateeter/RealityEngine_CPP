@@ -29,9 +29,15 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 
 ## Concurrency Notes
 
-Reality Engine serializes machine CRUD/import, reset, simulation, diagnostics,
-and `/api/perceive` through a service mutex. Perception Engine serializes
-sensor/source writes and uses a single-flight push/reset guard.
+Reality Engine protects machine CRUD/import, reset, simulation, diagnostics,
+and `/api/perceive` through a service read/write lock. Read-only registry/state
+routes can share access, while stateful transitions and registry mutations take
+exclusive access.
+
+Perception Engine serializes sensor/source writes and uses a single-flight
+push/reset guard. Push execution runs through a bounded worker queue with
+capacity `1`; concurrent duplicate pushes return `409`, and queue saturation
+returns `429`.
 
 ## Known Gaps
 

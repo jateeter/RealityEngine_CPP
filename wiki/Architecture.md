@@ -52,11 +52,17 @@ elements.
 
 ## Service Concurrency
 
-Reality Engine HTTP handlers serialize shared domain state through a service
-mutex. Machine CRUD, JSON imports, resets, simulation operations, diagnostics,
-and `/api/perceive` cannot interleave on `machines`, `simulator`, or
-`preception` state.
+Reality Engine HTTP handlers protect shared domain state through a service-level
+read/write lock. Read-only registry/state routes use shared ownership, while
+machine CRUD, JSON imports, resets, stateful machine processing, simulation
+operations, and `/api/perceive` use exclusive ownership over `machines`,
+`simulator`, and `preception` state.
 
 Perception Engine sensor/source writes are mutexed. `/api/push` is
 single-flight, and `/api/reset` uses that same guard so reset cannot interleave
 with a push after the vector snapshot but before source advancement.
+
+PE-to-RE push execution runs through a bounded worker queue with capacity `1`.
+The HTTP push request waits for the queued job result to preserve API shape,
+while duplicate concurrent pushes return `409` and queue saturation returns
+`429`.

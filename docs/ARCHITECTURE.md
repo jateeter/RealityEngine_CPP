@@ -63,13 +63,18 @@ without changing the domain layer.
   serialized. Pending outputs are ordered by output region offset, region length,
   machine id, and output index. When regions overlap, later operations in that
   deterministic order win for the overlapping elements.
-- Reality Engine HTTP handlers serialize shared domain state through a service
-  mutex. Machine CRUD, JSON imports, resets, simulation operations, diagnostics,
-  and `/api/perceive` cannot interleave on `machines`, `simulator`, or
-  `preception` state.
+- Reality Engine HTTP handlers protect shared domain state with a service-level
+  read/write lock. Read-only registry/state routes use shared ownership, while
+  machine CRUD, JSON imports, resets, stateful machine processing, simulation
+  operations, and `/api/perceive` use exclusive ownership over `machines`,
+  `simulator`, and `preception` state.
 - Perception Engine sensor/source writes are mutexed. `/api/push` is
   single-flight, and `/api/reset` uses that same guard so reset cannot interleave
   with a push after the vector snapshot but before source advancement.
+- Perception Engine runs PE-to-RE push execution through a bounded worker queue
+  with capacity `1`. The HTTP push request waits for the queued job result, while
+  duplicate concurrent push attempts are rejected with `409` and queue saturation
+  is reported with `429`.
 - Machine JSON uses the existing `RealityEngine_AI/examples/machines/*.json`
   schema.
 

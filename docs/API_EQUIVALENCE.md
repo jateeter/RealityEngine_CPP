@@ -99,11 +99,18 @@ localAIStack and custom AI gateways easier to connect.
 returns `409` with `error: "push already in progress"` so source advancement,
 `globalStep`, and persistent-vector carry-forward cannot race.
 
+Push execution is dispatched through a bounded PE worker queue with capacity
+`1`. The route waits for the queued job result to preserve the synchronous API
+shape, while the external PE-to-RE HTTP call is isolated from the request
+handler path. Queue saturation returns `429` with `error: "push queue is full"`.
+
 `POST /api/reset` in the Perception Engine shares the same single-flight guard.
 If a push is already in progress, reset returns `409` rather than clearing state
 while the push is waiting on Reality Engine.
 
 Reality Engine machine CRUD/import, reset, simulation, diagnostics, and
-`POST /api/perceive` share a service-level mutex. This keeps LocalAI bootstrap
-machine imports and direct machine CRUD from mutating machine state while a
-perception transition is running.
+`POST /api/perceive` use a service-level read/write lock. Read-only registry and
+state routes can share access; stateful transitions and registry mutations take
+exclusive access. This keeps LocalAI bootstrap machine imports and direct
+machine CRUD from mutating machine state while a perception transition is
+running.
