@@ -20,8 +20,29 @@ Bootstrap can import the bridge machines from `../localAIStack/data/machines`.
 
 ```http
 GET /api/integrations/localai/status
+GET /api/integrations/localai/catalog
 POST /api/integrations/localai/bootstrap
+POST /api/integrations/localai/invoke
 POST /api/signals
+```
+
+`GET /api/integrations/localai/catalog` dynamically reads the localAIStack
+operational surface from `LOCAL_AI_API_URL`, including `/health`,
+`/graph/schema`, and `/graphql/events`. It returns allowed graph, RAG, chat,
+GraphQL, and ingestion endpoints plus the active Reality Engine topology
+metadata when localAIStack is reachable.
+
+`POST /api/integrations/localai/invoke` provides guarded dynamic access to
+allowed localAIStack `GET` and `POST` paths. Example:
+
+```json
+{
+  "method": "POST",
+  "endpoint": "/graph/rag",
+  "payload": {
+    "question": "What documents describe Reality Engine integration?"
+  }
+}
 ```
 
 `POST /api/signals` updates an existing sensor or creates one when a region is

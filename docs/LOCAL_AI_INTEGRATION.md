@@ -59,7 +59,66 @@ GET /api/integrations/localai/status
 ```
 
 Returns local AI health, configured URL, sensor registration status, and machine
-directory.
+directory. The status call also attempts to read the localAIStack root document
+and `/health` payload from `LOCAL_AI_API_URL`.
+
+### Dynamic Operational Catalog
+
+```http
+GET /api/integrations/localai/catalog
+```
+
+Returns a live catalog of the localAIStack operational surface. The C++ PE reads
+`/graph/schema` and `/graphql/events` when available, then returns the allowed
+integration endpoints, graph topology, recent trigger events, configured bridge
+sensors, and the PE endpoint that can invoke localAIStack dynamically.
+
+The localAIStack interface reviewed for this integration is:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /` | API root with model and documentation pointers. |
+| `GET /health` | API, Ollama, Qdrant, and Redis status. |
+| `POST /chat` | Ollama-backed chat endpoint. |
+| `POST /rag/query` | Corrective RAG query path. |
+| `POST /rag/ingest/text` | Text ingestion into the localAIStack Qdrant collection. |
+| `GET /graph/schema` | LangGraph topology and Reality Engine binding metadata. |
+| `POST /graph/rag` | Run the corrective RAG graph. |
+| `POST /graph/agent` | Run the ReAct agent graph. |
+| `POST /graphql` | Trigger receiver mutation endpoint. |
+| `GET /graphql/events` | Recent trigger event buffer. |
+
+### Dynamic Invocation
+
+```http
+POST /api/integrations/localai/invoke
+```
+
+The invocation bridge accepts `GET` or `POST` calls for the allowed localAIStack
+paths listed in the catalog. This lets AI integration services discover the
+active graph schema and call current localAIStack graph/RAG/chat/trigger
+operations through the PE without hardcoding every route.
+
+Example graph schema read:
+
+```json
+{
+  "method": "GET",
+  "endpoint": "/graph/schema"
+}
+```
+
+Example RAG graph invocation:
+
+```json
+{
+  "method": "POST",
+  "endpoint": "/graph/rag",
+  "payload": {
+    "question": "What documents describe Reality Engine integration?"
+  }
+}
+```
 
 ### Bootstrap
 

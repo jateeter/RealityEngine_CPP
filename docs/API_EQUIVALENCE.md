@@ -67,7 +67,9 @@ Base path: `/api`
 | `GET /health` | Implemented | Same shape. |
 | `GET /state` | Implemented | Sources, assembled vector, global step, auto config. |
 | `GET /integrations/localai/status` | C++ extension | Reports configured local AI API health and localAIStack-compatible sensor registration. |
+| `GET /integrations/localai/catalog` | C++ extension | Dynamically discovers localAIStack health, graph schema, recent GraphQL trigger events, and allowed invocation endpoints. |
 | `POST /integrations/localai/bootstrap` | C++ extension | Registers localAIStack-compatible sensors and imports bridge machines when available. |
+| `POST /integrations/localai/invoke` | C++ extension | Guarded dynamic access to allowed localAIStack `GET`/`POST` endpoints such as `/graph/schema`, `/graph/rag`, `/graph/agent`, `/rag/query`, `/chat`, and `/graphql`. |
 | `POST /signals` | C++ extension | Generic external-signal write path over sensor sources; optionally triggers `/api/push`. `compactPush: true` requests compact inline push results. |
 | `POST /push` | Implemented | Posts to Reality Engine `/api/perceive`. Supports compact responses with `compact: true` or `includeMachineResults: false`. |
 | `POST /auto/start`, `POST /auto/stop` | State-compatible | Tracks auto state; background scheduler is planned. |

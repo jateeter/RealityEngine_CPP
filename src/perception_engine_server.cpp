@@ -12,6 +12,8 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#include <algorithm>
+#include <cctype>
 
 using namespace reality;
 
@@ -100,6 +102,33 @@ SourceConfig sensor_source(const LocalAISensorSpec& spec) {
   return s;
 }
 
+std::string normalize_endpoint(std::string endpoint) {
+  if (endpoint.empty() || endpoint[0] != '/') endpoint = "/" + endpoint;
+  auto q = endpoint.find('?');
+  std::string path = q == std::string::npos ? endpoint : endpoint.substr(0, q);
+  if (path.find("..") != std::string::npos || path.find("//") != std::string::npos) throw std::invalid_argument("invalid endpoint path");
+  return endpoint;
+}
+
+bool endpoint_allowed(const std::string& endpoint) {
+  static const std::vector<std::string> prefixes{
+    "/",
+    "/health",
+    "/chat",
+    "/rag/query",
+    "/rag/ingest/text",
+    "/graph/schema",
+    "/graph/rag",
+    "/graph/agent",
+    "/graphql",
+  };
+  std::string path = endpoint.substr(0, endpoint.find('?'));
+  for (const auto& prefix : prefixes) {
+    if (path == prefix || (prefix != "/" && path.rfind(prefix + "/", 0) == 0)) return true;
+  }
+  return false;
+}
+
 class PerceptionService {
 public:
   PerceptionService(std::string realityUrl, std::string localAIUrl, std::string localAIMachinesDir, int vectorDimension, bool bootstrapLocalAI)
@@ -140,8 +169,14 @@ public:
     server.route("GET", "/api/integrations/localai/status", [this](const http::Request&) {
       return ok(localai_status());
     });
+    server.route("GET", "/api/integrations/localai/catalog", [this](const http::Request&) {
+      return ok(localai_catalog());
+    });
     server.route("POST", "/api/integrations/localai/bootstrap", [this](const http::Request&) {
       return ok(bootstrap_localai());
+    });
+    server.route("POST", "/api/integrations/localai/invoke", [this](const http::Request& req) {
+      return invoke_localai(parse_body(req));
     });
     server.route("POST", "/api/signals", [this](const http::Request& req) {
       return ingest_signal(parse_body(req));
@@ -266,8 +301,10 @@ private:
 
   Json localai_status() const {
     Json health = nullptr;
+    Json root = nullptr;
     bool reachable = false;
     try {
+      root = json::parse(http::get(localAIBaseUrl + "/"));
       health = json::parse(http::get(localAIBaseUrl + "/health"));
       reachable = true;
     } catch (const std::exception& e) {
@@ -290,10 +327,83 @@ private:
     return Json::Object{
       {"localAIBaseUrl", localAIBaseUrl},
       {"reachable", reachable},
+      {"root", root},
       {"health", health},
       {"sensors", sensors},
       {"machineDirectory", localAIMachinesDirectory},
     };
+  }
+
+  Json localai_catalog() const {
+    Json status = localai_status();
+    Json graphSchema = nullptr;
+    Json events = nullptr;
+    try {
+      graphSchema = json::parse(http::get(localAIBaseUrl + "/graph/schema"));
+    } catch (const std::exception& e) {
+      graphSchema = Json::Object{{"error", e.what()}};
+    }
+    try {
+      events = json::parse(http::get(localAIBaseUrl + "/graphql/events"));
+    } catch (const std::exception& e) {
+      events = Json::Object{{"error", e.what()}};
+    }
+
+    Json::Array endpoints{
+      Json::Object{{"id", "health"}, {"method", "GET"}, {"path", "/health"}, {"description", "Operational health for API, Ollama, Qdrant, and Redis."}},
+      Json::Object{{"id", "graph_schema"}, {"method", "GET"}, {"path", "/graph/schema"}, {"description", "LangGraph topology and Reality Engine binding schema."}},
+      Json::Object{{"id", "graph_rag"}, {"method", "POST"}, {"path", "/graph/rag"}, {"description", "Run corrective RAG graph."}},
+      Json::Object{{"id", "graph_agent"}, {"method", "POST"}, {"path", "/graph/agent"}, {"description", "Run ReAct agent graph."}},
+      Json::Object{{"id", "rag_query"}, {"method", "POST"}, {"path", "/rag/query"}, {"description", "Run RAG query endpoint."}},
+      Json::Object{{"id", "rag_ingest_text"}, {"method", "POST"}, {"path", "/rag/ingest/text"}, {"description", "Ingest text into localAIStack Qdrant collection."}},
+      Json::Object{{"id", "chat"}, {"method", "POST"}, {"path", "/chat"}, {"description", "Call Ollama-backed chat endpoint."}},
+      Json::Object{{"id", "graphql"}, {"method", "POST"}, {"path", "/graphql"}, {"description", "GraphQL trigger receiver."}},
+      Json::Object{{"id", "graphql_events"}, {"method", "GET"}, {"path", "/graphql/events"}, {"description", "Recent GraphQL trigger events."}},
+    };
+
+    return Json::Object{
+      {"success", true},
+      {"status", status},
+      {"graphSchema", graphSchema},
+      {"recentGraphQLEvents", events},
+      {"invokeEndpoint", "/api/integrations/localai/invoke"},
+      {"allowedEndpoints", endpoints},
+      {"realityBridge", Json::Object{
+        {"sensors", Json::Array{
+          "localai_rag_retrieval",
+          "localai_rag_grading",
+          "localai_agent_activity"
+        }},
+        {"bootstrapEndpoint", "/api/integrations/localai/bootstrap"},
+        {"signalEndpoint", "/api/signals"}
+      }}
+    };
+  }
+
+  http::Response invoke_localai(const Json& body) const {
+    std::string method = body.at("method").as_string("POST");
+    std::transform(method.begin(), method.end(), method.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    std::string endpoint;
+    if (body.at("endpoint").is_string()) endpoint = body.at("endpoint").as_string();
+    else if (body.at("path").is_string()) endpoint = body.at("path").as_string();
+    else return http::error_response("localAI invocation requires endpoint or path", 400);
+    try {
+      endpoint = normalize_endpoint(endpoint);
+      if (!endpoint_allowed(endpoint)) return http::error_response("localAI endpoint is not allowed: " + endpoint, 403);
+      std::string raw;
+      if (method == "GET") {
+        raw = http::get(localAIBaseUrl + endpoint);
+      } else if (method == "POST") {
+        Json payload = body.at("payload").is_null() ? Json::Object{} : body.at("payload");
+        raw = http::post_json(localAIBaseUrl + endpoint, json::stringify(payload));
+      } else {
+        return http::error_response("localAI invocation supports GET and POST only", 400);
+      }
+      Json parsed = json::parse(raw);
+      return ok(Json::Object{{"success", true}, {"endpoint", endpoint}, {"method", method}, {"response", parsed}});
+    } catch (const std::exception& e) {
+      return http::json_response(json::stringify(Json::Object{{"success", false}, {"endpoint", endpoint}, {"method", method}, {"error", e.what()}}), 502);
+    }
   }
 
   Json bootstrap_localai() {
