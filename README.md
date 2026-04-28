@@ -4,9 +4,8 @@ C++ reimplementation of the Reality Engine and Perception Engine services from
 `RealityEngine_AI`, using the Scala/Akka implementations as the current
 behavioral model.
 
-This repository is intentionally self-contained for the first native port:
-it uses standard C++ plus POSIX sockets and does not require CMake or external
-package downloads.
+The native services use Boost.Asio/Beast for HTTP transport while keeping the
+domain layer independent of the server implementation.
 
 ## What This Repo Provides
 
@@ -20,6 +19,7 @@ package downloads.
 ## Build
 
 ```bash
+brew install boost   # macOS, if Boost is not already installed
 make
 make test
 make e2e
@@ -68,7 +68,7 @@ Implemented in this first C++ repo:
 - Configurable universal PreceptionEngine extraction and output merge.
 - PerceptualSpaceSimulator snapshot -> parallel process -> deterministic merge loop.
 - PerceptionEngine source assembly for test, simulated, and sensor sources.
-- Native HTTP endpoints for the high-traffic Scala/Akka route shapes.
+- Boost.Asio/Beast HTTP endpoints for the high-traffic Scala/Akka route shapes.
 - Machine JSON loading for the existing `examples/machines/*.json` format.
 
 See [docs/API_EQUIVALENCE.md](docs/API_EQUIVALENCE.md) for endpoint status and

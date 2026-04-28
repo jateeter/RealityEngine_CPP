@@ -1,17 +1,23 @@
 #include "reality/http.hpp"
 #include "reality/json.hpp"
 
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include <boost/asio.hpp>
+#include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
 
-#include <cstring>
+#include <cctype>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
+#include <utility>
 
 namespace reality::http {
+
+namespace asio = boost::asio;
+namespace beast = boost::beast;
+namespace beast_http = boost::beast::http;
+using tcp = asio::ip::tcp;
 
 static std::pair<std::regex, std::vector<std::string>> compile_pattern(const std::string& pattern) {
   std::vector<std::string> params;
@@ -39,98 +45,80 @@ void Server::route(std::string method, std::string pattern, Handler handler) {
   routes.push_back({std::move(method), std::move(pattern), std::move(rx), std::move(params), std::move(handler)});
 }
 
-static std::string reason(int status) {
-  if (status == 200) return "OK";
-  if (status == 201) return "Created";
-  if (status == 400) return "Bad Request";
-  if (status == 404) return "Not Found";
-  if (status == 500) return "Internal Server Error";
-  if (status == 502) return "Bad Gateway";
-  return "OK";
-}
-
-static void send_response(int fd, const Response& res) {
-  std::ostringstream out;
-  out << "HTTP/1.1 " << res.status << " " << reason(res.status) << "\r\n";
-  out << "Content-Type: " << res.contentType << "\r\n";
-  out << "Content-Length: " << res.body.size() << "\r\n";
-  out << "Connection: close\r\n\r\n";
-  out << res.body;
-  std::string raw = out.str();
-  ::send(fd, raw.data(), raw.size(), 0);
-}
-
-static Request read_request(int fd) {
-  std::string raw;
-  char buf[4096];
-  while (raw.find("\r\n\r\n") == std::string::npos) {
-    ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
-    if (n <= 0) break;
-    raw.append(buf, static_cast<size_t>(n));
-    if (raw.size() > 1024 * 1024) break;
-  }
-  auto headerEnd = raw.find("\r\n\r\n");
-  std::string head = headerEnd == std::string::npos ? raw : raw.substr(0, headerEnd);
-  std::istringstream hs(head);
+static Request to_request(const beast_http::request<beast_http::string_body>& in) {
   Request req;
-  hs >> req.method >> req.path;
-  std::string line;
-  std::getline(hs, line);
-  int contentLength = 0;
-  while (std::getline(hs, line)) {
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    auto colon = line.find(':');
-    if (colon == std::string::npos) continue;
-    std::string key = line.substr(0, colon);
-    std::string value = line.substr(colon + 1);
-    while (!value.empty() && value.front() == ' ') value.erase(value.begin());
-    req.headers[key] = value;
-    if (key == "Content-Length" || key == "content-length") contentLength = std::stoi(value);
-  }
-  size_t bodyStart = headerEnd == std::string::npos ? raw.size() : headerEnd + 4;
-  req.body = raw.substr(bodyStart);
-  while (static_cast<int>(req.body.size()) < contentLength) {
-    ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
-    if (n <= 0) break;
-    req.body.append(buf, static_cast<size_t>(n));
-  }
+  req.method = std::string(in.method_string());
+  req.path = std::string(in.target());
+  req.body = in.body();
+  for (const auto& field : in) req.headers.emplace(std::string(field.name_string()), std::string(field.value()));
   auto q = req.path.find('?');
   if (q != std::string::npos) req.path = req.path.substr(0, q);
   return req;
 }
 
+Response Server::handle(Request req) const {
+  Response res = error_response("Not found", 404);
+  for (const auto& r : routes) {
+    if (r.method != req.method) continue;
+    std::smatch m;
+    if (std::regex_match(req.path, m, r.regex)) {
+      for (size_t i = 0; i < r.params.size(); ++i) req.pathParams[r.params[i]] = m[i + 1].str();
+      return r.handler(req);
+    }
+  }
+  return res;
+}
+
+static void write_response(tcp::socket& socket, const Response& res) {
+  beast_http::response<beast_http::string_body> out;
+  out.version(11);
+  out.result(static_cast<unsigned>(res.status));
+  out.set(beast_http::field::server, "RealityEngine_CPP");
+  out.set(beast_http::field::content_type, res.contentType);
+  out.set(beast_http::field::connection, "close");
+  out.body() = res.body;
+  out.prepare_payload();
+  beast_http::write(socket, out);
+}
+
+static void handle_session(tcp::socket socket, const Server& server) {
+  beast::flat_buffer buffer;
+  beast_http::request<beast_http::string_body> request;
+  try {
+    beast_http::read(socket, buffer, request);
+    write_response(socket, server.handle(to_request(request)));
+  } catch (const std::exception& e) {
+    try {
+      write_response(socket, error_response(e.what(), 500));
+    } catch (...) {
+    }
+  }
+
+  beast::error_code ec;
+  socket.shutdown(tcp::socket::shutdown_send, ec);
+}
+
 void Server::listen(int port) {
-  int serverFd = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (serverFd < 0) throw std::runtime_error("socket failed");
-  int yes = 1;
-  setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-  sockaddr_in addr{};
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = INADDR_ANY;
-  addr.sin_port = htons(static_cast<uint16_t>(port));
-  if (::bind(serverFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) throw std::runtime_error("bind failed");
-  if (::listen(serverFd, 64) < 0) throw std::runtime_error("listen failed");
+  asio::io_context ioc{1};
+  tcp::acceptor acceptor{ioc};
+  beast::error_code ec;
+  tcp::endpoint endpoint{tcp::v4(), static_cast<unsigned short>(port)};
+
+  acceptor.open(endpoint.protocol(), ec);
+  if (ec) throw std::runtime_error("acceptor open failed: " + ec.message());
+  acceptor.set_option(asio::socket_base::reuse_address(true), ec);
+  if (ec) throw std::runtime_error("acceptor option failed: " + ec.message());
+  acceptor.bind(endpoint, ec);
+  if (ec) throw std::runtime_error("bind failed: " + ec.message());
+  acceptor.listen(asio::socket_base::max_listen_connections, ec);
+  if (ec) throw std::runtime_error("listen failed: " + ec.message());
+
   std::cout << "listening on " << port << std::endl;
   while (true) {
-    int fd = ::accept(serverFd, nullptr, nullptr);
-    if (fd < 0) continue;
-    try {
-      Request req = read_request(fd);
-      Response res = error_response("Not found", 404);
-      for (const auto& r : routes) {
-        if (r.method != req.method) continue;
-        std::smatch m;
-        if (std::regex_match(req.path, m, r.regex)) {
-          for (size_t i = 0; i < r.params.size(); ++i) req.pathParams[r.params[i]] = m[i + 1].str();
-          res = r.handler(req);
-          break;
-        }
-      }
-      send_response(fd, res);
-    } catch (const std::exception& e) {
-      send_response(fd, error_response(e.what(), 500));
-    }
-    ::close(fd);
+    tcp::socket socket{ioc};
+    acceptor.accept(socket, ec);
+    if (ec) continue;
+    std::thread(&handle_session, std::move(socket), std::cref(*this)).detach();
   }
 }
 
@@ -140,75 +128,60 @@ Response error_response(const std::string& message, int status) {
   return json_response(json::stringify(json::Value::Object{{"error", message}}), status);
 }
 
-static std::tuple<std::string, int, std::string> parse_url(const std::string& url) {
+static std::tuple<std::string, std::string, std::string> parse_url(const std::string& url) {
   std::string u = url;
   const std::string prefix = "http://";
   if (u.rfind(prefix, 0) == 0) u = u.substr(prefix.size());
   auto slash = u.find('/');
   std::string hostPort = slash == std::string::npos ? u : u.substr(0, slash);
   std::string path = slash == std::string::npos ? "/" : u.substr(slash);
-  int port = 80;
+  std::string port = "80";
   auto colon = hostPort.find(':');
   std::string host = hostPort;
   if (colon != std::string::npos) {
     host = hostPort.substr(0, colon);
-    port = std::stoi(hostPort.substr(colon + 1));
+    port = hostPort.substr(colon + 1);
   }
   return {host, port, path};
 }
 
-static int connect_url(const std::string& host, int port) {
-  addrinfo hints{}, *res = nullptr;
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0) throw std::runtime_error("getaddrinfo failed");
+static std::string request_body(const std::string& method, const std::string& url, const std::string& body) {
+  auto [host, port, target] = parse_url(url);
+  asio::io_context ioc;
+  tcp::resolver resolver{ioc};
+  beast::tcp_stream stream{ioc};
+  auto const results = resolver.resolve(host, port);
+  stream.connect(results);
 
-  int fd = -1;
-  for (addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
-    fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-    if (fd < 0) continue;
-    if (::connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
-      freeaddrinfo(res);
-      return fd;
-    }
-    ::close(fd);
-    fd = -1;
+  beast_http::request<beast_http::string_body> req;
+  req.version(11);
+  req.method(method == "POST" ? beast_http::verb::post : beast_http::verb::get);
+  req.target(target);
+  req.set(beast_http::field::host, host);
+  req.set(beast_http::field::user_agent, "RealityEngine_CPP");
+  req.set(beast_http::field::connection, "close");
+  if (method == "POST") {
+    req.set(beast_http::field::content_type, "application/json");
+    req.body() = body;
   }
-  freeaddrinfo(res);
-  throw std::runtime_error("connect failed");
-}
+  req.prepare_payload();
+  beast_http::write(stream, req);
 
-static std::string read_all(int fd) {
-  std::string raw;
-  char buf[4096];
-  ssize_t n;
-  while ((n = ::recv(fd, buf, sizeof(buf), 0)) > 0) raw.append(buf, static_cast<size_t>(n));
-  auto split = raw.find("\r\n\r\n");
-  return split == std::string::npos ? raw : raw.substr(split + 4);
+  beast::flat_buffer buffer;
+  beast_http::response<beast_http::string_body> res;
+  beast_http::read(stream, buffer, res);
+
+  beast::error_code ec;
+  stream.socket().shutdown(tcp::socket::shutdown_both, ec);
+  return res.body();
 }
 
 std::string post_json(const std::string& url, const std::string& body) {
-  auto [host, port, path] = parse_url(url);
-  int fd = connect_url(host, port);
-  std::ostringstream req;
-  req << "POST " << path << " HTTP/1.1\r\nHost: " << host << "\r\nContent-Type: application/json\r\nContent-Length: " << body.size() << "\r\nConnection: close\r\n\r\n" << body;
-  std::string rawReq = req.str();
-  ::send(fd, rawReq.data(), rawReq.size(), 0);
-  std::string bodyText = read_all(fd);
-  ::close(fd);
-  return bodyText;
+  return request_body("POST", url, body);
 }
 
 std::string get(const std::string& url) {
-  auto [host, port, path] = parse_url(url);
-  int fd = connect_url(host, port);
-  std::ostringstream req;
-  req << "GET " << path << " HTTP/1.1\r\nHost: " << host << "\r\nConnection: close\r\n\r\n";
-  std::string rawReq = req.str();
-  ::send(fd, rawReq.data(), rawReq.size(), 0);
-  std::string bodyText = read_all(fd);
-  ::close(fd);
-  return bodyText;
+  return request_body("GET", url, "");
 }
 
 } // namespace reality::http

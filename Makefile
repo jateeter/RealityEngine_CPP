@@ -1,5 +1,7 @@
 CXX ?= g++
-CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -pedantic -Iinclude
+BOOST_PREFIX ?= $(shell brew --prefix boost 2>/dev/null)
+BOOST_CPPFLAGS ?= $(if $(BOOST_PREFIX),-I$(BOOST_PREFIX)/include,)
+CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -pedantic -Iinclude $(BOOST_CPPFLAGS)
 LDFLAGS ?= -pthread
 
 BIN_DIR := bin

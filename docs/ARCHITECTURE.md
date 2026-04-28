@@ -30,16 +30,17 @@ The operational scripts launch them in dependency order:
    sensor sources and imports local AI bridge machines into the Reality Engine
    when they are available.
 
-The HTTP layer is deliberately small and blocking. It is meant as a portable
-baseline for API and behavior equivalence. A production hardening pass can swap
-the transport for Boost.Beast, Drogon, uWebSockets, or another evented server
-without changing the domain layer.
+The HTTP layer uses Boost.Asio/Beast. `reality::http::Server` preserves the
+small internal route API used by the services while delegating request parsing,
+response writing, connection management, and client calls to Beast. The domain
+layer remains independent of the transport implementation.
 
 ## Repository Layout
 
 | Path | Purpose |
 | --- | --- |
 | `include/reality/` | Public C++ headers for JSON, HTTP, and engine/domain types. |
+| `src/http.cpp` | Boost.Asio/Beast HTTP server and client implementation behind the local route API. |
 | `src/reality.cpp` | Core model, engine, simulator, perception source, and machine loader implementation. |
 | `src/reality_engine_server.cpp` | Native Reality Engine API service. |
 | `src/perception_engine_server.cpp` | Native Perception Engine API service. |

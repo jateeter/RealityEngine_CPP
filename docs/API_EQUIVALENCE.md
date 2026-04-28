@@ -78,7 +78,7 @@ Base path: `/api`
 | `DELETE /sources/:id` | Implemented | Removes source. |
 | `POST /sensors/:sensorId` | Implemented | Updates matching sensor source. |
 | `GET /machines` | Implemented | Proxies Reality Engine `/api/machines`. |
-| `GET /ws` | Documented gap | WebSocket broadcast not included in standard-library HTTP layer. |
+| `GET /ws` | Documented gap | WebSocket broadcast not included in the current Beast HTTP transport. |
 
 ## Migration Notes
 

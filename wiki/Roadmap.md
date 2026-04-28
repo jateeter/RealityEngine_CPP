@@ -11,10 +11,10 @@ and API compatibility.
 - Checkpoint persistence APIs.
 - Machine export endpoint.
 - Full JSON merge-patch semantics for perception source updates.
-- Production HTTP transport replacement or hardening.
+- Additional production HTTP hardening, including WebSocket support and
+  configurable connection limits.
 
 ## Compatibility Principle
 
 `RealityEngine_AI` remains the reference model. Changes to behavior or API shape
 should be reflected in E2E corpus tests where possible.
-

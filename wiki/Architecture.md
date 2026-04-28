@@ -24,6 +24,13 @@ service layer.
 | `bin/reality_engine_tests` | Core smoke/unit tests. |
 | `bin/e2e_machine_sequences` | Machine corpus E2E runner. |
 
+## HTTP Transport
+
+The service HTTP layer uses Boost.Asio/Beast. `reality::http::Server` keeps the
+small internal route API used by the services while Beast handles request
+parsing, response writing, connection management, and PE-to-RE/localAI client
+calls.
+
 ## Data Flow
 
 1. Perception Engine assembles a vector using the configured deployment dimension.

@@ -28,6 +28,7 @@ public:
 
   void route(std::string method, std::string pattern, Handler handler);
   void listen(int port);
+  Response handle(Request req) const;
 
 private:
   struct Route {
