@@ -336,6 +336,7 @@ Json to_json(const OutputVector& o);
 Json to_json(const SequenceResult& r);
 Json to_json(const MachineTransitionResult& r);
 Json to_json(const SimulationStep& step);
+Json to_json(const SimulationStep& step, bool includeMachineResults);
 Json to_json(const SourceConfig& source);
 
 } // namespace reality

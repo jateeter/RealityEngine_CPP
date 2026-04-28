@@ -68,10 +68,16 @@ Important variables:
 | `LOCAL_AI_API_URL` | `http://localhost:4000` |
 | `LOCAL_AI_MACHINES_DIR` | `../localAIStack/data/machines` |
 | `LOCAL_AI_BOOTSTRAP` | `false` |
+| `HTTP_WORKERS` | max of `2` and hardware concurrency |
+| `HTTP_QUEUE_CAPACITY` | `HTTP_WORKERS * 64` |
 
 Set `LOCAL_AI_BOOTSTRAP=true` to register the default localAIStack sensor
 sources and import bridge machines into the C++ Reality Engine when the
 Perception Engine starts.
+
+`HTTP_WORKERS` and `HTTP_QUEUE_CAPACITY` apply to each native service process.
+They bound the Beast request-processing pool and accepted socket backlog inside
+the process.
 
 ## Qdrant Ownership
 

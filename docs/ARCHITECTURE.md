@@ -32,7 +32,10 @@ The operational scripts launch them in dependency order:
 
 The HTTP layer uses Boost.Asio/Beast. `reality::http::Server` preserves the
 small internal route API used by the services while delegating request parsing,
-response writing, connection management, and client calls to Beast. The domain
+response writing, connection management, and client calls to Beast. Accepted
+server connections are handled by a bounded worker pool instead of a detached
+thread per connection. The client path keeps persistent HTTP/1.1 connections per
+host and port, so frequent PE-to-RE calls avoid repeated TCP setup. The domain
 layer remains independent of the transport implementation.
 
 ## Repository Layout
@@ -57,13 +60,15 @@ layer remains independent of the transport implementation.
   evaluated, preventing same-cycle cascades.
 - Perceptual simulation is input-atomic: all machine inputs are snapshotted
   before any output is merged back into shared space.
-- Machine transitions fan out across a bounded set of worker threads. Critical
+- Machine transitions fan out through a persistent bounded worker pool. Critical
   event sequences inside one machine still transition serially; parallelism is
   only between machines, and output merging keeps deterministic machine order.
-- Output merge planning uses futures, but shared perceptual-space writes remain
-  serialized. Pending outputs are ordered by output region offset, region length,
-  machine id, and output index. When regions overlap, later operations in that
-  deterministic order win for the overlapping elements.
+- Output merge planning is built directly after transition futures complete, so
+  small merge batches do not pay extra `std::async` scheduling cost. Shared
+  perceptual-space writes remain serialized. Pending outputs are ordered by
+  output region offset, region length, machine id, and output index. When
+  regions overlap, later operations in that deterministic order win for the
+  overlapping elements.
 - Reality Engine HTTP handlers protect shared domain state with a service-level
   read/write lock. Read-only registry/state routes use shared ownership, while
   machine CRUD, JSON imports, resets, stateful machine processing, simulation
@@ -73,9 +78,15 @@ layer remains independent of the transport implementation.
   single-flight, and `/api/reset` uses that same guard so reset cannot interleave
   with a push after the vector snapshot but before source advancement.
 - Perception Engine runs PE-to-RE push execution through a bounded worker queue
-  with capacity `1`. The HTTP push request waits for the queued job result, while
-  duplicate concurrent push attempts are rejected with `409` and queue saturation
-  is reported with `429`.
+  with capacity `1`. The HTTP push request waits for the queued job result.
+  Duplicate concurrent push attempts return `409` with `coalesced: true`; the
+  worker performs one compact follow-up push after the in-flight push completes,
+  preserving single-flight state advancement while avoiding lost signal updates.
+  Queue saturation is reported with `429`.
+- `POST /api/perceive` and `POST /api/push` accept `compact: true` or
+  `includeMachineResults: false` to omit per-machine transition details from
+  the response. The full merged perceptual space remains present so PE state can
+  still carry Reality Engine output forward.
 - Machine JSON uses the existing `RealityEngine_AI/examples/machines/*.json`
   schema.
 

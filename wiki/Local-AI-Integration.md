@@ -35,6 +35,11 @@ provided:
 }
 ```
 
+Use `compactPush: true` with `triggerPush: true` to keep the inline push result
+small. Concurrent push attempts are single-flight coalesced: the duplicate
+request returns `409` with `coalesced: true`, and the worker performs one
+compact follow-up push after the active push completes.
+
 ## Configuration
 
 ```bash

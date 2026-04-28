@@ -16,7 +16,8 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 
 - Health and state.
 - Push to Reality Engine.
-- Single-flight push protection; concurrent pushes return `409`.
+- Single-flight push protection; concurrent pushes return `409` with
+  `coalesced: true`, then the worker performs one compact follow-up push.
 - Reset shares the push guard; reset during an active push returns `409`.
 - Auto state start/stop flags.
 - Match algorithm config.
@@ -36,8 +37,12 @@ exclusive access.
 
 Perception Engine serializes sensor/source writes and uses a single-flight
 push/reset guard. Push execution runs through a bounded worker queue with
-capacity `1`; concurrent duplicate pushes return `409`, and queue saturation
-returns `429`.
+capacity `1`; concurrent duplicate pushes return `409` with `coalesced: true`,
+and queue saturation returns `429`.
+
+`POST /api/perceive` and `POST /api/push` support compact responses with
+`compact: true` or `includeMachineResults: false`. Compact responses omit
+`machineResults` while retaining the merged `perceptualSpace`.
 
 ## Known Gaps
 

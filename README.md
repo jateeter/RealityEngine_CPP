@@ -68,7 +68,10 @@ Implemented in this first C++ repo:
 - Configurable universal PreceptionEngine extraction and output merge.
 - PerceptualSpaceSimulator snapshot -> parallel process -> deterministic merge loop.
 - PerceptionEngine source assembly for test, simulated, and sensor sources.
-- Boost.Asio/Beast HTTP endpoints for the high-traffic Scala/Akka route shapes.
+- Boost.Asio/Beast HTTP endpoints with bounded request workers and persistent
+  PE-to-RE client connections.
+- Compact `/api/perceive` and `/api/push` response mode for high-throughput
+  integrations that do not need per-machine transition details.
 - Machine JSON loading for the existing `examples/machines/*.json` format.
 
 See [docs/API_EQUIVALENCE.md](docs/API_EQUIVALENCE.md) for endpoint status and

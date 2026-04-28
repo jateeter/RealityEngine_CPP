@@ -146,8 +146,10 @@ public:
     server.route("POST", "/api/signals", [this](const http::Request& req) {
       return ingest_signal(parse_body(req));
     });
-    server.route("POST", "/api/push", [this](const http::Request&) {
-      return do_push();
+    server.route("POST", "/api/push", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      bool includeMachineResults = body.at("includeMachineResults").as_bool(!body.at("compact").as_bool(false));
+      return do_push(includeMachineResults);
     });
     server.route("POST", "/api/auto/start", [this](const http::Request& req) {
       auto body = parse_body(req);
@@ -177,9 +179,13 @@ public:
         }), 409);
       }
       struct ResetGuard {
-        std::atomic_bool& flag;
-        ~ResetGuard() { flag.store(false); }
-      } guard{pushInFlight};
+        PerceptionService& service;
+        ~ResetGuard() {
+          std::lock_guard<std::mutex> lock(service.pushQueueMutex);
+          service.pushRequestedAgain = false;
+          service.pushInFlight.store(false);
+        }
+      } guard{*this};
       std::lock_guard<std::mutex> lock(stateMutex);
       engine.reset();
       lastPush.reset();
@@ -229,6 +235,7 @@ public:
 private:
   struct PushJob {
     std::promise<http::Response> result;
+    bool includeMachineResults = true;
   };
 
   bool sensor_exists(const std::string& sensorId) const {
@@ -395,16 +402,21 @@ private:
       {"source", source.id.empty() ? Json(nullptr) : to_json(source)},
     };
     if (body.at("triggerPush").as_bool(false)) {
-      response.object()["push"] = json::parse(do_push().body);
+      response.object()["push"] = json::parse(do_push(!body.at("compactPush").as_bool(false)).body);
     }
     return ok(response);
   }
 
-  http::Response do_push() {
+  http::Response do_push(bool includeMachineResults = true) {
     bool expected = false;
     if (!pushInFlight.compare_exchange_strong(expected, true)) {
+      {
+        std::lock_guard<std::mutex> lock(pushQueueMutex);
+        pushRequestedAgain = true;
+      }
       return http::json_response(json::stringify(Json::Object{
         {"success", false},
+        {"coalesced", true},
         {"step", nullptr},
         {"timestamp", static_cast<double>(now_ms())},
         {"globalStep", current_global_step()},
@@ -412,16 +424,13 @@ private:
       }), 409);
     }
 
-    struct PushGuard {
-      std::atomic_bool& flag;
-      ~PushGuard() { flag.store(false); }
-    } guard{pushInFlight};
-
     auto job = std::make_unique<PushJob>();
+    job->includeMachineResults = includeMachineResults;
     auto future = job->result.get_future();
     {
       std::lock_guard<std::mutex> lock(pushQueueMutex);
       if (pushQueue.size() >= pushQueueCapacity) {
+        pushInFlight.store(false);
         return http::json_response(json::stringify(Json::Object{
           {"success", false},
           {"step", nullptr},
@@ -436,7 +445,7 @@ private:
     return future.get();
   }
 
-  http::Response execute_push() {
+  http::Response execute_push(bool includeMachineResults) {
     Vector vector;
     MatchAlgorithm matchAlgorithm;
     {
@@ -444,7 +453,11 @@ private:
       vector = engine.assemble_vector();
       matchAlgorithm = engine.matchAlgorithm;
     }
-    Json payload = Json::Object{{"vector", json::numbers(vector)}, {"matchAlgorithmOverride", to_string(matchAlgorithm == MatchAlgorithm::Equals ? ComparatorType::Equals : ComparatorType::Gte)}};
+    Json payload = Json::Object{
+      {"vector", json::numbers(vector)},
+      {"matchAlgorithmOverride", to_string(matchAlgorithm == MatchAlgorithm::Equals ? ComparatorType::Equals : ComparatorType::Gte)},
+      {"includeMachineResults", includeMachineResults},
+    };
     try {
       std::string raw = http::post_json(realityEngineUrl + "/api/perceive", json::stringify(payload));
       Json parsed = json::parse(raw);
@@ -475,7 +488,7 @@ private:
       }
 
       try {
-        job->result.set_value(execute_push());
+        job->result.set_value(execute_push(job->includeMachineResults));
       } catch (const std::exception& e) {
         job->result.set_value(ok(Json::Object{
           {"success", false},
@@ -492,6 +505,21 @@ private:
           {"globalStep", current_global_step()},
           {"error", "unknown push worker error"},
         }));
+      }
+
+      while (true) {
+        {
+          std::lock_guard<std::mutex> lock(pushQueueMutex);
+          if (!pushRequestedAgain) {
+            pushInFlight.store(false);
+            break;
+          }
+          pushRequestedAgain = false;
+        }
+        try {
+          execute_push(false);
+        } catch (...) {
+        }
       }
     }
   }
@@ -512,6 +540,7 @@ private:
   std::deque<std::unique_ptr<PushJob>> pushQueue;
   std::thread pushWorker;
   bool stopPushWorker = false;
+  bool pushRequestedAgain = false;
   static constexpr size_t pushQueueCapacity = 1;
   bool autoRunning = false;
   long autoIntervalMs = 1000;

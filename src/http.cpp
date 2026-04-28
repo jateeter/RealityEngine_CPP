@@ -6,7 +6,13 @@
 #include <boost/beast/http.hpp>
 
 #include <cctype>
+#include <condition_variable>
+#include <cstdlib>
+#include <deque>
 #include <iostream>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -69,27 +75,31 @@ Response Server::handle(Request req) const {
   return res;
 }
 
-static void write_response(tcp::socket& socket, const Response& res) {
+static void write_response(tcp::socket& socket, const Response& res, bool keepAlive) {
   beast_http::response<beast_http::string_body> out;
   out.version(11);
   out.result(static_cast<unsigned>(res.status));
   out.set(beast_http::field::server, "RealityEngine_CPP");
   out.set(beast_http::field::content_type, res.contentType);
-  out.set(beast_http::field::connection, "close");
   out.body() = res.body;
+  out.keep_alive(keepAlive);
   out.prepare_payload();
   beast_http::write(socket, out);
 }
 
 static void handle_session(tcp::socket socket, const Server& server) {
   beast::flat_buffer buffer;
-  beast_http::request<beast_http::string_body> request;
   try {
-    beast_http::read(socket, buffer, request);
-    write_response(socket, server.handle(to_request(request)));
+    while (true) {
+      beast_http::request<beast_http::string_body> request;
+      beast_http::read(socket, buffer, request);
+      bool keepAlive = request.keep_alive();
+      write_response(socket, server.handle(to_request(request)), keepAlive);
+      if (!keepAlive) break;
+    }
   } catch (const std::exception& e) {
     try {
-      write_response(socket, error_response(e.what(), 500));
+      write_response(socket, error_response(e.what(), 500), false);
     } catch (...) {
     }
   }
@@ -113,12 +123,45 @@ void Server::listen(int port) {
   acceptor.listen(asio::socket_base::max_listen_connections, ec);
   if (ec) throw std::runtime_error("listen failed: " + ec.message());
 
+  const char* workersEnv = std::getenv("HTTP_WORKERS");
+  const char* backlogEnv = std::getenv("HTTP_QUEUE_CAPACITY");
+  size_t workerCount = workersEnv ? static_cast<size_t>(std::max(1, std::atoi(workersEnv))) : static_cast<size_t>(std::max(2u, std::thread::hardware_concurrency()));
+  size_t queueCapacity = backlogEnv ? static_cast<size_t>(std::max(1, std::atoi(backlogEnv))) : workerCount * 64;
+  std::mutex queueMutex;
+  std::condition_variable queueCondition;
+  std::deque<tcp::socket> queue;
+
+  std::vector<std::thread> workers;
+  workers.reserve(workerCount);
+  for (size_t i = 0; i < workerCount; ++i) {
+    workers.emplace_back([&]() {
+      while (true) {
+        tcp::socket socket{ioc};
+        {
+          std::unique_lock<std::mutex> lock(queueMutex);
+          queueCondition.wait(lock, [&]() { return !queue.empty(); });
+          socket = std::move(queue.front());
+          queue.pop_front();
+        }
+        handle_session(std::move(socket), *this);
+      }
+    });
+  }
+
   std::cout << "listening on " << port << std::endl;
   while (true) {
     tcp::socket socket{ioc};
     acceptor.accept(socket, ec);
     if (ec) continue;
-    std::thread(&handle_session, std::move(socket), std::cref(*this)).detach();
+    {
+      std::lock_guard<std::mutex> lock(queueMutex);
+      if (queue.size() >= queueCapacity) {
+        socket.close(ec);
+        continue;
+      }
+      queue.push_back(std::move(socket));
+    }
+    queueCondition.notify_one();
   }
 }
 
@@ -145,35 +188,94 @@ static std::tuple<std::string, std::string, std::string> parse_url(const std::st
   return {host, port, path};
 }
 
+class PersistentConnection {
+public:
+  PersistentConnection(std::string host, std::string port)
+      : host(std::move(host)), port(std::move(port)), stream(std::make_unique<beast::tcp_stream>(ioc)) {}
+
+  std::string request(const std::string& method, const std::string& target, const std::string& body) {
+    std::lock_guard<std::mutex> lock(mutex);
+    try {
+      return request_once(method, target, body);
+    } catch (...) {
+      reconnect();
+      return request_once(method, target, body);
+    }
+  }
+
+  void close() {
+    std::lock_guard<std::mutex> lock(mutex);
+    close_unlocked();
+  }
+
+private:
+  std::string request_once(const std::string& method, const std::string& target, const std::string& body) {
+    connect_if_needed();
+
+    beast_http::request<beast_http::string_body> req;
+    req.version(11);
+    req.method(method == "POST" ? beast_http::verb::post : beast_http::verb::get);
+    req.target(target);
+    req.set(beast_http::field::host, host);
+    req.set(beast_http::field::user_agent, "RealityEngine_CPP");
+    req.keep_alive(true);
+    if (method == "POST") {
+      req.set(beast_http::field::content_type, "application/json");
+      req.body() = body;
+    }
+    req.prepare_payload();
+    beast_http::write(*stream, req);
+
+    beast::flat_buffer buffer;
+    beast_http::response<beast_http::string_body> res;
+    beast_http::read(*stream, buffer, res);
+    if (!res.keep_alive()) connected = false;
+    return res.body();
+  }
+
+  void connect_if_needed() {
+    if (connected && stream->socket().is_open()) return;
+    tcp::resolver resolver{ioc};
+    auto const results = resolver.resolve(host, port);
+    stream->connect(results);
+    connected = true;
+  }
+
+  void reconnect() {
+    close_unlocked();
+    stream = std::make_unique<beast::tcp_stream>(ioc);
+    connected = false;
+  }
+
+  void close_unlocked() {
+    beast::error_code ec;
+    if (stream && stream->socket().is_open()) stream->socket().shutdown(tcp::socket::shutdown_both, ec);
+    if (stream) stream->close();
+    connected = false;
+  }
+
+  std::string host;
+  std::string port;
+  asio::io_context ioc;
+  std::unique_ptr<beast::tcp_stream> stream;
+  std::mutex mutex;
+  bool connected = false;
+};
+
+static std::mutex clientMutex;
+static std::map<std::string, std::unique_ptr<PersistentConnection>> clients;
+
 static std::string request_body(const std::string& method, const std::string& url, const std::string& body) {
   auto [host, port, target] = parse_url(url);
-  asio::io_context ioc;
-  tcp::resolver resolver{ioc};
-  beast::tcp_stream stream{ioc};
-  auto const results = resolver.resolve(host, port);
-  stream.connect(results);
-
-  beast_http::request<beast_http::string_body> req;
-  req.version(11);
-  req.method(method == "POST" ? beast_http::verb::post : beast_http::verb::get);
-  req.target(target);
-  req.set(beast_http::field::host, host);
-  req.set(beast_http::field::user_agent, "RealityEngine_CPP");
-  req.set(beast_http::field::connection, "close");
-  if (method == "POST") {
-    req.set(beast_http::field::content_type, "application/json");
-    req.body() = body;
+  std::string key = host + ":" + port;
+  PersistentConnection* client = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(clientMutex);
+    auto& ptr = clients[key];
+    if (!ptr) ptr = std::make_unique<PersistentConnection>(host, port);
+    client = ptr.get();
   }
-  req.prepare_payload();
-  beast_http::write(stream, req);
-
-  beast::flat_buffer buffer;
-  beast_http::response<beast_http::string_body> res;
-  beast_http::read(stream, buffer, res);
-
-  beast::error_code ec;
-  stream.socket().shutdown(tcp::socket::shutdown_both, ec);
-  return res.body();
+  return client->request(method, target, body);
 }
 
 std::string post_json(const std::string& url, const std::string& body) {
@@ -182,6 +284,12 @@ std::string post_json(const std::string& url, const std::string& body) {
 
 std::string get(const std::string& url) {
   return request_body("GET", url, "");
+}
+
+void close_persistent_connections() {
+  std::lock_guard<std::mutex> lock(clientMutex);
+  for (auto& [_, client] : clients) client->close();
+  clients.clear();
 }
 
 } // namespace reality::http

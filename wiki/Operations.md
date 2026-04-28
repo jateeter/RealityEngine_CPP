@@ -42,7 +42,13 @@ QDRANT_STORAGE_DIR=../localAIStack/volumes/qdrant
 LOCAL_AI_API_URL=http://localhost:4000
 LOCAL_AI_MACHINES_DIR=../localAIStack/data/machines
 LOCAL_AI_BOOTSTRAP=false
+HTTP_WORKERS=
+HTTP_QUEUE_CAPACITY=
 ```
 
 Set `LOCAL_AI_BOOTSTRAP=true` when the C++ Perception Engine should register
 localAIStack-compatible sensors and import bridge machines during startup.
+
+`HTTP_WORKERS` defaults to the max of `2` and hardware concurrency.
+`HTTP_QUEUE_CAPACITY` defaults to `HTTP_WORKERS * 64`. Both apply per native
+service process and bound Beast request handling inside the process.

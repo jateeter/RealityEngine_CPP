@@ -43,7 +43,7 @@ Base path: `/api`
 | `POST /perceptual-simulation/start/stop/step/reset` | Implemented | Manual stepping; no background scheduler in first port. |
 | `GET /perceptual-simulation/state/history` | Implemented | Same top-level shapes. |
 | `POST /preception/diagnostic` | Implemented | Reports nonzero universal values and machine mappings. |
-| `POST /perceive` | Implemented | Main Perception Engine push target. |
+| `POST /perceive` | Implemented | Main Perception Engine push target. Supports compact responses with `compact: true` or `includeMachineResults: false`. |
 
 ### Startup Loading
 
@@ -68,8 +68,8 @@ Base path: `/api`
 | `GET /state` | Implemented | Sources, assembled vector, global step, auto config. |
 | `GET /integrations/localai/status` | C++ extension | Reports configured local AI API health and localAIStack-compatible sensor registration. |
 | `POST /integrations/localai/bootstrap` | C++ extension | Registers localAIStack-compatible sensors and imports bridge machines when available. |
-| `POST /signals` | C++ extension | Generic external-signal write path over sensor sources; optionally triggers `/api/push`. |
-| `POST /push` | Implemented | Posts to Reality Engine `/api/perceive`. |
+| `POST /signals` | C++ extension | Generic external-signal write path over sensor sources; optionally triggers `/api/push`. `compactPush: true` requests compact inline push results. |
+| `POST /push` | Implemented | Posts to Reality Engine `/api/perceive`. Supports compact responses with `compact: true` or `includeMachineResults: false`. |
 | `POST /auto/start`, `POST /auto/stop` | State-compatible | Tracks auto state; background scheduler is planned. |
 | `PATCH /config` | Implemented | Supports `gte` and `equals`. |
 | `POST /reset` | Implemented | Resets sources and persistent vector. |
@@ -96,13 +96,31 @@ model. They preserve Scala/Node Perception Engine behavior while making
 localAIStack and custom AI gateways easier to connect.
 
 `POST /api/push` is single-flight in the C++ service. A second concurrent push
-returns `409` with `error: "push already in progress"` so source advancement,
-`globalStep`, and persistent-vector carry-forward cannot race.
+returns `409` with `error: "push already in progress"` and `coalesced: true` so
+source advancement, `globalStep`, and persistent-vector carry-forward cannot
+race. The worker performs one compact follow-up push after the current push
+finishes, which captures any signal updates that arrived during the in-flight
+operation without advancing the same source cursors concurrently.
 
 Push execution is dispatched through a bounded PE worker queue with capacity
 `1`. The route waits for the queued job result to preserve the synchronous API
 shape, while the external PE-to-RE HTTP call is isolated from the request
 handler path. Queue saturation returns `429` with `error: "push queue is full"`.
+
+`POST /api/perceive` and `POST /api/push` accept either:
+
+```json
+{ "compact": true }
+```
+
+or:
+
+```json
+{ "includeMachineResults": false }
+```
+
+Compact responses omit `machineResults` while retaining `stepNumber`,
+`timestamp`, `perceptualSpace`, and `activeRegions`.
 
 `POST /api/reset` in the Perception Engine shares the same single-flight guard.
 If a push is already in progress, reset returns `409` rather than clearing state

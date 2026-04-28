@@ -1,13 +1,14 @@
 #include "reality/reality.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iostream>
-#include <iterator>
+#include <functional>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -30,6 +31,65 @@ std::string make_id(const std::string& prefix) {
 static std::string lower(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return s;
+}
+
+class DomainWorkerPool {
+public:
+  DomainWorkerPool() {
+    size_t n = static_cast<size_t>(std::max(2u, std::thread::hardware_concurrency()));
+    workers.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+      workers.emplace_back([this]() { run(); });
+    }
+  }
+
+  ~DomainWorkerPool() {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      stopping = true;
+    }
+    cv.notify_all();
+    for (auto& worker : workers) if (worker.joinable()) worker.join();
+  }
+
+  template <typename Fn>
+  auto submit(Fn&& fn) -> std::future<decltype(fn())> {
+    using R = decltype(fn());
+    auto task = std::make_shared<std::packaged_task<R()>>(std::forward<Fn>(fn));
+    auto future = task->get_future();
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      jobs.push_back([task]() { (*task)(); });
+    }
+    cv.notify_one();
+    return future;
+  }
+
+private:
+  void run() {
+    while (true) {
+      std::function<void()> job;
+      {
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [this]() { return stopping || !jobs.empty(); });
+        if (stopping && jobs.empty()) return;
+        job = std::move(jobs.front());
+        jobs.pop_front();
+      }
+      job();
+    }
+  }
+
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::deque<std::function<void()>> jobs;
+  std::vector<std::thread> workers;
+  bool stopping = false;
+};
+
+static DomainWorkerPool& domain_workers() {
+  static DomainWorkerPool pool;
+  return pool;
 }
 
 std::string to_string(ComparatorType t) {
@@ -468,45 +528,28 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
   }
 
   std::vector<MachinePhaseResult> results(jobs.size());
-  std::atomic_size_t nextJob{0};
-  std::exception_ptr firstException;
-  std::mutex exceptionMutex;
-
-  auto worker = [&]() {
-    while (true) {
-      size_t index = nextJob.fetch_add(1);
-      if (index >= jobs.size()) break;
-      try {
-        auto& job = jobs[index];
-        auto transition = job.machine->process_input(job.snapshot, overrideType);
-        std::vector<Vector> pendingOutputs;
-        if (transition.arbiterMetadata.shouldOutput) {
-          for (const auto& [_, sr] : transition.sequenceResults) {
-            for (const auto& out : sr.assertedOutputs) pendingOutputs.push_back(out.vector);
-          }
+  std::vector<std::future<MachinePhaseResult>> futures;
+  futures.reserve(jobs.size());
+  for (const auto& job : jobs) {
+    futures.push_back(domain_workers().submit([job, overrideType]() mutable {
+      auto transition = job.machine->process_input(job.snapshot, overrideType);
+      std::vector<Vector> pendingOutputs;
+      if (transition.arbiterMetadata.shouldOutput) {
+        for (const auto& [_, sr] : transition.sequenceResults) {
+          for (const auto& out : sr.assertedOutputs) pendingOutputs.push_back(out.vector);
         }
-        results[index] = {
-          job.id,
-          job.machine->name,
-          job.snapshot,
-          job.mapping,
-          std::move(transition),
-          std::move(pendingOutputs)
-        };
-      } catch (...) {
-        std::lock_guard<std::mutex> lock(exceptionMutex);
-        if (!firstException) firstException = std::current_exception();
       }
-    }
-  };
-
-  unsigned int hardwareThreads = std::thread::hardware_concurrency();
-  size_t workerCount = std::min(jobs.size(), static_cast<size_t>(hardwareThreads == 0 ? 2 : hardwareThreads));
-  std::vector<std::thread> workers;
-  workers.reserve(workerCount);
-  for (size_t i = 0; i < workerCount; ++i) workers.emplace_back(worker);
-  for (auto& thread : workers) thread.join();
-  if (firstException) std::rethrow_exception(firstException);
+      return MachinePhaseResult{
+        job.id,
+        job.machine->name,
+        std::move(job.snapshot),
+        job.mapping,
+        std::move(transition),
+        std::move(pendingOutputs)
+      };
+    }));
+  }
+  for (size_t i = 0; i < futures.size(); ++i) results[i] = futures[i].get();
 
   SimulationStep step;
   step.stepNumber = stepNumber;
@@ -525,24 +568,11 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     step.machineResults[result.id] = msr;
   }
 
-  std::vector<std::future<std::vector<PendingMerge>>> mergeFutures;
-  mergeFutures.reserve(results.size());
-  for (const auto& result : results) {
-    const MachinePhaseResult* resultPtr = &result;
-    mergeFutures.push_back(std::async(std::launch::async, [resultPtr]() {
-      std::vector<PendingMerge> merges;
-      merges.reserve(resultPtr->pendingOutputs.size());
-      for (size_t i = 0; i < resultPtr->pendingOutputs.size(); ++i) {
-        merges.push_back({resultPtr->mapping.output, resultPtr->id, i, resultPtr->pendingOutputs[i]});
-      }
-      return merges;
-    }));
-  }
-
   std::vector<PendingMerge> pendingMerges;
-  for (auto& future : mergeFutures) {
-    auto merges = future.get();
-    pendingMerges.insert(pendingMerges.end(), std::make_move_iterator(merges.begin()), std::make_move_iterator(merges.end()));
+  for (const auto& result : results) {
+    for (size_t i = 0; i < result.pendingOutputs.size(); ++i) {
+      pendingMerges.push_back({result.mapping.output, result.id, i, result.pendingOutputs[i]});
+    }
   }
   std::sort(pendingMerges.begin(), pendingMerges.end(), [](const PendingMerge& a, const PendingMerge& b) {
     if (a.region.offset != b.region.offset) return a.region.offset < b.region.offset;
@@ -775,12 +805,19 @@ Json to_json(const MachineTransitionResult& r) {
   Json output = r.machineOutput ? to_json(*r.machineOutput) : Json(nullptr);
   return Json::Object{{"inputVector", json::numbers(r.inputVector)}, {"timestamp", static_cast<double>(r.timestamp)}, {"sequenceResults", seqs}, {"machineOutput", output}, {"arbiterMetadata", Json::Object{{"rule", r.arbiterMetadata.rule}, {"totalInputs", static_cast<double>(r.arbiterMetadata.totalInputs)}, {"sequencesWithOutput", static_cast<double>(r.arbiterMetadata.sequencesWithOutput)}, {"shouldOutput", r.arbiterMetadata.shouldOutput}}}};
 }
-Json to_json(const SimulationStep& step) {
+Json to_json(const SimulationStep& step, bool includeMachineResults) {
   Json::Object machineResults;
-  for (const auto& [id, mr] : step.machineResults) machineResults[id] = Json::Object{{"machineId", mr.machineId}, {"machineName", mr.machineName}, {"inputVector", json::numbers(mr.inputVector)}, {"outputVector", mr.outputVector ? Json(json::numbers(*mr.outputVector)) : Json(nullptr)}, {"inputRegion", to_json(mr.inputRegion)}, {"outputRegion", mr.outputRegion ? to_json(*mr.outputRegion) : Json(nullptr)}, {"transitionResult", to_json(mr.transitionResult)}};
+  if (includeMachineResults) {
+    for (const auto& [id, mr] : step.machineResults) machineResults[id] = Json::Object{{"machineId", mr.machineId}, {"machineName", mr.machineName}, {"inputVector", json::numbers(mr.inputVector)}, {"outputVector", mr.outputVector ? Json(json::numbers(*mr.outputVector)) : Json(nullptr)}, {"inputRegion", to_json(mr.inputRegion)}, {"outputRegion", mr.outputRegion ? to_json(*mr.outputRegion) : Json(nullptr)}, {"transitionResult", to_json(mr.transitionResult)}};
+  }
   Json::Array regions;
   for (const auto& r : step.activeRegions) regions.push_back(Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}, {"machineId", r.machineId}, {"type", r.type}});
-  return Json::Object{{"stepNumber", static_cast<double>(step.stepNumber)}, {"timestamp", static_cast<double>(step.timestamp)}, {"perceptualSpace", json::numbers(step.perceptualSpace)}, {"machineResults", machineResults}, {"activeRegions", regions}};
+  Json::Object out{{"stepNumber", static_cast<double>(step.stepNumber)}, {"timestamp", static_cast<double>(step.timestamp)}, {"perceptualSpace", json::numbers(step.perceptualSpace)}, {"activeRegions", regions}};
+  if (includeMachineResults) out["machineResults"] = machineResults;
+  return out;
+}
+Json to_json(const SimulationStep& step) {
+  return to_json(step, true);
 }
 Json to_json(const SourceConfig& s) {
   Json::Object o{{"id", s.id}, {"name", s.name}, {"region", to_json(s.region)}, {"active", s.active}, {"type", s.kind}};

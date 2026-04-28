@@ -104,6 +104,15 @@ Ad hoc sensor registration and update:
 result inline. `triggerPush=false` only updates the perception source; the next
 manual or automatic push will include the signal.
 
+Set `compactPush: true` with `triggerPush: true` to omit per-machine transition
+details from the inline push result while keeping the merged perceptual space.
+
+Concurrent push attempts are coalesced. The request that arrives while another
+push is already in flight receives `409` with `coalesced: true`; after the
+in-flight push completes, the worker performs one compact follow-up push so the
+latest sensor values are carried into Reality Engine without advancing source
+cursors in parallel.
+
 ## Alignment Notes
 
 The Scala/Node Perception Engine source model remains the primary compatibility

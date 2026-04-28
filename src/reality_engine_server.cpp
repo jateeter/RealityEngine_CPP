@@ -208,10 +208,15 @@ public:
       auto body = parse_body(req);
       std::optional<ComparatorType> overrideType;
       if (body.at("matchAlgorithmOverride").is_string()) overrideType = comparator_from_string(body.at("matchAlgorithmOverride").as_string());
-      std::unique_lock<std::shared_mutex> lock(stateMutex);
-      auto step = simulator.process_immediate(json::to_numbers(body.at("vector")), overrideType);
-      preception.perceptual_space().set_vector(step.perceptualSpace);
-      return ok(to_json(step));
+      bool includeMachineResults = body.at("includeMachineResults").as_bool(!body.at("compact").as_bool(false));
+      auto vector = json::to_numbers(body.at("vector"));
+      SimulationStep step;
+      {
+        std::unique_lock<std::shared_mutex> lock(stateMutex);
+        step = simulator.process_immediate(vector, overrideType);
+        preception.perceptual_space().set_vector(step.perceptualSpace);
+      }
+      return ok(to_json(step, includeMachineResults));
     });
   }
 

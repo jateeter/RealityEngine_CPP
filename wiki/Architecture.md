@@ -29,14 +29,16 @@ service layer.
 The service HTTP layer uses Boost.Asio/Beast. `reality::http::Server` keeps the
 small internal route API used by the services while Beast handles request
 parsing, response writing, connection management, and PE-to-RE/localAI client
-calls.
+calls. Accepted sockets are processed by a bounded worker pool instead of
+detached per-connection threads. Outbound client calls reuse persistent HTTP/1.1
+connections per host and port.
 
 ## Data Flow
 
 1. Perception Engine assembles a vector using the configured deployment dimension.
 2. Perception Engine posts it to Reality Engine `POST /api/perceive`.
 3. Reality Engine snapshots mapped machine inputs.
-4. Machines process their local vectors across a bounded worker fan-out.
+4. Machines process their local vectors through a persistent bounded worker pool.
 5. Outputs are merged back into perceptual space in deterministic machine order.
 6. Perception Engine can carry the merged perceptual space forward.
 
@@ -51,7 +53,8 @@ cross-machine clock coupling.
 
 ## Output Merge Policy
 
-Output merge planning is scheduled with futures, but writes into the shared
+Machine transition work is scheduled with futures. Merge planning is built
+directly after transition futures complete, and writes into the shared
 perceptual space are serialized. Pending outputs are ordered by output region
 offset, region length, machine id, and output index. If output regions overlap,
 the later operation in that deterministic order wins for the overlapping
@@ -71,5 +74,11 @@ with a push after the vector snapshot but before source advancement.
 
 PE-to-RE push execution runs through a bounded worker queue with capacity `1`.
 The HTTP push request waits for the queued job result to preserve API shape,
-while duplicate concurrent pushes return `409` and queue saturation returns
-`429`.
+while duplicate concurrent pushes return `409` with `coalesced: true`. The
+worker performs one compact follow-up push after the in-flight push completes,
+which preserves single-flight source advancement without dropping late sensor
+updates. Queue saturation returns `429`.
+
+`POST /api/perceive` and `POST /api/push` accept `compact: true` or
+`includeMachineResults: false` to omit per-machine transition details from the
+response while retaining the merged perceptual space.

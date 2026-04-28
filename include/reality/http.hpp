@@ -45,5 +45,6 @@ Response json_response(const std::string& body, int status = 200);
 Response error_response(const std::string& message, int status = 400);
 std::string post_json(const std::string& url, const std::string& body);
 std::string get(const std::string& url);
+void close_persistent_connections();
 
 } // namespace reality::http
