@@ -11,11 +11,15 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 - Machine graph.
 - Perceptual simulation configure, step, state, and history.
 - `POST /api/perceive`.
+- Runtime metrics and options through `GET /api/runtime/metrics`,
+  `GET /api/runtime/options`, and `PATCH /api/runtime/options`.
 
 ## Implemented Perception Engine Areas
 
 - Health and state.
 - Push to Reality Engine.
+- Async push job mode with `POST /api/push` and `async: true`.
+- Push job polling through `GET /api/push/:id`.
 - Single-flight push protection; concurrent pushes return `409` with
   `coalesced: true`, then the worker performs at most one compact follow-up
   push.
@@ -24,6 +28,7 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 - Match algorithm config.
 - Reset.
 - Source list/create/update/delete.
+- Inactive test sources generated from loaded machine `inputSequences`.
 - Sensor value push.
 - localAIStack-compatible status/bootstrap endpoints.
 - Generic external signal ingestion through `POST /api/signals`.
@@ -43,6 +48,22 @@ and queue saturation returns `429`.
 `POST /api/perceive` and `POST /api/push` support compact responses with
 `compact: true` or `includeMachineResults: false`. Compact responses omit
 `machineResults` while retaining the merged `perceptualSpace`.
+
+`POST /api/perceive` also supports `includePerceptualSpace: false` to omit the
+large merged vector. Responses include `mergeBatch`, the deterministic list of
+shared-space writes applied after parallel machine transitions.
+
+Runtime defaults can be changed without restart:
+
+```http
+PATCH /api/runtime/options
+```
+
+with `historyLimit`, `includeMachineResults`, and `includePerceptualSpace`.
+
+Native outbound POST retries use `Idempotency-Key` headers. Successful
+idempotent POST responses are cached per service process to make retry safe
+after transient connection failures.
 
 ## Known Gaps
 

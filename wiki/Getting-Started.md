@@ -41,8 +41,8 @@ make e2e
 The default service URLs are:
 
 ```text
-Reality Engine    http://localhost:3100
-Perception Engine http://localhost:3101
+Reality Engine    http://localhost:3299
+Perception Engine http://localhost:3300
 Qdrant            http://localhost:4333
 ```
 

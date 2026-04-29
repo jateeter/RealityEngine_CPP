@@ -9,6 +9,8 @@ Reference APIs:
 
 Base path: `/api`
 
+OpenAPI: [`docs/openapi/reality-engine.yaml`](openapi/reality-engine.yaml)
+
 | Scala/Akka endpoint | C++ status | Notes |
 | --- | --- | --- |
 | `GET /health` | Implemented | Same `status`, `timestamp`, `version` shape. |
@@ -43,7 +45,8 @@ Base path: `/api`
 | `POST /perceptual-simulation/start/stop/step/reset` | Implemented | Manual stepping; no background scheduler in first port. |
 | `GET /perceptual-simulation/state/history` | Implemented | Same top-level shapes. |
 | `POST /preception/diagnostic` | Implemented | Reports nonzero universal values and machine mappings. |
-| `POST /perceive` | Implemented | Main Perception Engine push target. Supports compact responses with `compact: true` or `includeMachineResults: false`. |
+| `POST /perceive` | Implemented | Main Perception Engine push target. Supports response projection with `compact`, `includeMachineResults`, and `includePerceptualSpace`. Returns deterministic `mergeBatch`. |
+| `GET/PATCH /runtime/options` | C++ extension | Dynamic history and response projection controls. |
 
 ### Startup Loading
 
@@ -62,6 +65,8 @@ after the Reality Engine health endpoint becomes available.
 
 Base path: `/api`
 
+OpenAPI: [`docs/openapi/perception-engine.yaml`](openapi/perception-engine.yaml)
+
 | Scala/Akka endpoint | C++ status | Notes |
 | --- | --- | --- |
 | `GET /health` | Implemented | Same shape. |
@@ -71,7 +76,8 @@ Base path: `/api`
 | `POST /integrations/localai/bootstrap` | C++ extension | Registers localAIStack-compatible sensors and imports bridge machines when available. |
 | `POST /integrations/localai/invoke` | C++ extension | Guarded dynamic access to allowed localAIStack `GET`/`POST` endpoints such as `/graph/schema`, `/graph/rag`, `/graph/agent`, `/rag/query`, `/chat`, and `/graphql`. |
 | `POST /signals` | C++ extension | Generic external-signal write path over sensor sources; optionally triggers `/api/push`. `compactPush: true` requests compact inline push results. |
-| `POST /push` | Implemented | Posts to Reality Engine `/api/perceive`. Supports compact responses with `compact: true` or `includeMachineResults: false`. |
+| `POST /push` | Implemented | Posts to Reality Engine `/api/perceive`. Supports sync compatibility and async job mode with `async: true`. |
+| `GET /push/:id` | C++ extension | Polls async push job status and result. |
 | `POST /auto/start`, `POST /auto/stop` | State-compatible | Tracks auto state; background scheduler is planned. |
 | `PATCH /config` | Implemented | Supports `gte` and `equals`. |
 | `POST /reset` | Implemented | Resets sources and persistent vector. |
@@ -96,6 +102,14 @@ Production parity still needs:
 The local AI endpoints are C++ extensions around the existing sensor source
 model. They preserve Scala/Node Perception Engine behavior while making
 localAIStack and custom AI gateways easier to connect.
+
+When the Perception Engine observes machines loaded in the Reality Engine, it
+creates one inactive `test` source for each machine `inputSequences` entry. The
+source id is deterministic, the source region is the machine input mapping, and
+the source inputs are copied from the test-sequence vectors. These sources are
+inactive by default so the authored test corpus is available through
+`GET /api/sources` without driving all machine test scenarios during normal
+pushes.
 
 `POST /api/push` is single-flight in the C++ service. A second concurrent push
 returns `409` with `error: "push already in progress"` and `coalesced: true` so
@@ -125,6 +139,44 @@ or:
 
 Compact responses omit `machineResults` while retaining `stepNumber`,
 `timestamp`, `perceptualSpace`, and `activeRegions`.
+
+`POST /api/perceive` also accepts:
+
+```json
+{ "includePerceptualSpace": false }
+```
+
+to omit the merged perceptual-space vector from large responses. The response
+still includes `mergeBatch`, an ordered list of machine output writes with the
+target region, machine id, and output index. This makes deterministic conflict
+resolution observable without returning the full space.
+
+Runtime defaults for response projection and bounded history can be inspected
+and changed through:
+
+```http
+GET /api/runtime/options
+PATCH /api/runtime/options
+```
+
+Example patch:
+
+```json
+{
+  "historyLimit": 128,
+  "includeMachineResults": false,
+  "includePerceptualSpace": true
+}
+```
+
+`POST /api/push` remains synchronous by default. Supplying `async: true` returns
+`202` with a `jobId` and `statusEndpoint`; callers poll `GET /api/push/:id` for
+`queued`, `running`, `completed`, or `failed`.
+
+Outbound `POST` calls made by the native HTTP client include idempotency keys
+and retry once after reconnect. The server caches successful idempotent `POST`
+responses, so retry after a transient connection failure does not repeat the
+completed operation.
 
 `POST /api/reset` in the Perception Engine shares the same single-flight guard.
 If a push is already in progress, reset returns `409` rather than clearing state

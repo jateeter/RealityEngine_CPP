@@ -75,11 +75,41 @@ public:
     return future;
   }
 
+  bool try_reserve(size_t count) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (jobs.size() + reserved + count > queueCapacity) {
+      rejected.fetch_add(count, std::memory_order_relaxed);
+      return false;
+    }
+    reserved += count;
+    return true;
+  }
+
+  void release_reservation(size_t count) {
+    std::lock_guard<std::mutex> lock(mutex);
+    reserved = count > reserved ? 0 : reserved - count;
+  }
+
+  template <typename Fn>
+  auto submit_reserved(Fn&& fn) -> std::future<decltype(fn())> {
+    using R = decltype(fn());
+    auto task = std::make_shared<std::packaged_task<R()>>(std::forward<Fn>(fn));
+    auto future = task->get_future();
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (reserved == 0) throw std::runtime_error("Domain worker reservation exhausted");
+      --reserved;
+      jobs.push_back([task]() { (*task)(); });
+    }
+    cv.notify_one();
+    return future;
+  }
+
   WorkerPoolMetrics metrics() const {
     std::lock_guard<std::mutex> lock(mutex);
     return {
       workers.size(),
-      jobs.size(),
+      jobs.size() + reserved,
       active.load(std::memory_order_relaxed),
       completed.load(std::memory_order_relaxed),
       rejected.load(std::memory_order_relaxed),
@@ -110,6 +140,7 @@ private:
   std::deque<std::function<void()>> jobs;
   std::vector<std::thread> workers;
   size_t queueCapacity = 0;
+  size_t reserved = 0;
   std::atomic_size_t active{0};
   std::atomic_size_t completed{0};
   std::atomic_size_t rejected{0};
@@ -519,12 +550,14 @@ std::optional<SimulationStep> PerceptualSpaceSimulator::step() {
   auto result = run_phases(currentStep, std::nullopt);
   ++currentStep;
   steps.insert(steps.begin(), result);
+  if (steps.size() > maxHistory) steps.resize(maxHistory);
   return result;
 }
 SimulationStep PerceptualSpaceSimulator::process_immediate(const Vector& vector, std::optional<ComparatorType> overrideType) {
   space.set_vector(vector);
   auto result = run_phases(immediateStepCount++, overrideType);
   steps.insert(steps.begin(), result);
+  if (steps.size() > maxHistory) steps.resize(maxHistory);
   return result;
 }
 SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optional<ComparatorType> overrideType) {
@@ -559,8 +592,12 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
   std::vector<MachinePhaseResult> results(jobs.size());
   std::vector<std::future<MachinePhaseResult>> futures;
   futures.reserve(jobs.size());
-  for (const auto& job : jobs) {
-    auto future = domain_workers().submit([job, overrideType]() mutable {
+  auto& pool = domain_workers();
+  if (!pool.try_reserve(jobs.size())) throw std::runtime_error("Domain worker queue is full");
+  size_t unsubmitted = jobs.size();
+  try {
+    for (const auto& job : jobs) {
+      auto future = pool.submit_reserved([job, overrideType]() mutable {
       auto transition = job.machine->process_input(job.snapshot, overrideType);
       std::vector<Vector> pendingOutputs;
       if (transition.arbiterMetadata.shouldOutput) {
@@ -576,9 +613,13 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
         std::move(transition),
         std::move(pendingOutputs)
       };
-    });
-    if (!future) throw std::runtime_error("Domain worker queue is full");
-    futures.push_back(std::move(*future));
+      });
+      --unsubmitted;
+      futures.push_back(std::move(future));
+    }
+  } catch (...) {
+    if (unsubmitted > 0) pool.release_reservation(unsubmitted);
+    throw;
   }
   for (size_t i = 0; i < futures.size(); ++i) results[i] = futures[i].get();
 
@@ -612,6 +653,7 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     return a.outputIndex < b.outputIndex;
   });
   for (const auto& merge : pendingMerges) {
+    step.mergeBatch.push_back({merge.region, merge.machineId, merge.outputIndex});
     space.merge_machine_output(merge.output, PerceptualMapping{{0, 0}, merge.region});
   }
   step.perceptualSpace = space.vector();
@@ -642,6 +684,11 @@ Json PerceptualSpaceSimulator::state_json() const {
   return Json::Object{{"state", Json::Object{{"perceptualSpace", json::numbers(space.vector())}, {"currentStep", static_cast<double>(currentStep)}, {"isRunning", running}, {"machines", machineJson}}}};
 }
 std::vector<SimulationStep> PerceptualSpaceSimulator::history() const { return steps; }
+void PerceptualSpaceSimulator::set_history_limit(size_t limit) {
+  maxHistory = limit;
+  if (steps.size() > maxHistory) steps.resize(maxHistory);
+}
+size_t PerceptualSpaceSimulator::history_limit() const { return maxHistory; }
 PerceptualSpace& PerceptualSpaceSimulator::perceptual_space() { return space; }
 int PerceptualSpaceSimulator::current_step() const { return currentStep; }
 bool PerceptualSpaceSimulator::is_running() const { return running; }
@@ -836,16 +883,23 @@ Json to_json(const MachineTransitionResult& r) {
   Json output = r.machineOutput ? to_json(*r.machineOutput) : Json(nullptr);
   return Json::Object{{"inputVector", json::numbers(r.inputVector)}, {"timestamp", static_cast<double>(r.timestamp)}, {"sequenceResults", seqs}, {"machineOutput", output}, {"arbiterMetadata", Json::Object{{"rule", r.arbiterMetadata.rule}, {"totalInputs", static_cast<double>(r.arbiterMetadata.totalInputs)}, {"sequencesWithOutput", static_cast<double>(r.arbiterMetadata.sequencesWithOutput)}, {"shouldOutput", r.arbiterMetadata.shouldOutput}}}};
 }
-Json to_json(const SimulationStep& step, bool includeMachineResults) {
+Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace) {
   Json::Object machineResults;
   if (includeMachineResults) {
     for (const auto& [id, mr] : step.machineResults) machineResults[id] = Json::Object{{"machineId", mr.machineId}, {"machineName", mr.machineName}, {"inputVector", json::numbers(mr.inputVector)}, {"outputVector", mr.outputVector ? Json(json::numbers(*mr.outputVector)) : Json(nullptr)}, {"inputRegion", to_json(mr.inputRegion)}, {"outputRegion", mr.outputRegion ? to_json(*mr.outputRegion) : Json(nullptr)}, {"transitionResult", to_json(mr.transitionResult)}};
   }
   Json::Array regions;
   for (const auto& r : step.activeRegions) regions.push_back(Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}, {"machineId", r.machineId}, {"type", r.type}});
-  Json::Object out{{"stepNumber", static_cast<double>(step.stepNumber)}, {"timestamp", static_cast<double>(step.timestamp)}, {"perceptualSpace", json::numbers(step.perceptualSpace)}, {"activeRegions", regions}};
+  Json::Array mergeBatch;
+  for (const auto& op : step.mergeBatch) mergeBatch.push_back(Json::Object{{"region", to_json(op.region)}, {"machineId", op.machineId}, {"outputIndex", static_cast<double>(op.outputIndex)}});
+  Json::Object out{{"stepNumber", static_cast<double>(step.stepNumber)}, {"timestamp", static_cast<double>(step.timestamp)}, {"activeRegions", regions}};
+  out["mergeBatch"] = mergeBatch;
+  if (includePerceptualSpace) out["perceptualSpace"] = json::numbers(step.perceptualSpace);
   if (includeMachineResults) out["machineResults"] = machineResults;
   return out;
+}
+Json to_json(const SimulationStep& step, bool includeMachineResults) {
+  return to_json(step, includeMachineResults, true);
 }
 Json to_json(const SimulationStep& step) {
   return to_json(step, true);

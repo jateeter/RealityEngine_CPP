@@ -1,0 +1,745 @@
+openapi: 3.0.3
+info:
+  title: RealityEngine CPP - Reality Engine API
+  version: 1.0.0-cpp
+  description: |
+    OpenAPI contract for the native C++ Reality Engine service.
+
+    The service defaults to `http://localhost:3299` and mirrors the
+    RealityEngine_AI Scala/Akka route surface where implemented.
+servers:
+  - url: http://localhost:3299
+    description: Local Reality Engine default
+tags:
+  - name: System
+  - name: Runtime
+  - name: Engine
+  - name: Machines
+  - name: Simulation
+  - name: Preception
+paths:
+  /:
+    get:
+      tags: [System]
+      summary: Service root
+      responses:
+        "200":
+          description: Service identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/health:
+    get:
+      tags: [System]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy service
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /api/config:
+    get:
+      tags: [System]
+      summary: Runtime configuration snapshot
+      responses:
+        "200":
+          description: Configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RealityConfig"
+  /api/runtime/metrics:
+    get:
+      tags: [Runtime]
+      summary: Engine and worker pool metrics
+      responses:
+        "200":
+          description: Runtime metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/runtime/options:
+    get:
+      tags: [Runtime]
+      summary: Response projection and history options
+      responses:
+        "200":
+          description: Current runtime options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeOptions"
+    patch:
+      tags: [Runtime]
+      summary: Update response projection and history options
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuntimeOptionsPatch"
+      responses:
+        "200":
+          description: Updated runtime options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeOptions"
+  /api/engine/reset:
+    post:
+      tags: [Engine]
+      summary: Reset machine, simulator, and preception state
+      responses:
+        "200":
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+  /api/engine/stats:
+    get:
+      tags: [Engine]
+      summary: Engine statistics
+      responses:
+        "200":
+          description: Engine stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/engine/active:
+    get:
+      tags: [Engine]
+      summary: Active vector compatibility endpoint
+      responses:
+        "200":
+          description: Active vectors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/engine/history:
+    get:
+      tags: [Engine]
+      summary: Engine history compatibility endpoint
+      responses:
+        "200":
+          description: Engine history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/engine/process:
+    post:
+      tags: [Engine]
+      summary: Process an input vector across loaded machines
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vector]
+              properties:
+                vector:
+                  $ref: "#/components/schemas/Vector"
+      responses:
+        "200":
+          description: Output vectors asserted by machines
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/machines:
+    get:
+      tags: [Machines]
+      summary: List loaded machines
+      responses:
+        "200":
+          description: Machine list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  machines:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Machine"
+    post:
+      tags: [Machines]
+      summary: Import a machine from RealityEngine_AI machine JSON
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Machine"
+      responses:
+        "200":
+          description: Imported machine
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineMutationResponse"
+  /api/machines/{id}:
+    parameters:
+      - $ref: "#/components/parameters/MachineId"
+    get:
+      tags: [Machines]
+      summary: Read a loaded machine
+      responses:
+        "200":
+          description: Machine
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  machine:
+                    $ref: "#/components/schemas/Machine"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Machines]
+      summary: Replace a machine
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Machine"
+      responses:
+        "200":
+          description: Replaced machine
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineMutationResponse"
+    delete:
+      tags: [Machines]
+      summary: Remove a machine
+      responses:
+        "200":
+          description: Removal result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+  /api/machines/{id}/process:
+    post:
+      tags: [Machines]
+      summary: Process a machine-local input vector
+      parameters:
+        - $ref: "#/components/parameters/MachineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [inputVector]
+              properties:
+                inputVector:
+                  $ref: "#/components/schemas/Vector"
+      responses:
+        "200":
+          description: Machine transition result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineTransitionResult"
+  /api/machines/{id}/process-universal:
+    post:
+      tags: [Machines]
+      summary: Resolve universal input space for one machine and process it
+      parameters:
+        - $ref: "#/components/parameters/MachineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [universalInputSpace]
+              properties:
+                universalInputSpace:
+                  $ref: "#/components/schemas/Vector"
+      responses:
+        "200":
+          description: Machine transition result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineTransitionResult"
+  /api/machines/process-universal/all:
+    post:
+      tags: [Machines]
+      summary: Resolve universal input space and process all machines
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [universalInputSpace]
+              properties:
+                universalInputSpace:
+                  $ref: "#/components/schemas/Vector"
+      responses:
+        "200":
+          description: Results keyed by machine id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/machines/{id}/whatif:
+    post:
+      tags: [Machines]
+      summary: Process a copied machine with a local input vector
+      parameters:
+        - $ref: "#/components/parameters/MachineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [inputVector]
+              properties:
+                inputVector:
+                  $ref: "#/components/schemas/Vector"
+      responses:
+        "200":
+          description: What-if transition result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineTransitionResult"
+  /api/machines/{id}/whatif-universal:
+    post:
+      tags: [Machines]
+      summary: Process a copied machine with universal input space
+      parameters:
+        - $ref: "#/components/parameters/MachineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [universalInputSpace]
+              properties:
+                universalInputSpace:
+                  $ref: "#/components/schemas/Vector"
+      responses:
+        "200":
+          description: What-if transition result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineTransitionResult"
+  /api/machines/json/list:
+    get:
+      tags: [Machines]
+      summary: List machine JSON files from the configured machine directory
+      responses:
+        "200":
+          description: Available machine JSON files
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/machines/json/{name}:
+    get:
+      tags: [Machines]
+      summary: Load a machine JSON file by name
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Loaded machine
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineMutationResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/machine-graph:
+    get:
+      tags: [Machines]
+      summary: Machine graph nodes and overlap edges
+      responses:
+        "200":
+          description: Machine graph
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/perceptual-simulation/step:
+    post:
+      tags: [Simulation]
+      summary: Advance the configured perceptual simulation by one step
+      responses:
+        "200":
+          description: Simulation step or done marker
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/perceptual-simulation/reset:
+    post:
+      tags: [Simulation]
+      summary: Reset perceptual simulation state
+      responses:
+        "200":
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+  /api/perceptual-simulation/start:
+    post:
+      tags: [Simulation]
+      summary: Mark perceptual simulation running
+      responses:
+        "200":
+          description: Start result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+  /api/perceptual-simulation/stop:
+    post:
+      tags: [Simulation]
+      summary: Stop perceptual simulation
+      responses:
+        "200":
+          description: Stop result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+  /api/perceptual-simulation/state:
+    get:
+      tags: [Simulation]
+      summary: Current perceptual simulation state
+      responses:
+        "200":
+          description: Simulator state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/perceptual-simulation/history:
+    get:
+      tags: [Simulation]
+      summary: Bounded simulation history
+      responses:
+        "200":
+          description: Simulation history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  history:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SimulationStep"
+  /api/perceptual-simulation/configure/chunk:
+    post:
+      tags: [Simulation]
+      summary: Append vectors and simulation configuration to the staging buffer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimulationConfigureChunk"
+      responses:
+        "200":
+          description: Buffer status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/perceptual-simulation/configure/commit:
+    post:
+      tags: [Simulation]
+      summary: Commit staged simulation vectors and configuration
+      responses:
+        "200":
+          description: Commit result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+  /api/preception/diagnostic:
+    post:
+      tags: [Preception]
+      summary: Diagnose machine input mapping for a universal input space
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [universalInputSpace]
+              properties:
+                universalInputSpace:
+                  $ref: "#/components/schemas/Vector"
+      responses:
+        "200":
+          description: Mapping diagnostic
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/perceive:
+    post:
+      tags: [Preception]
+      summary: Process a perceptual-space vector through the simulator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PerceiveRequest"
+      responses:
+        "200":
+          description: Simulation step
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimulationStep"
+components:
+  parameters:
+    MachineId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Object:
+      type: object
+      additionalProperties: true
+    Vector:
+      type: array
+      items:
+        type: number
+        format: double
+    Success:
+      type: object
+      properties:
+        success:
+          type: boolean
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+          example: healthy
+        timestamp:
+          type: number
+        version:
+          type: string
+          example: 1.0.0-cpp
+    RealityConfig:
+      type: object
+      properties:
+        vectorDimension:
+          type: number
+          example: 768
+        matchThreshold:
+          type: number
+          example: 0.5
+        qdrantUrl:
+          type: string
+        collectionName:
+          type: string
+          example: reality-vectors
+    RuntimeOptions:
+      type: object
+      properties:
+        historyLimit:
+          type: number
+          example: 256
+        includeMachineResults:
+          type: boolean
+        includePerceptualSpace:
+          type: boolean
+        projectionControls:
+          type: object
+          additionalProperties:
+            type: string
+    RuntimeOptionsPatch:
+      type: object
+      properties:
+        historyLimit:
+          type: number
+          minimum: 0
+        includeMachineResults:
+          type: boolean
+        includePerceptualSpace:
+          type: boolean
+    Region:
+      type: object
+      required: [offset, length]
+      properties:
+        offset:
+          type: integer
+        length:
+          type: integer
+    ActiveRegion:
+      type: object
+      properties:
+        offset:
+          type: integer
+        length:
+          type: integer
+        machineId:
+          type: string
+        type:
+          type: string
+          enum: [input, output]
+    MergeOperation:
+      type: object
+      properties:
+        region:
+          $ref: "#/components/schemas/Region"
+        machineId:
+          type: string
+        outputIndex:
+          type: number
+    Machine:
+      type: object
+      description: RealityEngine_AI-compatible machine JSON. Unknown properties are preserved by schema clients.
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        version:
+          type: string
+        perceptualMapping:
+          type: object
+          additionalProperties: true
+        sequences:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    MachineMutationResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        machine:
+          $ref: "#/components/schemas/Machine"
+        message:
+          type: string
+    MachineTransitionResult:
+      type: object
+      additionalProperties: true
+      properties:
+        inputVector:
+          $ref: "#/components/schemas/Vector"
+        timestamp:
+          type: number
+        sequenceResults:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        machineOutput:
+          type: array
+          nullable: true
+          items:
+            type: number
+            format: double
+        arbiterMetadata:
+          type: object
+          additionalProperties: true
+    SimulationStep:
+      type: object
+      properties:
+        stepNumber:
+          type: number
+        timestamp:
+          type: number
+        perceptualSpace:
+          $ref: "#/components/schemas/Vector"
+        activeRegions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActiveRegion"
+        mergeBatch:
+          type: array
+          items:
+            $ref: "#/components/schemas/MergeOperation"
+        machineResults:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: true
+    SimulationConfigureChunk:
+      type: object
+      properties:
+        reset:
+          type: boolean
+        vectors:
+          type: array
+          items:
+            $ref: "#/components/schemas/Vector"
+        config:
+          type: object
+          properties:
+            inputRegion:
+              $ref: "#/components/schemas/Region"
+            stepDelayMs:
+              type: number
+        inputRegion:
+          $ref: "#/components/schemas/Region"
+        stepDelayMs:
+          type: number
+    PerceiveRequest:
+      type: object
+      required: [vector]
+      properties:
+        vector:
+          $ref: "#/components/schemas/Vector"
+        matchAlgorithmOverride:
+          type: string
+          enum: [gte, equals]
+        compact:
+          type: boolean
+          description: When true, defaults includeMachineResults to false.
+        includeMachineResults:
+          type: boolean
+        includePerceptualSpace:
+          type: boolean

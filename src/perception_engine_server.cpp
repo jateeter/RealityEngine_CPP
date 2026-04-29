@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
@@ -14,6 +15,7 @@
 #include <thread>
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 
 using namespace reality;
 
@@ -110,6 +112,22 @@ std::string normalize_endpoint(std::string endpoint) {
   return endpoint;
 }
 
+std::string source_id_part(const std::string& value) {
+  std::string out;
+  for (unsigned char c : value) {
+    if (std::isalnum(c)) out.push_back(static_cast<char>(std::tolower(c)));
+    else if (!out.empty() && out.back() != '-') out.push_back('-');
+  }
+  while (!out.empty() && out.back() == '-') out.pop_back();
+  return out.empty() ? "unnamed" : out;
+}
+
+std::string test_source_id(const std::string& machineId, size_t index, const Json& sequence) {
+  std::ostringstream out;
+  out << "test-" << source_id_part(machineId) << "-" << index << "-" << source_id_part(sequence.at("name").as_string("sequence"));
+  return out.str();
+}
+
 bool endpoint_allowed(const std::string& endpoint) {
   static const std::vector<std::string> prefixes{
     "/",
@@ -136,6 +154,7 @@ public:
         localAIBaseUrl(std::move(localAIUrl)),
         localAIMachinesDirectory(std::move(localAIMachinesDir)),
         engine(vectorDimension) {
+    sync_test_sources_from_reality();
     if (bootstrapLocalAI) {
       try {
         bootstrap_localai();
@@ -147,6 +166,7 @@ public:
   }
 
   ~PerceptionService() {
+    stop_auto();
     {
       std::lock_guard<std::mutex> lock(pushQueueMutex);
       stopPushWorker = true;
@@ -159,10 +179,14 @@ public:
     server.route("GET", "/", [](const http::Request&) {
       return ok(Json::Object{{"service", "Perception Engine (C++)"}, {"status", "running"}});
     });
+    server.websocket("/ws", wsHub, [this](std::shared_ptr<http::Server::WebSocketConnection> connection) {
+      connection->send(state_update_message());
+    });
     server.route("GET", "/api/health", [](const http::Request&) {
       return ok(Json::Object{{"status", "healthy"}, {"timestamp", static_cast<double>(now_ms())}});
     });
     server.route("GET", "/api/state", [this](const http::Request&) {
+      sync_test_sources_from_reality();
       std::lock_guard<std::mutex> lock(stateMutex);
       return ok(engine.state_json(lastPush, autoRunning, autoIntervalMs));
     });
@@ -184,83 +208,95 @@ public:
     server.route("POST", "/api/push", [this](const http::Request& req) {
       auto body = parse_body(req);
       bool includeMachineResults = body.at("includeMachineResults").as_bool(!body.at("compact").as_bool(false));
-      return do_push(includeMachineResults);
+      bool async = body.at("async").as_bool(false);
+      return do_push(includeMachineResults, async);
+    });
+    server.route("GET", "/api/push/:id", [this](const http::Request& req) {
+      return read_push_job(req.pathParams.at("id"));
     });
     server.route("POST", "/api/auto/start", [this](const http::Request& req) {
       auto body = parse_body(req);
-      std::lock_guard<std::mutex> lock(stateMutex);
-      autoIntervalMs = static_cast<long>(body.at("intervalMs").as_number(1000));
-      if (autoIntervalMs <= 0) autoIntervalMs = 1000;
-      autoRunning = true;
+      start_auto(static_cast<long>(body.at("intervalMs").as_number(1000)));
       return ok(Json::Object{{"success", true}, {"intervalMs", static_cast<double>(autoIntervalMs)}});
     });
     server.route("POST", "/api/auto/stop", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(stateMutex);
-      autoRunning = false;
+      stop_auto();
       return ok(Json::Object{{"success", true}});
     });
     server.route("PATCH", "/api/config", [this](const http::Request& req) {
       auto body = parse_body(req);
-      std::lock_guard<std::mutex> lock(stateMutex);
-      if (body.at("matchAlgorithm").is_string()) engine.matchAlgorithm = match_algorithm_from_string(body.at("matchAlgorithm").as_string());
-      return ok(Json::Object{{"success", true}, {"matchAlgorithm", to_string(engine.matchAlgorithm)}});
+      std::string algorithm;
+      {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        if (body.at("matchAlgorithm").is_string()) engine.matchAlgorithm = match_algorithm_from_string(body.at("matchAlgorithm").as_string());
+        algorithm = to_string(engine.matchAlgorithm);
+      }
+      broadcast_state();
+      return ok(Json::Object{{"success", true}, {"matchAlgorithm", algorithm}});
     });
     server.route("POST", "/api/reset", [this](const http::Request&) {
-      bool expected = false;
-      if (!pushInFlight.compare_exchange_strong(expected, true)) {
-        return http::json_response(json::stringify(Json::Object{
-          {"success", false},
-          {"error", "push already in progress"},
-        }), 409);
+      {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        engine.reset();
+        lastPush.reset();
       }
-      struct ResetGuard {
-        PerceptionService& service;
-        ~ResetGuard() {
-          std::lock_guard<std::mutex> lock(service.pushQueueMutex);
-          service.coalescedPushRequests = 0;
-          service.pushInFlight.store(false);
-        }
-      } guard{*this};
-      std::lock_guard<std::mutex> lock(stateMutex);
-      engine.reset();
-      lastPush.reset();
+      broadcast_state();
       return ok(Json::Object{{"success", true}});
     });
     server.route("GET", "/api/sources", [this](const http::Request&) {
+      sync_test_sources_from_reality();
       Json::Array arr;
       std::lock_guard<std::mutex> lock(stateMutex);
       for (const auto& s : engine.get_sources()) arr.push_back(to_json(s));
       return ok(Json::Object{{"sources", arr}});
     });
     server.route("POST", "/api/sources", [this](const http::Request& req) {
-      std::lock_guard<std::mutex> lock(stateMutex);
-      auto src = engine.add_source(source_from_json(parse_body(req)));
+      SourceConfig src;
+      {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        src = engine.add_source(source_from_json(parse_body(req)));
+      }
+      broadcast_state();
       return ok(Json::Object{{"source", to_json(src)}});
     });
     server.route("PATCH", "/api/sources/:id", [this](const http::Request& req) {
-      std::lock_guard<std::mutex> lock(stateMutex);
-      auto existing = engine.get_source(req.pathParams.at("id"));
-      if (!existing) return http::error_response("Source not found", 404);
-      engine.remove_source(req.pathParams.at("id"));
-      auto updated = source_from_json(parse_body(req));
-      updated.id = req.pathParams.at("id");
-      auto added = engine.add_source(updated);
+      SourceConfig added;
+      {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        auto existing = engine.get_source(req.pathParams.at("id"));
+        if (!existing) return http::error_response("Source not found", 404);
+        engine.remove_source(req.pathParams.at("id"));
+        auto updated = merge_source_patch(*existing, parse_body(req));
+        updated.id = req.pathParams.at("id");
+        added = engine.add_source(updated);
+      }
+      broadcast_state();
       return ok(Json::Object{{"source", to_json(added)}});
     });
     server.route("DELETE", "/api/sources/:id", [this](const http::Request& req) {
-      std::lock_guard<std::mutex> lock(stateMutex);
-      return ok(Json::Object{{"success", engine.remove_source(req.pathParams.at("id"))}});
+      {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        if (!engine.remove_source(req.pathParams.at("id"))) return http::error_response("Source not found", 404);
+      }
+      broadcast_state();
+      return ok(Json::Object{{"success", true}});
     });
     server.route("POST", "/api/sensors/:sensorId", [this](const http::Request& req) {
       auto values = json::to_numbers(parse_body(req).at("values"));
-      std::lock_guard<std::mutex> lock(stateMutex);
-      bool found = engine.update_sensor_value(req.pathParams.at("sensorId"), values);
+      bool found = false;
+      {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        found = engine.update_sensor_value(req.pathParams.at("sensorId"), values);
+      }
       if (!found) return http::error_response("No sensor source with sensorId \"" + req.pathParams.at("sensorId") + "\"", 404);
+      broadcast_state();
       return ok(Json::Object{{"success", true}, {"sensorId", req.pathParams.at("sensorId")}, {"timestamp", static_cast<double>(now_ms())}});
     });
     server.route("GET", "/api/machines", [this](const http::Request&) {
       try {
-        return http::json_response(http::get(realityEngineUrl + "/api/machines"));
+        std::string raw = http::get(realityEngineUrl + "/api/machines");
+        sync_test_sources_from_machine_list(json::parse(raw));
+        return http::json_response(raw);
       } catch (const std::exception& e) {
         return http::error_response(e.what(), 502);
       }
@@ -269,8 +305,16 @@ public:
 
 private:
   struct PushJob {
-    std::promise<http::Response> result;
+    std::string id;
+    std::shared_ptr<std::promise<http::Response>> result;
     bool includeMachineResults = true;
+  };
+  struct PushRecord {
+    std::string id;
+    std::string status = "queued";
+    std::string body = "{}";
+    long long createdAt = 0;
+    long long updatedAt = 0;
   };
 
   bool sensor_exists(const std::string& sensorId) const {
@@ -287,6 +331,64 @@ private:
     return std::nullopt;
   }
 
+  static SourceConfig merge_source_patch(SourceConfig source, const Json& patch) {
+    if (patch.at("name").is_string()) source.name = patch.at("name").as_string();
+    if (patch.at("active").is_bool()) source.active = patch.at("active").as_bool();
+    if (patch.at("region").is_object()) {
+      source.region.offset = static_cast<int>(patch.at("region").at("offset").as_number(source.region.offset));
+      source.region.length = static_cast<int>(patch.at("region").at("length").as_number(source.region.length));
+    }
+    if (source.kind == "test") {
+      if (patch.at("loop").is_bool()) source.loop = patch.at("loop").as_bool();
+    } else if (source.kind == "sensor") {
+      if (patch.at("sensorId").is_string()) source.sensorId = patch.at("sensorId").as_string();
+      if (patch.at("ttlMs").is_number()) source.ttlMs = static_cast<long>(patch.at("ttlMs").as_number());
+    } else {
+      if (patch.at("pattern").is_string()) source.pattern = sim_pattern_from_string(patch.at("pattern").as_string());
+      if (patch.at("frequency").is_number()) source.frequency = patch.at("frequency").as_number();
+      if (patch.at("amplitude").is_number()) source.amplitude = patch.at("amplitude").as_number();
+      if (patch.at("dcOffset").is_number()) source.dcOffset = patch.at("dcOffset").as_number();
+    }
+    return source;
+  }
+
+  void start_auto(long intervalMs) {
+    stop_auto();
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      autoIntervalMs = intervalMs > 0 ? intervalMs : 1000;
+      autoRunning = true;
+    }
+    {
+      std::lock_guard<std::mutex> lock(autoMutex);
+      stopAutoWorker = false;
+    }
+    autoWorker = std::thread([this]() {
+      while (true) {
+        long interval = 1000;
+        {
+          std::lock_guard<std::mutex> lock(stateMutex);
+          interval = autoIntervalMs;
+        }
+        std::unique_lock<std::mutex> lock(autoMutex);
+        if (autoCv.wait_for(lock, std::chrono::milliseconds(interval), [this]() { return stopAutoWorker; })) return;
+        lock.unlock();
+        (void)do_push(true, false);
+      }
+    });
+  }
+
+  void stop_auto() {
+    {
+      std::lock_guard<std::mutex> lock(autoMutex);
+      stopAutoWorker = true;
+    }
+    autoCv.notify_all();
+    if (autoWorker.joinable()) autoWorker.join();
+    std::lock_guard<std::mutex> lock(stateMutex);
+    autoRunning = false;
+  }
+
   std::set<std::string> existing_machine_names() const {
     std::set<std::string> names;
     try {
@@ -297,6 +399,60 @@ private:
     } catch (...) {
     }
     return names;
+  }
+
+  size_t sync_test_sources_from_machine(const Json& machine) {
+    std::string machineId = machine.at("id").as_string();
+    if (machineId.empty()) return 0;
+    const Json& mapping = machine.at("perceptualMapping");
+    if (!mapping.is_object() || !mapping.at("input").is_object()) return 0;
+    RegionMapping region{
+      static_cast<int>(mapping.at("input").at("offset").as_number()),
+      static_cast<int>(mapping.at("input").at("length").as_number())
+    };
+    const Json& sequences = machine.at("metadata").at("inputSequences");
+    if (!sequences.is_array()) return 0;
+
+    size_t added = 0;
+    std::lock_guard<std::mutex> lock(stateMutex);
+    for (size_t i = 0; i < sequences.array().size(); ++i) {
+      const Json& seq = sequences.array()[i];
+      if (!seq.at("vectors").is_array()) continue;
+      std::string id = test_source_id(machineId, i, seq);
+      if (engine.get_source(id)) continue;
+
+      SourceConfig source;
+      source.kind = "test";
+      source.id = id;
+      source.name = machine.at("name").as_string(machineId) + " / " + seq.at("name").as_string("Test sequence");
+      source.active = seq.at("active").as_bool(false);
+      source.machineId = machineId;
+      source.machineName = machine.at("name").as_string(machineId);
+      source.sequenceName = seq.at("name").as_string("Test sequence");
+      source.region = region;
+      source.loop = seq.at("loop").as_bool(false);
+      for (const auto& vector : seq.at("vectors").array()) source.inputs.push_back(json::to_numbers(vector));
+      if (source.inputs.empty()) continue;
+      engine.add_source(source);
+      ++added;
+    }
+    return added;
+  }
+
+  size_t sync_test_sources_from_machine_list(const Json& data) {
+    size_t added = 0;
+    for (const auto& machine : data.at("machines").is_array() ? data.at("machines").array() : Json::Array{}) {
+      added += sync_test_sources_from_machine(machine);
+    }
+    return added;
+  }
+
+  size_t sync_test_sources_from_reality() {
+    try {
+      return sync_test_sources_from_machine_list(json::parse(http::get(realityEngineUrl + "/api/machines")));
+    } catch (...) {
+      return 0;
+    }
   }
 
   Json localai_status() const {
@@ -361,6 +517,7 @@ private:
       Json::Object{{"id", "graphql_events"}, {"method", "GET"}, {"path", "/graphql/events"}, {"description", "Recent GraphQL trigger events."}},
     };
 
+    broadcast_state();
     return Json::Object{
       {"success", true},
       {"status", status},
@@ -440,7 +597,9 @@ private:
           continue;
         }
         Json response = json::parse(http::post_json(realityEngineUrl + "/api/machines", raw));
-        importedMachines.push_back(response.at("machine").is_object() ? response.at("machine") : machine.to_json());
+        Json imported = response.at("machine").is_object() ? response.at("machine") : machine.to_json();
+        sync_test_sources_from_machine(imported);
+        importedMachines.push_back(imported);
         names.insert(machine.name);
       } catch (const std::exception& e) {
         failedMachines.push_back(Json::Object{{"file", filename}, {"error", e.what()}});
@@ -512,12 +671,14 @@ private:
       {"source", source.id.empty() ? Json(nullptr) : to_json(source)},
     };
     if (body.at("triggerPush").as_bool(false)) {
-      response.object()["push"] = json::parse(do_push(!body.at("compactPush").as_bool(false)).body);
+      response.object()["push"] = json::parse(do_push(!body.at("compactPush").as_bool(false), false).body);
     }
+    broadcast_state();
     return ok(response);
   }
 
-  http::Response do_push(bool includeMachineResults = true) {
+  http::Response do_push(bool includeMachineResults = true, bool async = false) {
+    sync_test_sources_from_reality();
     bool expected = false;
     if (!pushInFlight.compare_exchange_strong(expected, true)) {
       {
@@ -535,8 +696,12 @@ private:
     }
 
     auto job = std::make_unique<PushJob>();
+    job->id = make_id("push");
+    std::string jobId = job->id;
     job->includeMachineResults = includeMachineResults;
-    auto future = job->result.get_future();
+    auto promise = std::make_shared<std::promise<http::Response>>();
+    if (!async) job->result = promise;
+    auto future = promise->get_future();
     {
       std::lock_guard<std::mutex> lock(pushQueueMutex);
       if (pushQueue.size() >= pushQueueCapacity) {
@@ -549,10 +714,35 @@ private:
           {"error", "push queue is full"},
         }), 429);
       }
+      pushRecords[job->id] = {job->id, "queued", "{}", now_ms(), now_ms()};
+      pushRecordOrder.push_back(job->id);
+      trim_push_records();
       pushQueue.push_back(std::move(job));
     }
     pushQueueCondition.notify_one();
+    if (async) {
+      return http::json_response(json::stringify(Json::Object{
+        {"success", true},
+        {"accepted", true},
+        {"jobId", jobId},
+        {"statusEndpoint", "/api/push/" + jobId}
+      }), 202);
+    }
     return future.get();
+  }
+
+  http::Response read_push_job(const std::string& id) {
+    std::lock_guard<std::mutex> lock(pushQueueMutex);
+    auto it = pushRecords.find(id);
+    if (it == pushRecords.end()) return http::error_response("Push job not found", 404);
+    Json result = Json::Object{
+      {"id", it->second.id},
+      {"status", it->second.status},
+      {"createdAt", static_cast<double>(it->second.createdAt)},
+      {"updatedAt", static_cast<double>(it->second.updatedAt)}
+    };
+    if (it->second.status == "completed" || it->second.status == "failed") result.object()["result"] = json::parse(it->second.body);
+    return ok(result);
   }
 
   http::Response execute_push(bool includeMachineResults) {
@@ -580,9 +770,14 @@ private:
         lastPush = ts;
         step = engine.globalStep;
       }
-      return ok(Json::Object{{"success", true}, {"step", parsed}, {"timestamp", static_cast<double>(ts)}, {"globalStep", static_cast<double>(step)}, {"error", nullptr}});
+      Json result = Json::Object{{"success", true}, {"step", parsed}, {"timestamp", static_cast<double>(ts)}, {"globalStep", static_cast<double>(step)}, {"error", nullptr}};
+      broadcast_state();
+      broadcast_push_result(result);
+      return ok(result);
     } catch (const std::exception& e) {
-      return ok(Json::Object{{"success", false}, {"step", nullptr}, {"timestamp", static_cast<double>(now_ms())}, {"globalStep", current_global_step()}, {"error", e.what()}});
+      Json result = Json::Object{{"success", false}, {"step", nullptr}, {"timestamp", static_cast<double>(now_ms())}, {"globalStep", current_global_step()}, {"error", e.what()}};
+      broadcast_push_result(result);
+      return ok(result);
     }
   }
 
@@ -598,23 +793,52 @@ private:
       }
 
       try {
-        job->result.set_value(execute_push(job->includeMachineResults));
+        {
+          std::lock_guard<std::mutex> lock(pushQueueMutex);
+          pushRecords[job->id].status = "running";
+          pushRecords[job->id].updatedAt = now_ms();
+        }
+        auto response = execute_push(job->includeMachineResults);
+        {
+          std::lock_guard<std::mutex> lock(pushQueueMutex);
+          auto& record = pushRecords[job->id];
+          record.status = response.status >= 200 && response.status < 300 ? "completed" : "failed";
+          record.body = response.body;
+          record.updatedAt = now_ms();
+        }
+        if (job->result) job->result->set_value(response);
       } catch (const std::exception& e) {
-        job->result.set_value(ok(Json::Object{
+        auto response = ok(Json::Object{
           {"success", false},
           {"step", nullptr},
           {"timestamp", static_cast<double>(now_ms())},
           {"globalStep", current_global_step()},
           {"error", e.what()},
-        }));
+        });
+        {
+          std::lock_guard<std::mutex> lock(pushQueueMutex);
+          auto& record = pushRecords[job->id];
+          record.status = "failed";
+          record.body = response.body;
+          record.updatedAt = now_ms();
+        }
+        if (job->result) job->result->set_value(response);
       } catch (...) {
-        job->result.set_value(ok(Json::Object{
+        auto response = ok(Json::Object{
           {"success", false},
           {"step", nullptr},
           {"timestamp", static_cast<double>(now_ms())},
           {"globalStep", current_global_step()},
           {"error", "unknown push worker error"},
-        }));
+        });
+        {
+          std::lock_guard<std::mutex> lock(pushQueueMutex);
+          auto& record = pushRecords[job->id];
+          record.status = "failed";
+          record.body = response.body;
+          record.updatedAt = now_ms();
+        }
+        if (job->result) job->result->set_value(response);
       }
 
       while (true) {
@@ -645,6 +869,34 @@ private:
     return static_cast<double>(engine.globalStep);
   }
 
+  Json current_state_json() const {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    return engine.state_json(lastPush, autoRunning, autoIntervalMs);
+  }
+
+  std::string state_update_message() const {
+    return json::stringify(Json::Object{{"type", "state-update"}, {"state", current_state_json()}});
+  }
+
+  void broadcast_state() const {
+    wsHub->broadcast(state_update_message());
+  }
+
+  void broadcast_push_result(const Json& result) const {
+    Json::Object message{{"type", "push-result"}};
+    if (result.is_object()) {
+      for (const auto& [key, value] : result.object()) message[key] = value;
+    }
+    wsHub->broadcast(json::stringify(message));
+  }
+
+  void trim_push_records() {
+    while (pushRecordOrder.size() > pushRecordCapacity) {
+      pushRecords.erase(pushRecordOrder.front());
+      pushRecordOrder.pop_front();
+    }
+  }
+
   std::string realityEngineUrl;
   std::string localAIBaseUrl;
   std::string localAIMachinesDirectory;
@@ -654,10 +906,18 @@ private:
   std::mutex pushQueueMutex;
   std::condition_variable pushQueueCondition;
   std::deque<std::unique_ptr<PushJob>> pushQueue;
+  std::map<std::string, PushRecord> pushRecords;
+  std::deque<std::string> pushRecordOrder;
+  std::shared_ptr<http::Server::WebSocketHub> wsHub = std::make_shared<http::Server::WebSocketHub>();
   std::thread pushWorker;
+  std::thread autoWorker;
+  std::mutex autoMutex;
+  std::condition_variable autoCv;
+  bool stopAutoWorker = false;
   bool stopPushWorker = false;
   size_t coalescedPushRequests = 0;
   static constexpr size_t pushQueueCapacity = 1;
+  static constexpr size_t pushRecordCapacity = 256;
   bool autoRunning = false;
   long autoIntervalMs = 1000;
   std::optional<long long> lastPush;
@@ -666,8 +926,8 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-  int port = argc > 1 ? std::stoi(argv[1]) : 3101;
-  std::string realityUrl = argc > 2 ? argv[2] : "http://localhost:3100";
+  int port = argc > 1 ? std::stoi(argv[1]) : 3300;
+  std::string realityUrl = argc > 2 ? argv[2] : "http://localhost:3299";
   std::string localAIUrl = argc > 3 ? argv[3] : (std::getenv("LOCAL_AI_API_URL") ? std::getenv("LOCAL_AI_API_URL") : "http://localhost:4000");
   std::string localAIMachinesDir = argc > 4 ? argv[4] : (std::getenv("LOCAL_AI_MACHINES_DIR") ? std::getenv("LOCAL_AI_MACHINES_DIR") : "../localAIStack/data/machines");
   int vectorDimension = argc > 5 ? std::stoi(argv[5]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 768);

@@ -32,15 +32,16 @@ The operational scripts launch them in dependency order:
 
 The HTTP layer uses Boost.Asio/Beast. `reality::http::Server` preserves the
 small internal route API used by the services while delegating request parsing,
-response writing, connection management, and client calls to Beast. Accepted
-server connections are handled by a bounded worker pool instead of a detached
-thread per connection. Keep-alive sessions have request-count and idle-time
-limits so one idle client cannot pin a request worker indefinitely. The client
-path keeps a small persistent HTTP/1.1 connection pool per host and port, so
-frequent PE-to-RE calls avoid repeated TCP setup without serializing all
-outbound traffic through one socket. Outbound connect/read/write operations are
-bounded by `HTTP_CLIENT_TIMEOUT_MS`. The domain layer remains independent of the
-transport implementation.
+response writing, connection management, timers, and client calls to Beast.
+Accepted server connections run as asynchronous Beast sessions on the shared
+Asio worker pool. Keep-alive sessions have request-count and idle-time limits
+so one idle client cannot pin resources indefinitely. The client path keeps a
+small persistent HTTP/1.1 connection pool per host and port, so frequent
+PE-to-RE calls avoid repeated TCP setup without serializing all outbound traffic
+through one socket. Outbound connect/read/write operations are bounded by
+`HTTP_CLIENT_TIMEOUT_MS`. Native POST retries use `Idempotency-Key` headers and
+the server caches successful idempotent responses. The domain layer remains
+independent of the transport implementation.
 
 ## Repository Layout
 
@@ -65,16 +66,18 @@ transport implementation.
 - Perceptual simulation is input-atomic: all machine inputs are snapshotted
   before any output is merged back into shared space.
 - Machine transitions fan out through a persistent bounded worker pool with a
-  bounded queue. Critical event sequences inside one machine still transition
-  serially; parallelism is only between machines, and output merging keeps
-  deterministic machine order. Runtime metrics are exposed at
+  bounded queue. Each run reserves capacity for the whole machine batch before
+  submitting work, so a transition cycle is admitted atomically instead of
+  partially filling the queue. Critical event sequences inside one machine still
+  transition serially; parallelism is only between machines, and output merging
+  keeps deterministic machine order. Runtime metrics are exposed at
   `GET /api/runtime/metrics`.
 - Output merge planning is built directly after transition futures complete, so
   small merge batches do not pay extra `std::async` scheduling cost. Shared
   perceptual-space writes remain serialized. Pending outputs are ordered by
   output region offset, region length, machine id, and output index. When
   regions overlap, later operations in that deterministic order win for the
-  overlapping elements.
+  overlapping elements. The ordered merge plan is returned as `mergeBatch`.
 - Reality Engine HTTP handlers protect shared domain state with a service-level
   read/write lock for the machine registry plus a simulator lock for mutable
   perceptual simulation state. `/api/perceive` owns the simulator lock but does
@@ -93,8 +96,9 @@ transport implementation.
   saturation is reported with `429`.
 - `POST /api/perceive` and `POST /api/push` accept `compact: true` or
   `includeMachineResults: false` to omit per-machine transition details from
-  the response. The full merged perceptual space remains present so PE state can
-  still carry Reality Engine output forward.
+  the response. `POST /api/perceive` also accepts `includePerceptualSpace:
+  false` for large-response projection. Runtime defaults and simulator history
+  retention are controlled by `GET/PATCH /api/runtime/options`.
 - Machine JSON uses the existing `RealityEngine_AI/examples/machines/*.json`
   schema.
 

@@ -13,6 +13,7 @@ behavioral model and keeps operational compatibility with the shared
 - [Architecture](Architecture)
 - [Operations](Operations)
 - [API Equivalence](API-Equivalence)
+- [OpenAPI](OpenAPI)
 - [Local AI Integration](Local-AI-Integration)
 - [E2E Testing](E2E-Testing)
 - [Shared Qdrant](Shared-Qdrant)

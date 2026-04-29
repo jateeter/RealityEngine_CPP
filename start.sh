@@ -20,8 +20,8 @@ if [ -f .env ]; then
   source .env
 fi
 
-REALITY_ENGINE_PORT="${REALITY_ENGINE_PORT:-3100}"
-PERCEPTION_ENGINE_PORT="${PERCEPTION_ENGINE_PORT:-3101}"
+REALITY_ENGINE_PORT="${REALITY_ENGINE_PORT:-3299}"
+PERCEPTION_ENGINE_PORT="${PERCEPTION_ENGINE_PORT:-3300}"
 VECTOR_DIMENSION="${VECTOR_DIMENSION:-768}"
 MACHINES_DIR="${MACHINES_DIR:-../RealityEngine_AI/examples/machines}"
 QDRANT_URL="${QDRANT_URL:-http://localhost:4333}"
@@ -197,6 +197,12 @@ info "Starting Reality Engine on port $REALITY_ENGINE_PORT..."
 nohup "$ROOT_DIR/bin/reality_engine_server" "$REALITY_ENGINE_PORT" "$MACHINES_DIR" "$VECTOR_DIMENSION" \
   > "$LOG_DIR/reality_engine.log" 2>&1 &
 echo $! > "$RUN_DIR/reality_engine.pid"
+sleep 0.2
+if ! ps -p "$(cat "$RUN_DIR/reality_engine.pid")" >/dev/null 2>&1; then
+  tail -40 "$LOG_DIR/reality_engine.log" || true
+  ./stop.sh >/dev/null 2>&1 || true
+  die "Reality Engine exited before becoming healthy"
+fi
 
 if ! wait_for_http "http://localhost:${REALITY_ENGINE_PORT}/api/health" "Reality Engine"; then
   tail -40 "$LOG_DIR/reality_engine.log" || true
@@ -221,6 +227,12 @@ info "Starting Perception Engine on port $PERCEPTION_ENGINE_PORT..."
 nohup "$ROOT_DIR/bin/perception_engine_server" "$PERCEPTION_ENGINE_PORT" "http://localhost:${REALITY_ENGINE_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" \
   > "$LOG_DIR/perception_engine.log" 2>&1 &
 echo $! > "$RUN_DIR/perception_engine.pid"
+sleep 0.2
+if ! ps -p "$(cat "$RUN_DIR/perception_engine.pid")" >/dev/null 2>&1; then
+  tail -40 "$LOG_DIR/perception_engine.log" || true
+  ./stop.sh >/dev/null 2>&1 || true
+  die "Perception Engine exited before becoming healthy"
+fi
 
 if ! wait_for_http "http://localhost:${PERCEPTION_ENGINE_PORT}/api/health" "Perception Engine"; then
   tail -40 "$LOG_DIR/perception_engine.log" || true

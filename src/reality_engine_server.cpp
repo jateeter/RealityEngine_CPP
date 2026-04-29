@@ -2,10 +2,12 @@
 #include "reality/reality.hpp"
 
 #include <cstdlib>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <mutex>
 #include <shared_mutex>
+#include <sstream>
 
 using namespace reality;
 
@@ -22,12 +24,98 @@ public:
     server.route("GET", "/", [](const http::Request&) {
       return ok(Json::Object{{"name", "Reality Engine"}, {"version", "1.0.0-cpp"}, {"status", "running"}});
     });
+    server.route("GET", "/api", [](const http::Request&) {
+      return ok(Json::Object{{"name", "Reality Engine"}, {"version", "1.0.0-cpp"}, {"status", "running"}});
+    });
     server.route("GET", "/api/health", [](const http::Request&) {
       return ok(Json::Object{{"status", "healthy"}, {"timestamp", static_cast<double>(now_ms())}, {"version", "1.0.0-cpp"}});
     });
     server.route("GET", "/api/config", [this](const http::Request&) {
       std::shared_lock<std::shared_mutex> lock(registryMutex);
-      return ok(Json::Object{{"vectorDimension", static_cast<double>(dimension)}, {"matchThreshold", 0.5}, {"qdrantUrl", ""}, {"collectionName", "reality-vectors"}});
+      return ok(Json::Object{{"vectorDimension", static_cast<double>(dimension)}, {"matchThreshold", matchThreshold}, {"qdrantUrl", qdrant_url()}, {"collectionName", collection_name()}});
+    });
+    server.route("PUT", "/api/config/dimension", [this](const http::Request& req) {
+      auto it = req.queryParams.find("dimension");
+      if (it != req.queryParams.end() && !it->second.empty()) dimension = std::stoi(it->second);
+      return ok(Json::Object{{"success", true}, {"dimension", static_cast<double>(dimension)}});
+    });
+    server.route("PUT", "/api/config/threshold", [this](const http::Request& req) {
+      auto it = req.queryParams.find("threshold");
+      if (it != req.queryParams.end() && !it->second.empty()) matchThreshold = std::stod(it->second);
+      return ok(Json::Object{{"success", true}, {"threshold", matchThreshold}});
+    });
+    server.route("POST", "/api/vectors/search", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      auto query = json::to_numbers(body.at("vector"));
+      int limit = static_cast<int>(body.at("limit").as_number(10));
+      Json::Array results;
+      std::lock_guard<std::mutex> lock(vectorMutex);
+      for (const auto& [_, v] : vectorStore) {
+        if (static_cast<int>(results.size()) >= limit) break;
+        double score = cosine(query, json::to_numbers(v.at("elements")));
+        results.push_back(Json::Object{{"vector", v}, {"score", score}});
+      }
+      return ok(Json::Object{{"results", results}});
+    });
+    server.route("POST", "/api/vectors", [this](const http::Request& req) {
+      Json vector = parse_body(req);
+      std::string id = vector.at("id").as_string(make_id("vector"));
+      vector.object()["id"] = id;
+      std::lock_guard<std::mutex> lock(vectorMutex);
+      vectorStore[id] = vector;
+      return ok(Json::Object{{"success", true}, {"vector", vector}});
+    });
+    server.route("GET", "/api/vectors/:id", [](const http::Request& req) {
+      return ok(Json::Object{{"message", "Vector retrieval endpoint"}, {"id", req.pathParams.at("id")}});
+    });
+    server.route("DELETE", "/api/vectors/:id", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(vectorMutex);
+      vectorStore.erase(req.pathParams.at("id"));
+      return ok(Json::Object{{"success", true}, {"id", req.pathParams.at("id")}});
+    });
+    server.route("POST", "/api/sequences/persist", [](const http::Request&) {
+      return ok(Json::Object{{"success", true}});
+    });
+    server.route("GET", "/api/sequences", [this](const http::Request&) {
+      Json::Array arr;
+      std::lock_guard<std::mutex> lock(sequenceMutex);
+      for (const auto& [_, s] : sequences) arr.push_back(s.to_json());
+      return ok(Json::Object{{"sequences", arr}});
+    });
+    server.route("POST", "/api/sequences", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      CriticalEventSequence seq = sequence_from_json(body);
+      auto validation = seq.validate();
+      if (!validation.first) return http::json_response(json::stringify(Json::Object{{"error", string_array(validation.second)}}), 400);
+      std::lock_guard<std::mutex> lock(sequenceMutex);
+      sequences[seq.id] = seq;
+      return ok(Json::Object{{"success", true}, {"sequence", seq.to_json()}});
+    });
+    server.route("GET", "/api/sequences/:id", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(sequenceMutex);
+      auto it = sequences.find(req.pathParams.at("id"));
+      if (it == sequences.end()) return http::error_response("Sequence not found", 404);
+      return ok(Json::Object{{"sequence", it->second.to_json()}});
+    });
+    server.route("DELETE", "/api/sequences/:id", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(sequenceMutex);
+      if (!sequences.erase(req.pathParams.at("id"))) return http::error_response("Sequence not found", 404);
+      return ok(Json::Object{{"success", true}});
+    });
+    server.route("POST", "/api/sequences/:id/reset", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(sequenceMutex);
+      auto it = sequences.find(req.pathParams.at("id"));
+      if (it == sequences.end()) return http::error_response("Sequence not found", 404);
+      it->second.reset();
+      return ok(Json::Object{{"success", true}});
+    });
+    server.route("POST", "/api/sequences/:id/vectors", [this](const http::Request& req) {
+      auto vector = vector_from_json(parse_body(req));
+      std::lock_guard<std::mutex> lock(sequenceMutex);
+      auto it = sequences.find(req.pathParams.at("id"));
+      if (it == sequences.end()) return http::error_response("Sequence not found", 404);
+      it->second.add_vector(vector);
+      return ok(Json::Object{{"success", true}, {"vector", vector.to_json()}});
     });
     server.route("POST", "/api/engine/reset", [this](const http::Request&) {
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
@@ -45,8 +133,32 @@ public:
       std::shared_lock<std::shared_mutex> lock(registryMutex);
       return ok(Json::Object{{"stats", stats()}, {"domainWorkerPool", worker_pool_metrics_json()}});
     });
-    server.route("GET", "/api/engine/active", [](const http::Request&) { return ok(Json::Object{{"activeVectors", Json::Object{}}}); });
-    server.route("GET", "/api/engine/history", [](const http::Request&) { return ok(Json::Object{{"history", Json::Array{}}}); });
+    server.route("GET", "/api/runtime/options", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(simulatorMutex);
+      return ok(runtime_options());
+    });
+    server.route("PATCH", "/api/runtime/options", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      std::lock_guard<std::mutex> lock(simulatorMutex);
+      if (body.at("historyLimit").is_number()) simulator.set_history_limit(static_cast<size_t>(body.at("historyLimit").as_number()));
+      if (body.at("includeMachineResults").is_bool()) includeMachineResultsDefault = body.at("includeMachineResults").as_bool();
+      if (body.at("includePerceptualSpace").is_bool()) includePerceptualSpaceDefault = body.at("includePerceptualSpace").as_bool();
+      return ok(runtime_options());
+    });
+    server.route("GET", "/api/engine/active", [this](const http::Request&) { return ok(Json::Object{{"activeVectors", active_vectors_json()}}); });
+    server.route("GET", "/api/engine/history", [this](const http::Request& req) {
+      int limit = 0;
+      auto it = req.queryParams.find("limit");
+      if (it != req.queryParams.end() && !it->second.empty()) limit = std::stoi(it->second);
+      Json::Array arr;
+      std::lock_guard<std::mutex> lock(historyMutex);
+      int count = 0;
+      for (const auto& item : engineHistory) {
+        if (limit > 0 && count++ >= limit) break;
+        arr.push_back(item);
+      }
+      return ok(Json::Object{{"history", arr}});
+    });
     server.route("POST", "/api/engine/process", [this](const http::Request& req) {
       auto body = parse_body(req);
       auto vec = json::to_numbers(body.at("vector"));
@@ -56,7 +168,40 @@ public:
         auto r = m.process_input(vec);
         if (r.machineOutput) outputs.push_back(to_json(*r.machineOutput));
       }
-      return ok(Json::Object{{"result", Json::Object{{"inputVector", json::numbers(vec)}, {"timestamp", static_cast<double>(now_ms())}, {"outputs", outputs}}}});
+      auto result = Json::Object{{"inputVector", json::numbers(vec)}, {"timestamp", static_cast<double>(now_ms())}, {"outputs", outputs}};
+      record_engine_history(Json::Object{{"type", "engine-process"}, {"result", result}});
+      return ok(Json::Object{{"result", result}});
+    });
+    server.route("POST", "/api/perception/observe", [](const http::Request& req) {
+      auto body = parse_body(req);
+      auto data = json::to_numbers(body.at("data"));
+      return ok(Json::Object{
+        {"success", true},
+        {"inputVector", json::numbers(data)},
+        {"transformations", Json::Array{}},
+        {"processingTimestamp", static_cast<double>(now_ms())}
+      });
+    });
+    server.route("POST", "/api/sampler/start", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      samplerRunning = true;
+      samplerStrategy = body.at("strategy").as_string("manual");
+      samplerIntervalMs = static_cast<long>(body.at("intervalMs").as_number(0));
+      return ok(Json::Object{{"success", true}, {"stats", sampler_stats()}});
+    });
+    server.route("POST", "/api/sampler/stop", [this](const http::Request&) {
+      samplerRunning = false;
+      return ok(Json::Object{{"success", true}});
+    });
+    server.route("POST", "/api/sampler/sample", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      ++samplerSampleCount;
+      auto data = json::to_numbers(body.at("data"));
+      Json result = Json::Object{{"inputVector", json::numbers(data)}, {"processingTimestamp", static_cast<double>(now_ms())}};
+      return ok(Json::Object{{"success", true}, {"result", result}});
+    });
+    server.route("GET", "/api/sampler/stats", [this](const http::Request&) {
+      return ok(Json::Object{{"stats", sampler_stats()}});
     });
     server.route("GET", "/api/machines", [this](const http::Request&) {
       Json::Array arr;
@@ -84,6 +229,22 @@ public:
       remove_machine(req.pathParams.at("id"));
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
+    });
+    server.route("PATCH", "/api/machines/:id", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
+      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      auto it = machines.find(req.pathParams.at("id"));
+      if (it == machines.end()) return http::error_response("Machine not found", 404);
+      Machine updated = it->second;
+      if (body.at("name").is_string()) updated.name = body.at("name").as_string();
+      if (body.at("description").is_string()) updated.description = body.at("description").as_string();
+      if (body.at("metadata").is_object()) {
+        for (const auto& [k, v] : body.at("metadata").object()) updated.metadata[k] = v;
+      }
+      remove_machine(req.pathParams.at("id"));
+      add_machine(updated);
+      return ok(Json::Object{{"success", true}, {"machine", updated.to_json(true)}});
     });
     server.route("DELETE", "/api/machines/:id", [this](const http::Request& req) {
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
@@ -157,6 +318,54 @@ public:
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}, {"message", "Machine loaded successfully"}});
     });
+    server.route("POST", "/api/machines/json/import", [this](const http::Request& req) {
+      Machine m = load_machine_from_json_string(req.body);
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
+      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      add_machine(m);
+      return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
+    });
+    server.route("GET", "/api/machines/:id/export", [this](const http::Request& req) {
+      std::shared_lock<std::shared_mutex> lock(registryMutex);
+      auto it = machines.find(req.pathParams.at("id"));
+      if (it == machines.end()) return http::error_response("Machine not found", 404);
+      return ok(Json::Object{{"version", "1.0.0"}, {"machine", it->second.to_json(true)}});
+    });
+    server.route("GET", "/api/machines/:id/checkpoints", [this](const http::Request& req) {
+      Json::Array arr;
+      std::lock_guard<std::mutex> lock(checkpointMutex);
+      for (const auto& [cpId, cp] : checkpoints[req.pathParams.at("id")]) {
+        arr.push_back(Json::Object{{"id", cpId}, {"label", cp.label}, {"timestamp", static_cast<double>(cp.timestamp)}});
+      }
+      return ok(arr);
+    });
+    server.route("POST", "/api/machines/:id/checkpoints", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      std::shared_lock<std::shared_mutex> registryLock(registryMutex);
+      auto it = machines.find(req.pathParams.at("id"));
+      if (it == machines.end()) return http::error_response("Machine not found", 404);
+      Checkpoint cp{make_id("checkpoint"), body.at("label").as_string(), now_ms(), it->second};
+      {
+        std::lock_guard<std::mutex> lock(checkpointMutex);
+        checkpoints[it->first][cp.id] = cp;
+      }
+      return ok(Json::Object{{"success", true}, {"checkpointId", cp.id}});
+    });
+    server.route("POST", "/api/machines/:machineId/checkpoints/:cpId/restore", [this](const http::Request& req) {
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
+      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      std::lock_guard<std::mutex> cpLock(checkpointMutex);
+      auto machineIt = checkpoints.find(req.pathParams.at("machineId"));
+      if (machineIt == checkpoints.end() || !machineIt->second.count(req.pathParams.at("cpId"))) return http::error_response("Checkpoint not found", 404);
+      remove_machine(req.pathParams.at("machineId"));
+      add_machine(machineIt->second.at(req.pathParams.at("cpId")).machine);
+      return ok(Json::Object{{"success", true}});
+    });
+    server.route("DELETE", "/api/machines/:machineId/checkpoints/:cpId", [this](const http::Request& req) {
+      std::lock_guard<std::mutex> lock(checkpointMutex);
+      bool removed = checkpoints[req.pathParams.at("machineId")].erase(req.pathParams.at("cpId")) > 0;
+      return ok(Json::Object{{"success", removed}});
+    });
     server.route("GET", "/api/machine-graph", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(simulatorMutex);
       return ok(simulator.machine_graph_data());
@@ -219,7 +428,8 @@ public:
       auto body = parse_body(req);
       std::optional<ComparatorType> overrideType;
       if (body.at("matchAlgorithmOverride").is_string()) overrideType = comparator_from_string(body.at("matchAlgorithmOverride").as_string());
-      bool includeMachineResults = body.at("includeMachineResults").as_bool(!body.at("compact").as_bool(false));
+      bool includeMachineResults = body.at("includeMachineResults").as_bool(body.at("compact").as_bool(false) ? false : includeMachineResultsDefault);
+      bool includePerceptualSpace = body.at("includePerceptualSpace").as_bool(includePerceptualSpaceDefault);
       auto vector = json::to_numbers(body.at("vector"));
       SimulationStep step;
       {
@@ -227,13 +437,58 @@ public:
         step = simulator.process_immediate(vector, overrideType);
         preception.perceptual_space().set_vector(step.perceptualSpace);
       }
-      return ok(to_json(step, includeMachineResults));
+      return ok(to_json(step, includeMachineResults, includePerceptualSpace));
     });
   }
 
 private:
   static Json parse_body(const http::Request& req) { return req.body.empty() ? Json::Object{} : json::parse(req.body); }
   static http::Response ok(const Json& value) { return http::json_response(json::stringify(value)); }
+  static Json string_array(const std::vector<std::string>& values) {
+    Json::Array out;
+    for (const auto& value : values) out.emplace_back(value);
+    return out;
+  }
+  static double cosine(const Vector& a, const Vector& b) {
+    double dot = 0.0, na = 0.0, nb = 0.0;
+    for (size_t i = 0; i < a.size() && i < b.size(); ++i) dot += a[i] * b[i];
+    for (double v : a) na += v * v;
+    for (double v : b) nb += v * v;
+    if (na == 0.0 || nb == 0.0) return 0.0;
+    return dot / (std::sqrt(na) * std::sqrt(nb));
+  }
+  static RealityVector vector_from_json(const Json& body) {
+    std::vector<VectorElement> elements;
+    for (const auto& ej : body.at("elements").is_array() ? body.at("elements").array() : Json::Array{}) {
+      VectorElement element;
+      element.value = ej.at("value").as_number();
+      if (ej.at("comparatorType").is_string()) element.comparatorType = comparator_from_string(ej.at("comparatorType").as_string());
+      if (ej.at("threshold").is_number()) element.threshold = ej.at("threshold").as_number();
+      elements.push_back(element);
+    }
+    RealityVector vector(elements, body.at("isInitial").as_bool(false), body.at("id").as_string(make_id("vector")));
+    for (const auto& next : body.at("nextVectorIds").is_array() ? body.at("nextVectorIds").array() : Json::Array{}) vector.add_next_vector(next.as_string());
+    for (const auto& output : body.at("outputVectors").is_array() ? body.at("outputVectors").array() : Json::Array{}) {
+      std::map<std::string, Json> metadata;
+      if (output.at("metadata").is_object()) metadata = output.at("metadata").object();
+      vector.add_output_vector({output.at("id").as_string(make_id("output")), json::to_numbers(output.at("vector")), metadata, now_ms()});
+    }
+    return vector;
+  }
+  static CriticalEventSequence sequence_from_json(const Json& body) {
+    CriticalEventSequence seq(body.at("name").as_string("unnamed"), body.at("id").as_string(make_id("sequence")));
+    if (body.at("metadata").is_object()) seq.metadata = body.at("metadata").object();
+    for (const auto& vector : body.at("vectors").is_array() ? body.at("vectors").array() : Json::Array{}) seq.add_vector(vector_from_json(vector));
+    return seq;
+  }
+  static std::string qdrant_url() {
+    const char* value = std::getenv("QDRANT_URL");
+    return value ? value : "http://localhost:4333";
+  }
+  static std::string collection_name() {
+    const char* value = std::getenv("COLLECTION_NAME");
+    return value ? value : "reality-vectors";
+  }
 
   void add_machine(const Machine& m) {
     machines[m.id] = m;
@@ -250,23 +505,84 @@ private:
     for (const auto& [_, m] : machines) vectors += m.total_vector_count();
     return Json::Object{{"totalMachines", static_cast<double>(machines.size())}, {"totalVectors", static_cast<double>(vectors)}, {"domainWorkerPool", worker_pool_metrics_json()}};
   }
+  Json active_vectors_json() const {
+    Json::Object active;
+    for (const auto& [id, m] : machines) {
+      Json::Array seqs;
+      for (auto seq : m.all_sequences()) {
+        Json::Array vectors;
+        for (const auto* vector : seq.active_vectors()) vectors.push_back(vector->to_json());
+        if (!vectors.empty()) seqs.push_back(Json::Object{{"sequenceId", seq.id}, {"vectors", vectors}});
+      }
+      if (!seqs.empty()) active[id] = seqs;
+    }
+    return active;
+  }
+  void record_engine_history(const Json& item) {
+    std::lock_guard<std::mutex> lock(historyMutex);
+    engineHistory.insert(engineHistory.begin(), item);
+    if (engineHistory.size() > 256) engineHistory.resize(256);
+  }
+  Json sampler_stats() const {
+    return Json::Object{
+      {"isRunning", samplerRunning},
+      {"sampleCount", static_cast<double>(samplerSampleCount)},
+      {"bufferSize", 0.0},
+      {"strategy", samplerStrategy},
+      {"intervalMs", static_cast<double>(samplerIntervalMs)}
+    };
+  }
+  Json runtime_options() const {
+    return Json::Object{
+      {"historyLimit", static_cast<double>(simulator.history_limit())},
+      {"includeMachineResults", includeMachineResultsDefault},
+      {"includePerceptualSpace", includePerceptualSpaceDefault},
+      {"projectionControls", Json::Object{
+        {"includeMachineResults", "boolean request field on /api/perceive"},
+        {"includePerceptualSpace", "boolean request field on /api/perceive"},
+        {"compact", "sets includeMachineResults false when includeMachineResults is omitted"}
+      }}
+    };
+  }
+
+  struct Checkpoint {
+    std::string id;
+    std::string label;
+    long long timestamp = 0;
+    Machine machine;
+  };
 
   std::map<std::string, Machine> machines;
+  std::map<std::string, Json> vectorStore;
+  std::map<std::string, CriticalEventSequence> sequences;
+  std::map<std::string, std::map<std::string, Checkpoint>> checkpoints;
   mutable std::shared_mutex registryMutex;
   mutable std::mutex simulatorMutex;
+  mutable std::mutex vectorMutex;
+  mutable std::mutex sequenceMutex;
+  mutable std::mutex checkpointMutex;
+  mutable std::mutex historyMutex;
   int dimension = 768;
+  double matchThreshold = 0.5;
   PerceptualSpaceSimulator simulator;
   PreceptionEngine preception;
   std::string machinesDirectory;
+  std::vector<Json> engineHistory;
   std::vector<Vector> buffer;
   RegionMapping bufferedRegion{0, 1};
   long bufferedDelay = 100;
+  bool includeMachineResultsDefault = true;
+  bool includePerceptualSpaceDefault = true;
+  bool samplerRunning = false;
+  long samplerIntervalMs = 0;
+  long long samplerSampleCount = 0;
+  std::string samplerStrategy = "MANUAL";
 };
 
 } // namespace
 
 int main(int argc, char** argv) {
-  int port = argc > 1 ? std::stoi(argv[1]) : 3100;
+  int port = argc > 1 ? std::stoi(argv[1]) : 3299;
   std::string machinesDir = argc > 2 ? argv[2] : "examples/machines";
   int vectorDimension = argc > 3 ? std::stoi(argv[3]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 768);
   http::Server server;

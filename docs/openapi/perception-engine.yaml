@@ -1,0 +1,582 @@
+openapi: 3.0.3
+info:
+  title: RealityEngine CPP - Perception Engine API
+  version: 1.0.0-cpp
+  description: |
+    OpenAPI contract for the native C++ Perception Engine service.
+
+    The service defaults to `http://localhost:3300` and pushes assembled
+    vectors into the Reality Engine at `http://localhost:3299/api/perceive`.
+servers:
+  - url: http://localhost:3300
+    description: Local Perception Engine default
+tags:
+  - name: System
+  - name: State
+  - name: Push
+  - name: Sources
+  - name: Sensors
+  - name: LocalAI
+  - name: Machines
+paths:
+  /:
+    get:
+      tags: [System]
+      summary: Service root
+      responses:
+        "200":
+          description: Service identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/health:
+    get:
+      tags: [System]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy service
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /api/state:
+    get:
+      tags: [State]
+      summary: Current perception engine state
+      responses:
+        "200":
+          description: State snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/config:
+    patch:
+      tags: [State]
+      summary: Update perception matching configuration
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                matchAlgorithm:
+                  type: string
+                  enum: [gte, equals]
+      responses:
+        "200":
+          description: Updated config
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  matchAlgorithm:
+                    type: string
+  /api/reset:
+    post:
+      tags: [State]
+      summary: Reset sources, persistent vector, and last-push state
+      responses:
+        "200":
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+        "409":
+          description: Push is already in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/push:
+    post:
+      tags: [Push]
+      summary: Push the assembled perceptual vector to Reality Engine
+      description: |
+        Synchronous by default. Set `async: true` to enqueue the push and poll
+        `GET /api/push/{id}`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PushRequest"
+      responses:
+        "200":
+          description: Synchronous push result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushResult"
+        "202":
+          description: Async push accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushAccepted"
+        "409":
+          description: Push already in progress; duplicate was coalesced
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Push worker queue is full
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/push/{id}:
+    get:
+      tags: [Push]
+      summary: Read async push job status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Push job record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushJob"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/auto/start:
+    post:
+      tags: [Push]
+      summary: Mark auto-push running and set interval
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                intervalMs:
+                  type: number
+                  default: 1000
+      responses:
+        "200":
+          description: Auto state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/auto/stop:
+    post:
+      tags: [Push]
+      summary: Stop auto-push state
+      responses:
+        "200":
+          description: Stop result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+  /api/sources:
+    get:
+      tags: [Sources]
+      summary: List configured perception sources
+      responses:
+        "200":
+          description: Source list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sources:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Source"
+    post:
+      tags: [Sources]
+      summary: Add a source
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceInput"
+      responses:
+        "200":
+          description: Created source
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source:
+                    $ref: "#/components/schemas/Source"
+  /api/sources/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      tags: [Sources]
+      summary: Replace a source by id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceInput"
+      responses:
+        "200":
+          description: Updated source
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source:
+                    $ref: "#/components/schemas/Source"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Sources]
+      summary: Remove a source
+      responses:
+        "200":
+          description: Removal result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+  /api/sensors/{sensorId}:
+    post:
+      tags: [Sensors]
+      summary: Update an existing sensor source value
+      parameters:
+        - name: sensorId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [values]
+              properties:
+                values:
+                  $ref: "#/components/schemas/Vector"
+      responses:
+        "200":
+          description: Sensor update result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/signals:
+    post:
+      tags: [Sensors]
+      summary: Ingest a generic external signal and optionally trigger push
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignalInput"
+      responses:
+        "200":
+          description: Signal ingestion result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/integrations/localai/status:
+    get:
+      tags: [LocalAI]
+      summary: localAIStack integration status
+      responses:
+        "200":
+          description: Integration status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/integrations/localai/catalog:
+    get:
+      tags: [LocalAI]
+      summary: Discover allowed localAIStack integration endpoints
+      responses:
+        "200":
+          description: Integration catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/integrations/localai/bootstrap:
+    post:
+      tags: [LocalAI]
+      summary: Register localAIStack sensor sources and import bridge machines
+      responses:
+        "200":
+          description: Bootstrap result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/integrations/localai/invoke:
+    post:
+      tags: [LocalAI]
+      summary: Invoke an allowed localAIStack endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LocalAIInvokeRequest"
+      responses:
+        "200":
+          description: Invocation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Endpoint is not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: localAIStack invocation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/machines:
+    get:
+      tags: [Machines]
+      summary: Proxy Reality Engine machine list
+      responses:
+        "200":
+          description: Machine list from Reality Engine
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "502":
+          description: Reality Engine proxy failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Object:
+      type: object
+      additionalProperties: true
+    Vector:
+      type: array
+      items:
+        type: number
+        format: double
+    Success:
+      type: object
+      properties:
+        success:
+          type: boolean
+    Error:
+      type: object
+      additionalProperties: true
+      properties:
+        success:
+          type: boolean
+        error:
+          type: string
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+          example: healthy
+        timestamp:
+          type: number
+    Region:
+      type: object
+      required: [offset, length]
+      properties:
+        offset:
+          type: integer
+        length:
+          type: integer
+    Source:
+      type: object
+      description: |
+        Perception source. The service auto-materializes inactive `test`
+        sources from loaded machine `inputSequences`; their regions match the
+        machine input mapping and their inputs match the authored test vectors.
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [test, simulated, sensor]
+        kind:
+          type: string
+        name:
+          type: string
+        active:
+          type: boolean
+          description: Auto-generated machine test-sequence sources default to false.
+        region:
+          $ref: "#/components/schemas/Region"
+        machineId:
+          type: string
+        machineName:
+          type: string
+        sequenceName:
+          type: string
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Vector"
+        loop:
+          type: boolean
+        sensorId:
+          type: string
+        lastValue:
+          $ref: "#/components/schemas/Vector"
+        ttlMs:
+          type: number
+        pattern:
+          type: string
+          enum: [constant, sine, square, sawtooth]
+        frequency:
+          type: number
+        amplitude:
+          type: number
+        dcOffset:
+          type: number
+    SourceInput:
+      allOf:
+        - $ref: "#/components/schemas/Source"
+      required: [id]
+    PushRequest:
+      type: object
+      properties:
+        compact:
+          type: boolean
+          description: When true, defaults includeMachineResults to false.
+        includeMachineResults:
+          type: boolean
+        async:
+          type: boolean
+          default: false
+    PushAccepted:
+      type: object
+      properties:
+        success:
+          type: boolean
+        accepted:
+          type: boolean
+        jobId:
+          type: string
+        statusEndpoint:
+          type: string
+    PushResult:
+      type: object
+      additionalProperties: true
+      properties:
+        success:
+          type: boolean
+        step:
+          nullable: true
+          type: object
+          additionalProperties: true
+        timestamp:
+          type: number
+        globalStep:
+          type: number
+        error:
+          nullable: true
+          type: string
+    PushJob:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        createdAt:
+          type: number
+        updatedAt:
+          type: number
+        result:
+          $ref: "#/components/schemas/PushResult"
+    SignalInput:
+      type: object
+      required: [values]
+      properties:
+        sensorId:
+          type: string
+        name:
+          type: string
+        region:
+          $ref: "#/components/schemas/Region"
+        values:
+          $ref: "#/components/schemas/Vector"
+        active:
+          type: boolean
+        ttlMs:
+          type: number
+          default: 30000
+        triggerPush:
+          type: boolean
+          default: false
+        compactPush:
+          type: boolean
+          default: false
+    LocalAIInvokeRequest:
+      type: object
+      properties:
+        method:
+          type: string
+          enum: [GET, POST]
+          default: POST
+        endpoint:
+          type: string
+          example: /graph/rag
+        path:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true

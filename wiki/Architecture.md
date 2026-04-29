@@ -28,11 +28,13 @@ service layer.
 
 The service HTTP layer uses Boost.Asio/Beast. `reality::http::Server` keeps the
 small internal route API used by the services while Beast handles request
-parsing, response writing, connection management, and PE-to-RE/localAI client
-calls. Accepted sockets are processed by a bounded worker pool instead of
-detached per-connection threads. Keep-alive sessions have request-count and
-idle-time limits. Outbound client calls reuse a persistent HTTP/1.1 connection
-pool per host and port, with bounded connect/read/write timeouts.
+parsing, response writing, connection management, timers, and PE-to-RE/localAI
+client calls. Accepted sockets run as asynchronous Beast sessions on the shared
+Asio worker pool. Keep-alive sessions have request-count and idle-time limits.
+Outbound client calls reuse a persistent HTTP/1.1 connection pool per host and
+port, with bounded connect/read/write timeouts. Native POST retries use
+`Idempotency-Key` and successful idempotent POST responses are cached per
+service process.
 
 ## Data Flow
 
@@ -40,7 +42,8 @@ pool per host and port, with bounded connect/read/write timeouts.
 2. Perception Engine posts it to Reality Engine `POST /api/perceive`.
 3. Reality Engine snapshots mapped machine inputs.
 4. Machines process their local vectors through a persistent bounded worker pool
-   with a bounded queue.
+   with a bounded queue. Capacity for the full machine batch is reserved before
+   submission, so the transition cycle is admitted atomically.
 5. Outputs are merged back into perceptual space in deterministic machine order.
 6. Perception Engine can carry the merged perceptual space forward.
 
@@ -62,6 +65,9 @@ offset, region length, machine id, and output index. If output regions overlap,
 the later operation in that deterministic order wins for the overlapping
 elements.
 
+The ordered merge plan is returned as `mergeBatch` so overlapping write
+resolution is observable without replaying the transition.
+
 ## Service Concurrency
 
 Reality Engine HTTP handlers protect the machine registry with a read/write
@@ -74,13 +80,17 @@ single-flight, and `/api/reset` uses that same guard so reset cannot interleave
 with a push after the vector snapshot but before source advancement.
 
 PE-to-RE push execution runs through a bounded worker queue with capacity `1`.
-The HTTP push request waits for the queued job result to preserve API shape,
-while duplicate concurrent pushes return `409` with `coalesced: true`. The
-worker performs one compact follow-up push after the in-flight push completes,
-which preserves single-flight source advancement. The follow-up is capped at one
-compact push per active push cycle so duplicate callers cannot keep the worker
-in an unbounded drain loop. Queue saturation returns `429`.
+The default HTTP push request waits for the queued job result to preserve API
+shape. `POST /api/push` can also run in async job mode with `async: true`; the
+route returns `202`, and callers poll `GET /api/push/:id`. Duplicate concurrent
+pushes return `409` with `coalesced: true`. The worker performs one compact
+follow-up push after the in-flight push completes, which preserves single-flight
+source advancement. The follow-up is capped at one compact push per active push
+cycle so duplicate callers cannot keep the worker in an unbounded drain loop.
+Queue saturation returns `429`.
 
 `POST /api/perceive` and `POST /api/push` accept `compact: true` or
 `includeMachineResults: false` to omit per-machine transition details from the
-response while retaining the merged perceptual space.
+response while retaining the merged perceptual space. `POST /api/perceive`
+also accepts `includePerceptualSpace: false`; runtime defaults and simulator
+history retention are available through `GET/PATCH /api/runtime/options`.

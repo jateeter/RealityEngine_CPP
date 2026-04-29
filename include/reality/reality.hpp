@@ -227,6 +227,12 @@ struct ActiveRegion {
   std::string type;
 };
 
+struct MergeOperation {
+  RegionMapping region;
+  std::string machineId;
+  size_t outputIndex = 0;
+};
+
 struct MachineStepResult {
   std::string machineId;
   std::string machineName;
@@ -243,6 +249,7 @@ struct SimulationStep {
   Vector perceptualSpace;
   std::map<std::string, MachineStepResult> machineResults;
   std::vector<ActiveRegion> activeRegions;
+  std::vector<MergeOperation> mergeBatch;
 };
 
 struct WorkerPoolMetrics {
@@ -268,6 +275,8 @@ public:
   Json machine_graph_data() const;
   Json state_json() const;
   std::vector<SimulationStep> history() const;
+  void set_history_limit(size_t limit);
+  size_t history_limit() const;
   PerceptualSpace& perceptual_space();
   int current_step() const;
   bool is_running() const;
@@ -283,6 +292,7 @@ private:
   RegionMapping configuredInputRegion;
   long configuredStepDelayMs = 100;
   std::optional<int> configuredMaxSteps;
+  size_t maxHistory = 256;
   int currentStep = 0;
   int immediateStepCount = 0;
   bool running = false;
@@ -346,6 +356,7 @@ Json to_json(const SequenceResult& r);
 Json to_json(const MachineTransitionResult& r);
 Json to_json(const SimulationStep& step);
 Json to_json(const SimulationStep& step, bool includeMachineResults);
+Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace);
 Json to_json(const SourceConfig& source);
 Json worker_pool_metrics_json();
 

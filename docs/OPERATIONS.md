@@ -57,8 +57,8 @@ Important variables:
 
 | Variable | Default |
 | --- | --- |
-| `REALITY_ENGINE_PORT` | `3100` |
-| `PERCEPTION_ENGINE_PORT` | `3101` |
+| `REALITY_ENGINE_PORT` | `3299` |
+| `PERCEPTION_ENGINE_PORT` | `3300` |
 | `VECTOR_DIMENSION` | `768` |
 | `MACHINES_DIR` | `../RealityEngine_AI/examples/machines` |
 | `QDRANT_URL` | `http://localhost:4333` |
@@ -69,9 +69,9 @@ Important variables:
 | `LOCAL_AI_MACHINES_DIR` | `../localAIStack/data/machines` |
 | `LOCAL_AI_BOOTSTRAP` | `false` |
 | `HTTP_WORKERS` | max of `2` and hardware concurrency |
-| `HTTP_QUEUE_CAPACITY` | `HTTP_WORKERS * 64` |
 | `HTTP_SESSION_TIMEOUT_MS` | `5000` |
 | `HTTP_MAX_KEEPALIVE_REQUESTS` | `32` |
+| `HTTP_IDEMPOTENCY_CACHE_SIZE` | `2048` |
 | `HTTP_CLIENT_TIMEOUT_MS` | `5000` |
 | `HTTP_CLIENT_POOL_SIZE` | `4` |
 | `DOMAIN_WORKERS` | max of `2` and hardware concurrency |
@@ -81,10 +81,11 @@ Set `LOCAL_AI_BOOTSTRAP=true` to register the default localAIStack sensor
 sources and import bridge machines into the C++ Reality Engine when the
 Perception Engine starts.
 
-`HTTP_WORKERS` and `HTTP_QUEUE_CAPACITY` apply to each native service process.
-They bound the Beast request-processing pool and accepted socket backlog inside
-the process. `HTTP_SESSION_TIMEOUT_MS` and `HTTP_MAX_KEEPALIVE_REQUESTS` prevent
-idle keep-alive clients from occupying request workers indefinitely.
+`HTTP_WORKERS` applies to each native service process and controls the Asio
+event-loop worker count. `HTTP_SESSION_TIMEOUT_MS` and
+`HTTP_MAX_KEEPALIVE_REQUESTS` bound keep-alive sessions.
+`HTTP_IDEMPOTENCY_CACHE_SIZE` controls the per-process cache of successful
+idempotent `POST` responses keyed by the `Idempotency-Key` header.
 
 `HTTP_CLIENT_TIMEOUT_MS` bounds outbound Beast client connect/read/write calls.
 `HTTP_CLIENT_POOL_SIZE` controls the persistent connection pool used per
@@ -96,6 +97,16 @@ transition worker pool. Runtime metrics are available from:
 ```http
 GET /api/runtime/metrics
 ```
+
+Runtime response and history controls are available without restart:
+
+```http
+GET /api/runtime/options
+PATCH /api/runtime/options
+```
+
+The patch body can set `historyLimit`, `includeMachineResults`, and
+`includePerceptualSpace`.
 
 ## Qdrant Ownership
 

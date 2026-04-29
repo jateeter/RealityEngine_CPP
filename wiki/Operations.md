@@ -33,8 +33,8 @@ Copy `.env.example` to `.env` and edit as needed.
 Common overrides:
 
 ```bash
-REALITY_ENGINE_PORT=3100
-PERCEPTION_ENGINE_PORT=3101
+REALITY_ENGINE_PORT=3299
+PERCEPTION_ENGINE_PORT=3300
 VECTOR_DIMENSION=768
 MACHINES_DIR=../RealityEngine_AI/examples/machines
 QDRANT_URL=http://localhost:4333
@@ -43,9 +43,9 @@ LOCAL_AI_API_URL=http://localhost:4000
 LOCAL_AI_MACHINES_DIR=../localAIStack/data/machines
 LOCAL_AI_BOOTSTRAP=false
 HTTP_WORKERS=
-HTTP_QUEUE_CAPACITY=
 HTTP_SESSION_TIMEOUT_MS=
 HTTP_MAX_KEEPALIVE_REQUESTS=
+HTTP_IDEMPOTENCY_CACHE_SIZE=
 HTTP_CLIENT_TIMEOUT_MS=
 HTTP_CLIENT_POOL_SIZE=
 DOMAIN_WORKERS=
@@ -55,10 +55,20 @@ DOMAIN_QUEUE_CAPACITY=
 Set `LOCAL_AI_BOOTSTRAP=true` when the C++ Perception Engine should register
 localAIStack-compatible sensors and import bridge machines during startup.
 
-`HTTP_WORKERS` defaults to the max of `2` and hardware concurrency.
-`HTTP_QUEUE_CAPACITY` defaults to `HTTP_WORKERS * 64`. Both apply per native
-service process and bound Beast request handling inside the process.
+`HTTP_WORKERS` defaults to the max of `2` and hardware concurrency and controls
+the Asio event-loop worker count for each service process.
 `HTTP_SESSION_TIMEOUT_MS` and `HTTP_MAX_KEEPALIVE_REQUESTS` bound keep-alive
-sessions. `HTTP_CLIENT_TIMEOUT_MS` and `HTTP_CLIENT_POOL_SIZE` tune outbound
-persistent clients. `DOMAIN_WORKERS` and `DOMAIN_QUEUE_CAPACITY` tune the
-machine-transition worker pool.
+sessions. `HTTP_IDEMPOTENCY_CACHE_SIZE` bounds the successful idempotent POST
+response cache. `HTTP_CLIENT_TIMEOUT_MS` and `HTTP_CLIENT_POOL_SIZE` tune
+outbound persistent clients. `DOMAIN_WORKERS` and `DOMAIN_QUEUE_CAPACITY` tune
+the machine-transition worker pool.
+
+Runtime controls:
+
+```http
+GET /api/runtime/options
+PATCH /api/runtime/options
+```
+
+`PATCH` supports `historyLimit`, `includeMachineResults`, and
+`includePerceptualSpace`.
