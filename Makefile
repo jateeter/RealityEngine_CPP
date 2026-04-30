@@ -9,7 +9,7 @@ SRC := src/reality.cpp src/http.cpp
 
 .PHONY: all clean test
 
-all: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/e2e_machine_sequences
+all: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -26,11 +26,15 @@ $(BIN_DIR)/reality_engine_tests: $(SRC) tests/reality_engine_tests.cpp | $(BIN_D
 $(BIN_DIR)/e2e_machine_sequences: $(SRC) tests/e2e_machine_sequences.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $(SRC) tests/e2e_machine_sequences.cpp -o $@ $(LDFLAGS)
 
+$(BIN_DIR)/e2e_machine_domains: $(SRC) tests/e2e_machine_domains.cpp | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $(SRC) tests/e2e_machine_domains.cpp -o $@ $(LDFLAGS)
+
 test: $(BIN_DIR)/reality_engine_tests
 	$(BIN_DIR)/reality_engine_tests
 
-e2e: $(BIN_DIR)/e2e_machine_sequences
+e2e: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains
 	$(BIN_DIR)/e2e_machine_sequences ../RealityEngine_AI/examples/machines
+	$(BIN_DIR)/e2e_machine_domains ../RealityEngine_AI/examples/machines
 
 clean:
 	rm -rf $(BIN_DIR)
