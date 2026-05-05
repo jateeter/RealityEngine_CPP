@@ -28,7 +28,8 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
 - Match algorithm config.
 - Reset.
 - Source list/create/update/delete.
-- Inactive test sources generated from loaded machine `inputSequences`.
+- Inactive test sources generated from loaded machine `inputSequences`, including
+  inputs, metadata, and the full authored sequence object.
 - Sensor value push.
 - localAIStack-compatible status/bootstrap endpoints.
 - Generic external signal ingestion through `POST /api/signals`.

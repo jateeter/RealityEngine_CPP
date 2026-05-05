@@ -646,12 +646,6 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
       pendingMerges.push_back({result.mapping.output, result.id, i, result.pendingOutputs[i]});
     }
   }
-  std::sort(pendingMerges.begin(), pendingMerges.end(), [](const PendingMerge& a, const PendingMerge& b) {
-    if (a.region.offset != b.region.offset) return a.region.offset < b.region.offset;
-    if (a.region.length != b.region.length) return a.region.length < b.region.length;
-    if (a.machineId != b.machineId) return a.machineId < b.machineId;
-    return a.outputIndex < b.outputIndex;
-  });
   for (const auto& merge : pendingMerges) {
     step.mergeBatch.push_back({merge.region, merge.machineId, merge.outputIndex});
     space.merge_machine_output(merge.output, PerceptualMapping{{0, 0}, merge.region});
@@ -909,7 +903,7 @@ Json to_json(const SourceConfig& s) {
   if (s.kind == "test") {
     Json::Array inputs;
     for (const auto& v : s.inputs) inputs.push_back(json::numbers(v));
-    o["machineId"] = s.machineId; o["machineName"] = s.machineName; o["sequenceName"] = s.sequenceName; o["inputs"] = inputs; o["loop"] = s.loop;
+    o["machineId"] = s.machineId; o["machineName"] = s.machineName; o["sequenceName"] = s.sequenceName; o["inputs"] = inputs; o["loop"] = s.loop; o["metadata"] = s.sequenceMetadata; o["sequence"] = s.testSequence;
   } else if (s.kind == "sensor") {
     o["sensorId"] = s.sensorId; o["lastValue"] = json::numbers(s.lastValue); o["lastUpdated"] = s.lastUpdated ? Json(static_cast<double>(*s.lastUpdated)) : Json(nullptr); o["ttlMs"] = static_cast<double>(s.ttlMs);
   } else {

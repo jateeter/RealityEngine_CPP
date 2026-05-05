@@ -39,9 +39,10 @@ native services, and confirms that machines loaded successfully from
 The Reality Engine service listens under `/api/...`, mirroring the Scala
 RealityEngine API. The Perception Engine service listens under `/api/...` and
 pushes assembled reality vectors to `POST /api/perceive` on the Reality Engine.
-Deployment defaults to `VECTOR_DIMENSION=768` to match the current
-RealityEngine_AI/localAIStack layout; domain classes still support smaller
-test dimensions.
+Deployment defaults to `VECTOR_DIMENSION=768` as a legacy compatibility floor
+for dense vector projection. The intended vector model derives the logical
+perceptual-space dimension from active machine and source mappings; see
+[Vector Management](docs/VECTOR_MANAGEMENT.md).
 
 Operational defaults live in [.env.example](.env.example). Copy it to `.env`
 to override ports or paths.
@@ -58,6 +59,7 @@ RealityEngine_AI and localAIStack deployment model.
 - [Reality Engine OpenAPI](docs/openapi/reality-engine.yaml)
 - [Perception Engine OpenAPI](docs/openapi/perception-engine.yaml)
 - [Local AI Integration](docs/LOCAL_AI_INTEGRATION.md)
+- [Vector Management](docs/VECTOR_MANAGEMENT.md)
 - [Operations](docs/OPERATIONS.md)
 - [E2E Testing](docs/E2E_TESTING.md)
 - [GitHub Wiki Source](wiki/Home.md)

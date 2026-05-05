@@ -441,7 +441,9 @@ components:
       description: |
         Perception source. The service auto-materializes inactive `test`
         sources from loaded machine `inputSequences`; their regions match the
-        machine input mapping and their inputs match the authored test vectors.
+        machine input mapping, their inputs match the authored test vectors, and
+        their `metadata` and `sequence` fields preserve the full authored
+        test-sequence representation.
       additionalProperties: true
       properties:
         id:
@@ -468,6 +470,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Vector"
+        metadata:
+          type: object
+          description: Authored metadata from the machine input sequence.
+        sequence:
+          type: object
+          description: Full authored machine input sequence represented by this source.
         loop:
           type: boolean
         sensorId:

@@ -52,6 +52,10 @@ DOMAIN_WORKERS=
 DOMAIN_QUEUE_CAPACITY=
 ```
 
+`VECTOR_DIMENSION` is a compatibility floor for dense projections. The logical
+perceptual-space dimension should be derived from active machine and source
+mappings; see [Vector Management](Vector-Management).
+
 Set `LOCAL_AI_BOOTSTRAP=true` when the C++ Perception Engine should register
 localAIStack-compatible sensors and import bridge machines during startup.
 

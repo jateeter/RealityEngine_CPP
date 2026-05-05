@@ -76,6 +76,8 @@ SourceConfig source_from_json(const Json& j) {
     s.machineId = j.at("machineId").as_string();
     s.machineName = j.at("machineName").as_string();
     s.sequenceName = j.at("sequenceName").as_string();
+    s.sequenceMetadata = j.at("metadata").is_object() ? j.at("metadata") : Json::Object{};
+    s.testSequence = j.at("sequence").is_object() ? j.at("sequence") : Json::Object{};
     s.loop = j.at("loop").as_bool(true);
     for (const auto& v : j.at("inputs").is_array() ? j.at("inputs").array() : Json::Array{}) s.inputs.push_back(json::to_numbers(v));
   } else if (s.kind == "sensor") {
@@ -430,6 +432,8 @@ private:
       source.machineName = machine.at("name").as_string(machineId);
       source.sequenceName = seq.at("name").as_string("Test sequence");
       source.region = region;
+      source.sequenceMetadata = seq.at("metadata").is_object() ? seq.at("metadata") : Json::Object{};
+      source.testSequence = seq;
       source.loop = seq.at("loop").as_bool(false);
       for (const auto& vector : seq.at("vectors").array()) source.inputs.push_back(json::to_numbers(vector));
       if (source.inputs.empty()) continue;
@@ -755,6 +759,7 @@ private:
     }
     Json payload = Json::Object{
       {"vector", json::numbers(vector)},
+      {"matchAlgorithm", to_string(matchAlgorithm)},
       {"matchAlgorithmOverride", to_string(matchAlgorithm == MatchAlgorithm::Equals ? ComparatorType::Equals : ComparatorType::Gte)},
       {"includeMachineResults", includeMachineResults},
     };

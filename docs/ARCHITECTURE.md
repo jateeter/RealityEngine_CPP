@@ -113,9 +113,11 @@ data.
 ## Local AI Signal Model
 
 External AI systems integrate through Perception Engine sensor sources. A
-sensor source owns a region of the configured perceptual space and supplies
-values with TTL expiry. Deployment defaults to `VECTOR_DIMENSION=768`, matching
-the current `RealityEngine_AI` stack. The C++ service supports the localAIStack bridge sensors at
+sensor source owns a region of the perceptual space and supplies values with TTL
+expiry. `VECTOR_DIMENSION` is a compatibility floor for dense vector projection;
+the intended model is a dynamically derived logical dimension based on active
+machine and source reservations. See [Vector Management](VECTOR_MANAGEMENT.md).
+The C++ service supports the localAIStack bridge sensors at
 `[52:56]`, `[56:60]`, and `[64:68]`, plus generic ad hoc signal writes through
 `POST /api/signals`.
 

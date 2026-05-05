@@ -2,7 +2,9 @@
 
 `RealityEngine_CPP` connects AI systems through the Perception Engine sensor
 model. The Reality Engine receives assembled vectors and remains neutral about
-the upstream AI provider. Deployment defaults to `VECTOR_DIMENSION=768`.
+the upstream AI provider. `VECTOR_DIMENSION` is a legacy compatibility floor;
+the logical perceptual-space dimension should be derived from active machine and
+source mappings. See [Vector Management](Vector-Management).
 
 ## Compatibility Profile
 
@@ -72,3 +74,7 @@ VECTOR_DIMENSION=768
 
 Set `LOCAL_AI_BOOTSTRAP=true` to register sensors and import bridge machines at
 Perception Engine startup.
+
+Machine `inputSequences` are also materialized as inactive PE `test` sources on
+startup. Each source carries the source inputs, sequence metadata, and the full
+authored sequence object for PE simulation and inspection.

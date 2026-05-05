@@ -45,7 +45,7 @@ Bootstrap imports these bridge machines when present in
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VECTOR_DIMENSION` | `768` | Shared perceptual-space size for the C++ RE and PE deployment. |
+| `VECTOR_DIMENSION` | `768` | Compatibility floor for dense RE/PE vector projections. The logical perceptual space should be derived from active machine and source mappings; see [Vector Management](VECTOR_MANAGEMENT.md). |
 | `LOCAL_AI_API_URL` | `http://localhost:4000` | Health/status endpoint for the external AI API. |
 | `LOCAL_AI_MACHINES_DIR` | `../localAIStack/data/machines` | Optional bridge-machine import directory. |
 | `LOCAL_AI_BOOTSTRAP` | `false` | When true, registers sensors and imports bridge machines on Perception Engine startup. |
@@ -178,6 +178,8 @@ The Scala/Node Perception Engine source model remains the primary compatibility
 surface:
 
 - `test` sources step through authored input sequences.
+- auto-generated machine `test` sources retain the full authored sequence object
+  and expected-output metadata for PE simulation and inspection.
 - `simulated` sources generate synthetic values.
 - `sensor` sources accept external values with TTL expiry.
 

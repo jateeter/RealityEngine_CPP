@@ -309,6 +309,8 @@ struct SourceConfig {
   std::string machineName;
   std::string sequenceName;
   std::vector<Vector> inputs;
+  Json sequenceMetadata = Json::Object{};
+  Json testSequence = Json::Object{};
   bool loop = true;
   SimPattern pattern = SimPattern::Constant;
   double frequency = 1.0;

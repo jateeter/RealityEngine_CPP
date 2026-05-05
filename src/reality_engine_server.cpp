@@ -48,11 +48,14 @@ public:
       auto body = parse_body(req);
       auto query = json::to_numbers(body.at("vector"));
       int limit = static_cast<int>(body.at("limit").as_number(10));
+      std::optional<double> threshold;
+      if (body.at("threshold").is_number()) threshold = body.at("threshold").as_number();
       Json::Array results;
       std::lock_guard<std::mutex> lock(vectorMutex);
       for (const auto& [_, v] : vectorStore) {
         if (static_cast<int>(results.size()) >= limit) break;
-        double score = cosine(query, json::to_numbers(v.at("elements")));
+        double score = cosine(query, searchable_vector_values(v));
+        if (threshold && score < *threshold) continue;
         results.push_back(Json::Object{{"vector", v}, {"score", score}});
       }
       return ok(Json::Object{{"results", results}});
@@ -424,10 +427,20 @@ public:
       PreceptionEngine resolver(dimension);
       return ok(resolver.diagnostic_mapping(json::to_numbers(parse_body(req).at("universalInputSpace")), machines));
     });
+    server.route("GET", "/api/demo/multi-step", [this](const http::Request&) {
+      return demo_machine_response("Multi-Step State Machine", "MultiStep.json", "Multi-Step State Machine");
+    });
+    server.route("GET", "/api/demo/data-center", [this](const http::Request&) {
+      return demo_machine_response("Data Center Monitoring", "DataCenterMonitoring.json", "Data Center Monitoring");
+    });
+    server.route("GET", "/api/demo/kleene-star", [this](const http::Request&) {
+      return demo_machine_response("Kleene Star Operator", "KleeneStar.json", "Kleene Star Operator");
+    });
     server.route("POST", "/api/perceive", [this](const http::Request& req) {
       auto body = parse_body(req);
       std::optional<ComparatorType> overrideType;
       if (body.at("matchAlgorithmOverride").is_string()) overrideType = comparator_from_string(body.at("matchAlgorithmOverride").as_string());
+      else if (body.at("matchAlgorithm").is_string()) overrideType = comparator_from_string(body.at("matchAlgorithm").as_string());
       bool includeMachineResults = body.at("includeMachineResults").as_bool(body.at("compact").as_bool(false) ? false : includeMachineResultsDefault);
       bool includePerceptualSpace = body.at("includePerceptualSpace").as_bool(includePerceptualSpaceDefault);
       auto vector = json::to_numbers(body.at("vector"));
@@ -456,6 +469,17 @@ private:
     for (double v : b) nb += v * v;
     if (na == 0.0 || nb == 0.0) return 0.0;
     return dot / (std::sqrt(na) * std::sqrt(nb));
+  }
+  static Vector searchable_vector_values(const Json& vector) {
+    if (vector.at("vector").is_array()) return json::to_numbers(vector.at("vector"));
+    Vector values;
+    const Json& elements = vector.at("elements");
+    if (!elements.is_array()) return values;
+    for (const auto& element : elements.array()) {
+      if (element.is_object()) values.push_back(element.at("value").as_number());
+      else values.push_back(element.as_number());
+    }
+    return values;
   }
   static RealityVector vector_from_json(const Json& body) {
     std::vector<VectorElement> elements;
@@ -543,6 +567,47 @@ private:
         {"compact", "sets includeMachineResults false when includeMachineResults is omitted"}
       }}
     };
+  }
+
+  http::Response demo_machine_response(const std::string& machineName, const std::string& fileName, const std::string& displayName) {
+    std::shared_lock<std::shared_mutex> lock(registryMutex);
+    const Machine* machine = nullptr;
+    for (const auto& [_, candidate] : machines) {
+      if (candidate.name == machineName) {
+        machine = &candidate;
+        break;
+      }
+    }
+    if (!machine) {
+      return http::json_response(json::stringify(Json::Object{
+        {"error", displayName + " machine not found. Please ensure " + fileName + " is loaded."}
+      }), 404);
+    }
+
+    Json::Array sequenceNames;
+    for (const auto& seq : machine->all_sequences()) sequenceNames.emplace_back(seq.name);
+    const Json& inputSequences = machine->metadata.count("inputSequences") ? machine->metadata.at("inputSequences") : Json(nullptr);
+    int inputVectorCount = 0;
+    if (inputSequences.is_array() && !inputSequences.array().empty()) {
+      const Json& vectors = inputSequences.array().front().at("vectors");
+      if (vectors.is_array()) inputVectorCount = static_cast<int>(vectors.array().size());
+    }
+
+    Json::Object metadata = machine->metadata;
+    metadata["name"] = machine->name;
+    metadata["description"] = machine->description;
+    metadata["machineId"] = machine->id;
+    metadata["totalSequences"] = static_cast<double>(machine->sequence_count());
+    metadata["sequenceNames"] = sequenceNames;
+    metadata["totalInputVectors"] = static_cast<double>(inputVectorCount);
+
+    return ok(Json::Object{
+      {"success", true},
+      {"machine", machine->to_json(true)},
+      {"metadata", metadata},
+      {"sequencesLoaded", static_cast<double>(machine->sequence_count())},
+      {"inputVectorsLoaded", static_cast<double>(inputVectorCount)}
+    });
   }
 
   struct Checkpoint {
