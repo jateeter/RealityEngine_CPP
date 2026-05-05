@@ -54,6 +54,7 @@ RealityEngine_AI and localAIStack deployment model.
 
 ## Documentation
 
+- [Documentation Index](docs/README.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [API Equivalence](docs/API_EQUIVALENCE.md)
 - [Reality Engine OpenAPI](docs/openapi/reality-engine.yaml)
@@ -62,6 +63,8 @@ RealityEngine_AI and localAIStack deployment model.
 - [Vector Management](docs/VECTOR_MANAGEMENT.md)
 - [Operations](docs/OPERATIONS.md)
 - [E2E Testing](docs/E2E_TESTING.md)
+- [Acronyms](docs/ACRONYMS.md)
+- [Bibliography](docs/BIBLIOGRAPHY.md)
 - [GitHub Wiki Source](wiki/Home.md)
 
 ## Scope

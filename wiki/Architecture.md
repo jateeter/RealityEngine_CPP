@@ -1,96 +1,100 @@
-# Architecture
+# RealityEngine_CPP Architecture
 
-`RealityEngine_CPP` is a native C++ port of the Reality Engine domain model and
-service layer.
+RealityEngine_CPP is the native C++ implementation of the Reality Engine and
+Perception Engine services. It follows the behavior of `RealityEngine_AI` while
+using Boost.Asio/Beast for HTTP transport.
 
-## Core Components
+## Service Map
 
-| Component | Purpose |
+```mermaid
+flowchart LR
+  Client[Client / test runner]
+  PE[perception_engine_server<br/>port 3300]
+  RE[reality_engine_server<br/>port 3299]
+  Corpus[RealityEngine_AI<br/>examples/machines]
+  Q[(Qdrant<br/>localAIStack)]
+  AI[localAIStack API<br/>optional]
+
+  Client --> PE
+  Client --> RE
+  PE --> RE
+  RE --> Corpus
+  PE --> Corpus
+  PE -. optional .-> AI
+  RE -. verify only .-> Q
+```
+
+## Core Class Mapping
+
+| RealityEngine_AI concept | C++ class | Responsibility |
+| --- | --- | --- |
+| `RealityVector` | `reality::RealityVector` | Comparator matching and output assertions. |
+| `CriticalEventSequence` | `reality::CriticalEventSequence` | Deferred activation over active graph nodes. |
+| `OutputArbiter` | `reality::OutputArbiter` | `AND`, `OR`, and `PASSTHROUGH` output decisions. |
+| `Machine` | `reality::Machine` | Runs CES graphs and emits machine transition results. |
+| `PreceptionEngine` | `reality::PreceptionEngine` | Extracts machine input and merges machine output. |
+| `PerceptualSpaceSimulator` | `reality::PerceptualSpaceSimulator` | Snapshot -> process -> deterministic merge loop. |
+| Perception Engine | `reality::PerceptionEngine` | Builds persistent vectors from test, simulated, and sensor sources. |
+
+## Request Flow
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant PE as Perception Engine
+  participant RE as Reality Engine
+
+  C->>PE: POST /api/push
+  PE->>PE: assemble persistent vector
+  PE->>RE: POST /api/perceive
+  RE->>RE: snapshot all machine inputs
+  RE->>RE: process machines in worker pool
+  RE->>RE: deterministic output merge
+  RE-->>PE: SimulationStep
+  PE->>PE: persist post-merge vector
+  PE-->>C: push result
+```
+
+## Runtime Guarantees
+
+| Area | Current rule |
 | --- | --- |
-| `RealityVector` | Matches input vectors and asserts next vectors or output vectors. |
-| `CriticalEventSequence` | Runs active vectors and applies deferred activation. |
-| `Machine` | Groups sequences and applies an output arbiter. |
-| `OutputArbiter` | Implements `AND`, `OR`, and `PASSTHROUGH` output behavior. |
-| `PreceptionEngine` | Extracts machine-local input from the universal space. |
-| `PerceptualSpaceSimulator` | Runs snapshot, parallel per-machine process, merge simulation phases. |
-| `PerceptionEngine` | Assembles persistent vectors from sources. |
+| Perceptual dimension | `VECTOR_DIMENSION` is a dense compatibility floor; runtime logic should derive required size from active mappings. |
+| Machine loading | `start.sh` loads JSON machines from `../RealityEngine_AI/examples/machines`. |
+| RE process cycle | Input-atomic snapshot, parallel machine processing, deterministic merge. |
+| PE push cycle | Single-flight push; concurrent push attempts return `409` or queue saturation `429`. |
+| HTTP transport | Boost.Asio/Beast server and client with keep-alive, timeouts, and bounded workers. |
+| Qdrant | Shared localAIStack dependency; verified but not owned or mutated by this repo. |
+| localAIStack | Optional bridge through PE sensor sources and guarded integration endpoints. |
 
-## Binaries
+## Repository Layout
 
-| Binary | Purpose |
+| Path | Purpose |
 | --- | --- |
-| `bin/reality_engine_server` | Reality Engine HTTP API. |
-| `bin/perception_engine_server` | Perception Engine HTTP API and push client. |
-| `bin/reality_engine_tests` | Core smoke/unit tests. |
-| `bin/e2e_machine_sequences` | Machine corpus E2E runner. |
+| `include/reality/` | Public C++ headers. |
+| `src/reality.cpp` | Core domain model, simulator, source model, machine loader. |
+| `src/http.cpp` | Boost.Asio/Beast transport implementation. |
+| `src/reality_engine_server.cpp` | Native Reality Engine API service. |
+| `src/perception_engine_server.cpp` | Native Perception Engine API service. |
+| `tests/` | Unit, corpus, domain, and service-boundary validation. |
+| `docs/openapi/` | OpenAPI contracts for native services. |
 
-## HTTP Transport
+## Validation Map
 
-The service HTTP layer uses Boost.Asio/Beast. `reality::http::Server` keeps the
-small internal route API used by the services while Beast handles request
-parsing, response writing, connection management, timers, and PE-to-RE/localAI
-client calls. Accepted sockets run as asynchronous Beast sessions on the shared
-Asio worker pool. Keep-alive sessions have request-count and idle-time limits.
-Outbound client calls reuse a persistent HTTP/1.1 connection pool per host and
-port, with bounded connect/read/write timeouts. Native POST retries use
-`Idempotency-Key` and successful idempotent POST responses are cached per
-service process.
+| Command | Validates |
+| --- | --- |
+| `make test` | Core C++ behavior. |
+| `make e2e-corpus` | All authored machine `inputSequences` from the AI repo corpus. |
+| `make e2e` | Corpus tests plus PE -> RE service-boundary stream propagation. |
 
-## Data Flow
+## Related Docs
 
-1. Perception Engine assembles a vector using the configured deployment dimension.
-2. Perception Engine posts it to Reality Engine `POST /api/perceive`.
-3. Reality Engine snapshots mapped machine inputs.
-4. Machines process their local vectors through a persistent bounded worker pool
-   with a bounded queue. Capacity for the full machine batch is reserved before
-   submission, so the transition cycle is admitted atomically.
-5. Outputs are merged back into perceptual space in deterministic machine order.
-6. Perception Engine can carry the merged perceptual space forward.
-
-## Machine Parallelism
-
-`PerceptualSpaceSimulator::run_phases()` snapshots all machine inputs before
-starting any transition work. Each machine then runs independently against its
-snapshot, while critical event sequences inside that machine remain serialized
-through `Machine::process_input()`. Shared perceptual-space writes happen only
-after all machine transitions finish, preserving input atomicity and avoiding
-cross-machine clock coupling.
-
-## Output Merge Policy
-
-Machine transition work is scheduled with futures. Merge planning is built
-directly after transition futures complete, and writes into the shared
-perceptual space are serialized. Pending outputs are ordered by output region
-offset, region length, machine id, and output index. If output regions overlap,
-the later operation in that deterministic order wins for the overlapping
-elements.
-
-The ordered merge plan is returned as `mergeBatch` so overlapping write
-resolution is observable without replaying the transition.
-
-## Service Concurrency
-
-Reality Engine HTTP handlers protect the machine registry with a read/write
-lock and mutable simulation state with a simulator lock. `/api/perceive` owns
-the simulator lock but does not block registry-only reads such as
-`GET /api/machines`. Machine CRUD/import and reset lock both state owners.
-
-Perception Engine sensor/source writes are mutexed. `/api/push` is
-single-flight, and `/api/reset` uses that same guard so reset cannot interleave
-with a push after the vector snapshot but before source advancement.
-
-PE-to-RE push execution runs through a bounded worker queue with capacity `1`.
-The default HTTP push request waits for the queued job result to preserve API
-shape. `POST /api/push` can also run in async job mode with `async: true`; the
-route returns `202`, and callers poll `GET /api/push/:id`. Duplicate concurrent
-pushes return `409` with `coalesced: true`. The worker performs one compact
-follow-up push after the in-flight push completes, which preserves single-flight
-source advancement. The follow-up is capped at one compact push per active push
-cycle so duplicate callers cannot keep the worker in an unbounded drain loop.
-Queue saturation returns `429`.
-
-`POST /api/perceive` and `POST /api/push` accept `compact: true` or
-`includeMachineResults: false` to omit per-machine transition details from the
-response while retaining the merged perceptual space. `POST /api/perceive`
-also accepts `includePerceptualSpace: false`; runtime defaults and simulator
-history retention are available through `GET/PATCH /api/runtime/options`.
+| Need | Document |
+| --- | --- |
+| Documentation index | [README.md](README.md) |
+| API parity | [API_EQUIVALENCE.md](API_EQUIVALENCE.md) |
+| Vector model | [VECTOR_MANAGEMENT.md](VECTOR_MANAGEMENT.md) |
+| Operations | [OPERATIONS.md](OPERATIONS.md) |
+| Local AI bridge | [LOCAL_AI_INTEGRATION.md](LOCAL_AI_INTEGRATION.md) |
+| Acronyms | [ACRONYMS.md](ACRONYMS.md) |
+| Bibliography | [BIBLIOGRAPHY.md](BIBLIOGRAPHY.md) |

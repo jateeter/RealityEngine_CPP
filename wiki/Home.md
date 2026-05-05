@@ -11,6 +11,7 @@ behavioral model and keeps operational compatibility with the shared
 
 - [Getting Started](Getting-Started)
 - [Architecture](Architecture)
+- [Documentation Index](Documentation-Index)
 - [Operations](Operations)
 - [API Equivalence](API-Equivalence)
 - [OpenAPI](OpenAPI)
@@ -18,6 +19,8 @@ behavioral model and keeps operational compatibility with the shared
 - [Vector Management](Vector-Management)
 - [E2E Testing](E2E-Testing)
 - [Shared Qdrant](Shared-Qdrant)
+- [Acronyms](Acronyms)
+- [Bibliography](Bibliography)
 - [Roadmap](Roadmap)
 
 ## Quick Commands
