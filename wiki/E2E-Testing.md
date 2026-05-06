@@ -18,16 +18,16 @@ implementation and validates the service process boundary.
 Current passing corpus:
 
 ```text
-machines loaded:       906
-input sequences run:   4211
-input steps run:       6963
-outputs observed:      3596
-metadata assertions:   4115
+machines loaded:       1006
+input sequences run:   4716
+input steps run:       7573
+outputs observed:      4001
+metadata assertions:   4620
 
-active domains:        10
-domain cases run:      100
-domain input steps:    222
-domain outputs:        134
+active domains:        11
+domain cases run:      110
+domain input steps:    234
+domain outputs:        142
 ```
 
 The runner asserts explicit metadata when present:
