@@ -470,11 +470,17 @@ Json Machine::to_json(bool full) const {
   };
 }
 
-PerceptualSpace::PerceptualSpace(int dimension) : values(static_cast<size_t>(dimension), 0.0) {}
+PerceptualSpace::PerceptualSpace(int dim) : values(static_cast<size_t>(dim < 0 ? 0 : dim), 0.0) {}
+int PerceptualSpace::dimension() const { return static_cast<int>(values.size()); }
 const Vector& PerceptualSpace::vector() const { return values; }
 void PerceptualSpace::set_vector(const Vector& v) {
-  if (v.size() != values.size()) throw std::invalid_argument("Perceptual space dimension mismatch");
-  values = v;
+  if (v.size() > values.size()) grow_to(static_cast<int>(v.size()));
+  for (size_t i = 0; i < v.size(); ++i) values[i] = v[i];
+  for (size_t i = v.size(); i < values.size(); ++i) values[i] = 0.0;
+}
+void PerceptualSpace::grow_to(int newDimension) {
+  if (newDimension <= static_cast<int>(values.size())) return;
+  values.resize(static_cast<size_t>(newDimension), 0.0);
 }
 void PerceptualSpace::reset() { std::fill(values.begin(), values.end(), 0.0); }
 Vector PerceptualSpace::extract_machine_input(const PerceptualMapping& mapping) const {
@@ -494,8 +500,8 @@ void PerceptualSpace::update_region(int offset, const Vector& regionValues) {
 
 PreceptionEngine::PreceptionEngine(int universalDimension) : dimension(universalDimension), space(universalDimension) {}
 Vector PreceptionEngine::resolve_input_event_vector(const Vector& universalInputSpace, const PerceptualMapping& mapping) {
-  if (static_cast<int>(universalInputSpace.size()) != dimension) throw std::invalid_argument("Universal input space dimension mismatch");
   space.set_vector(universalInputSpace);
+  if (space.dimension() > dimension) dimension = space.dimension();
   return space.extract_machine_input(mapping);
 }
 Vector PreceptionEngine::resolve_input_event_vector_for_machine(const Vector& universalInputSpace, const Machine& machine) {
@@ -503,8 +509,8 @@ Vector PreceptionEngine::resolve_input_event_vector_for_machine(const Vector& un
   return resolve_input_event_vector(universalInputSpace, *machine.perceptualMapping);
 }
 std::map<std::string, Vector> PreceptionEngine::resolve_inputs_for_machines(const Vector& universalInputSpace, const std::map<std::string, Machine>& machines) {
-  if (static_cast<int>(universalInputSpace.size()) != dimension) throw std::invalid_argument("Universal input space dimension mismatch");
   space.set_vector(universalInputSpace);
+  if (space.dimension() > dimension) dimension = space.dimension();
   std::map<std::string, Vector> out;
   for (const auto& [id, m] : machines) if (m.perceptualMapping) out[id] = space.extract_machine_input(*m.perceptualMapping);
   return out;
@@ -524,12 +530,34 @@ Json PreceptionEngine::diagnostic_mapping(const Vector& universalInputSpace, con
   return Json::Object{{"universalSpace", Json::Object{{"dimension", static_cast<double>(dimension)}, {"nonZeroValues", nonzero}}}, {"machineMappings", mappings}};
 }
 
-PerceptualSpaceSimulator::PerceptualSpaceSimulator(int dim) : dimension(dim), space(dim) {}
+PerceptualSpaceSimulator::PerceptualSpaceSimulator(int dim) : initialDimension(dim < 0 ? 0 : dim), space(dim < 0 ? 0 : dim) {}
+int PerceptualSpaceSimulator::dimension() const { return space.dimension(); }
+int PerceptualSpaceSimulator::required_dimension() const {
+  int req = 0;
+  for (const auto& [_, m] : machines) {
+    if (!m.perceptualMapping) continue;
+    req = std::max(req, m.perceptualMapping->input.offset + m.perceptualMapping->input.length);
+    req = std::max(req, m.perceptualMapping->output.offset + m.perceptualMapping->output.length);
+  }
+  return req;
+}
+long PerceptualSpaceSimulator::mapping_version() const { return mappingVersion; }
 void PerceptualSpaceSimulator::add_machine(const Machine& machine) {
   if (!machine.perceptualMapping) throw std::invalid_argument("Machine has no perceptual mapping");
+  const auto& mapping = *machine.perceptualMapping;
+  int needed = std::max(mapping.input.offset + mapping.input.length,
+                        mapping.output.offset + mapping.output.length);
+  if (needed > space.dimension()) {
+    space.grow_to(needed);
+  }
   machines[machine.id] = machine;
+  ++mappingVersion;
 }
-bool PerceptualSpaceSimulator::remove_machine(const std::string& machineId) { return machines.erase(machineId) > 0; }
+bool PerceptualSpaceSimulator::remove_machine(const std::string& machineId) {
+  bool removed = machines.erase(machineId) > 0;
+  if (removed) ++mappingVersion;
+  return removed;
+}
 void PerceptualSpaceSimulator::configure(std::vector<Vector> inputSequence, RegionMapping inputRegion, long delay, std::optional<int> maxSteps) {
   configuredInputSequence = std::move(inputSequence);
   configuredInputRegion = inputRegion;
@@ -567,19 +595,18 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     Vector snapshot;
     PerceptualMapping mapping;
   };
+  struct PendingOutput {
+    std::string sequenceId;
+    size_t outputIndex = 0;
+    Vector values;
+  };
   struct MachinePhaseResult {
     std::string id;
     std::string name;
     Vector snapshot;
     PerceptualMapping mapping;
     MachineTransitionResult transition;
-    std::vector<Vector> pendingOutputs;
-  };
-  struct PendingMerge {
-    RegionMapping region;
-    std::string machineId;
-    size_t outputIndex = 0;
-    Vector output;
+    std::vector<PendingOutput> pendingOutputs;
   };
 
   std::vector<MachinePhaseJob> jobs;
@@ -599,10 +626,12 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     for (const auto& job : jobs) {
       auto future = pool.submit_reserved([job, overrideType]() mutable {
       auto transition = job.machine->process_input(job.snapshot, overrideType);
-      std::vector<Vector> pendingOutputs;
+      std::vector<PendingOutput> pendingOutputs;
       if (transition.arbiterMetadata.shouldOutput) {
-        for (const auto& [_, sr] : transition.sequenceResults) {
-          for (const auto& out : sr.assertedOutputs) pendingOutputs.push_back(out.vector);
+        for (const auto& [sequenceId, sr] : transition.sequenceResults) {
+          for (size_t i = 0; i < sr.assertedOutputs.size(); ++i) {
+            pendingOutputs.push_back({sequenceId, i, sr.assertedOutputs[i].vector});
+          }
         }
       }
       return MachinePhaseResult{
@@ -640,15 +669,20 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     step.machineResults[result.id] = msr;
   }
 
-  std::vector<PendingMerge> pendingMerges;
+  // Canonical merge ordering — sort by (machineId, sequenceId, outputIndex)
+  // so AI and C++ produce identical mergeBatch sequences for the same input.
   for (const auto& result : results) {
-    for (size_t i = 0; i < result.pendingOutputs.size(); ++i) {
-      pendingMerges.push_back({result.mapping.output, result.id, i, result.pendingOutputs[i]});
+    for (const auto& po : result.pendingOutputs) {
+      step.mergeBatch.push_back({result.mapping.output, result.id, po.sequenceId, po.outputIndex, po.values});
     }
   }
-  for (const auto& merge : pendingMerges) {
-    step.mergeBatch.push_back({merge.region, merge.machineId, merge.outputIndex});
-    space.merge_machine_output(merge.output, PerceptualMapping{{0, 0}, merge.region});
+  std::sort(step.mergeBatch.begin(), step.mergeBatch.end(), [](const MergeOperation& a, const MergeOperation& b) {
+    if (a.machineId != b.machineId) return a.machineId < b.machineId;
+    if (a.sequenceId != b.sequenceId) return a.sequenceId < b.sequenceId;
+    return a.outputIndex < b.outputIndex;
+  });
+  for (const auto& merge : step.mergeBatch) {
+    space.merge_machine_output(merge.values, PerceptualMapping{{0, 0}, merge.region});
   }
   step.perceptualSpace = space.vector();
   for (const auto& [id, msr] : step.machineResults) {
@@ -670,7 +704,7 @@ Json PerceptualSpaceSimulator::machine_graph_data() const {
     int send = so.offset + so.length, tend = ti.offset + ti.length;
     if (!(send <= ti.offset || so.offset >= tend)) edges.push_back(Json::Object{{"source", sid}, {"target", tid}, {"sourceRegion", to_json(so)}, {"targetRegion", to_json(ti)}, {"overlap", true}});
   }
-  return Json::Object{{"nodes", nodes}, {"edges", edges}, {"perceptualSpaceDimension", static_cast<double>(dimension)}};
+  return Json::Object{{"nodes", nodes}, {"edges", edges}, {"perceptualSpaceDimension", static_cast<double>(space.dimension())}};
 }
 Json PerceptualSpaceSimulator::state_json() const {
   Json::Array machineJson;
@@ -885,10 +919,23 @@ Json to_json(const SimulationStep& step, bool includeMachineResults, bool includ
   Json::Array regions;
   for (const auto& r : step.activeRegions) regions.push_back(Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}, {"machineId", r.machineId}, {"type", r.type}});
   Json::Array mergeBatch;
-  for (const auto& op : step.mergeBatch) mergeBatch.push_back(Json::Object{{"region", to_json(op.region)}, {"machineId", op.machineId}, {"outputIndex", static_cast<double>(op.outputIndex)}});
+  for (const auto& op : step.mergeBatch) mergeBatch.push_back(Json::Object{
+    {"region", to_json(op.region)},
+    {"machineId", op.machineId},
+    {"sequenceId", op.sequenceId},
+    {"outputIndex", static_cast<double>(op.outputIndex)},
+    {"values", json::numbers(op.values)}
+  });
   Json::Object out{{"stepNumber", static_cast<double>(step.stepNumber)}, {"timestamp", static_cast<double>(step.timestamp)}, {"activeRegions", regions}};
+  // mergeBatch is the authoritative synchronization result — clients should
+  // apply these region writes to stay in sync. The dense perceptualSpace
+  // payload is a debug projection of the post-merge state and may be omitted
+  // via includePerceptualSpace=false.
   out["mergeBatch"] = mergeBatch;
-  if (includePerceptualSpace) out["perceptualSpace"] = json::numbers(step.perceptualSpace);
+  if (includePerceptualSpace) {
+    out["perceptualSpace"] = json::numbers(step.perceptualSpace);
+    out["perceptualSpaceIsDebugProjection"] = true;
+  }
   if (includeMachineResults) out["machineResults"] = machineResults;
   return out;
 }

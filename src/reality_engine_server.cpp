@@ -136,6 +136,15 @@ public:
       std::shared_lock<std::shared_mutex> lock(registryMutex);
       return ok(Json::Object{{"stats", stats()}, {"domainWorkerPool", worker_pool_metrics_json()}});
     });
+    server.route("GET", "/api/runtime/vector-space", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(simulatorMutex);
+      return ok(Json::Object{
+        {"dimension", static_cast<double>(simulator.dimension())},
+        {"requiredDimension", static_cast<double>(simulator.required_dimension())},
+        {"encoding", "dense-float64-clamped-0-1"},
+        {"mappingVersion", static_cast<double>(simulator.mapping_version())}
+      });
+    });
     server.route("GET", "/api/runtime/options", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(simulatorMutex);
       return ok(runtime_options());
@@ -443,11 +452,50 @@ public:
       else if (body.at("matchAlgorithm").is_string()) overrideType = comparator_from_string(body.at("matchAlgorithm").as_string());
       bool includeMachineResults = body.at("includeMachineResults").as_bool(body.at("compact").as_bool(false) ? false : includeMachineResultsDefault);
       bool includePerceptualSpace = body.at("includePerceptualSpace").as_bool(includePerceptualSpaceDefault);
-      auto vector = json::to_numbers(body.at("vector"));
+
+      // Polymorphic input — exactly one of vector / sparseVector / domainVectors.
+      // The simulator's tolerant set_vector handles over/under-sized dense inputs.
+      Vector assembled;
+      bool haveInput = false;
+      if (body.at("vector").is_array()) {
+        assembled = json::to_numbers(body.at("vector"));
+        haveInput = true;
+      } else if (body.at("sparseVector").is_array()) {
+        size_t maxIdx = 0;
+        bool any = false;
+        for (const auto& e : body.at("sparseVector").array()) {
+          size_t idx = static_cast<size_t>(e.at("index").as_number());
+          if (!any || idx > maxIdx) maxIdx = idx;
+          any = true;
+        }
+        size_t len = std::max<size_t>(any ? maxIdx + 1 : 0, static_cast<size_t>(simulator.dimension()));
+        assembled.assign(len, 0.0);
+        for (const auto& e : body.at("sparseVector").array()) {
+          assembled[static_cast<size_t>(e.at("index").as_number())] = e.at("value").as_number();
+        }
+        haveInput = true;
+      } else if (body.at("domainVectors").is_array()) {
+        size_t maxEnd = 0;
+        for (const auto& r : body.at("domainVectors").array()) {
+          size_t off = static_cast<size_t>(r.at("offset").as_number());
+          size_t n = r.at("values").is_array() ? r.at("values").array().size() : 0;
+          maxEnd = std::max(maxEnd, off + n);
+        }
+        size_t len = std::max<size_t>(maxEnd, static_cast<size_t>(simulator.dimension()));
+        assembled.assign(len, 0.0);
+        for (const auto& r : body.at("domainVectors").array()) {
+          size_t off = static_cast<size_t>(r.at("offset").as_number());
+          auto vals = json::to_numbers(r.at("values"));
+          for (size_t i = 0; i < vals.size(); ++i) assembled[off + i] = vals[i];
+        }
+        haveInput = true;
+      }
+      if (!haveInput) return http::error_response("Provide exactly one of: vector, sparseVector, domainVectors", 400);
+
       SimulationStep step;
       {
         std::lock_guard<std::mutex> lock(simulatorMutex);
-        step = simulator.process_immediate(vector, overrideType);
+        step = simulator.process_immediate(assembled, overrideType);
         preception.perceptual_space().set_vector(step.perceptualSpace);
       }
       return ok(to_json(step, includeMachineResults, includePerceptualSpace));

@@ -191,9 +191,16 @@ private:
 
 class PerceptualSpace {
 public:
-  explicit PerceptualSpace(int dimension = 256);
+  explicit PerceptualSpace(int dimension = 0);
+  int dimension() const;
   const Vector& vector() const;
+  // Tolerant write: input larger than current dimension triggers grow_to;
+  // input shorter than current dimension zero-fills the tail. Mirrors
+  // PerceptualSpace.setPerceptualVector in the AI runtime so cross-runtime
+  // /api/perceive payloads behave identically.
   void set_vector(const Vector& values);
+  // Expand to newDimension, padding new slots with zeros. Never shrinks.
+  void grow_to(int newDimension);
   void reset();
   Vector extract_machine_input(const PerceptualMapping& mapping) const;
   void merge_machine_output(const Vector& output, const PerceptualMapping& mapping);
@@ -230,7 +237,9 @@ struct ActiveRegion {
 struct MergeOperation {
   RegionMapping region;
   std::string machineId;
+  std::string sequenceId;
   size_t outputIndex = 0;
+  Vector values;
 };
 
 struct MachineStepResult {
@@ -263,7 +272,16 @@ struct WorkerPoolMetrics {
 
 class PerceptualSpaceSimulator {
 public:
-  explicit PerceptualSpaceSimulator(int dimension = 256);
+  explicit PerceptualSpaceSimulator(int dimension = 0);
+  int dimension() const;
+  // Required dimension across all currently registered machines —
+  // max(offset + length) over every input and output mapping. Returned by
+  // /api/runtime/vector-space so external clients can detect a stale PE.
+  int required_dimension() const;
+  // Bumped on every add_machine / remove_machine that changes the
+  // dimension or the set of mappings. External clients can cache shape
+  // assumptions keyed by this value.
+  long mapping_version() const;
   void add_machine(const Machine& machine);
   bool remove_machine(const std::string& machineId);
   void configure(std::vector<Vector> inputSequence, RegionMapping inputRegion, long stepDelayMs, std::optional<int> maxSteps = std::nullopt);
@@ -284,7 +302,7 @@ public:
 
 private:
   SimulationStep run_phases(int stepNumber, std::optional<ComparatorType> overrideType);
-  int dimension;
+  int initialDimension;
   PerceptualSpace space;
   std::map<std::string, Machine> machines;
   std::vector<SimulationStep> steps;
@@ -297,6 +315,7 @@ private:
   int immediateStepCount = 0;
   bool running = false;
   bool configured = false;
+  long mappingVersion = 0;
 };
 
 struct SourceConfig {
