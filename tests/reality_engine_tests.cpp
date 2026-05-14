@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <stdexcept>
 
 using namespace reality;
 
@@ -106,6 +107,50 @@ int main() {
     auto assembled = pe.assemble_vector();
     assert(assembled[52] == 0.4);
     assert(assembled[53] == 0.8);
+  }
+
+  {
+    Vector cells{0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 2.0, 3.0, 2.0};
+    auto packed = pack_cells(cells, 2);
+    assert(packed.size() == 3);
+    assert(packed[0] == 0x1B);
+    assert(unpack_cells(packed, cells.size(), 2) == cells);
+    assert(encode_packed_base64({0.0, 1.0, 2.0, 3.0}, 2) == "Gw==");
+
+    auto footprint = storage_footprint(4128, 2);
+    assert(footprint.float64Bytes == 33024);
+    assert(footprint.packedBytes == 1032);
+    assert(footprint.shrinkFactor == 32.0);
+
+    bool rejected = false;
+    try {
+      (void)pack_cells({4.0}, 2);
+    } catch (const std::range_error&) {
+      rejected = true;
+    }
+    assert(rejected);
+  }
+
+  {
+    const std::string raw = R"({
+      "version": "1.0.0",
+      "machine": {
+        "name": "Packed Mapping",
+        "description": "bitsPerElement loader test",
+        "perceptualMapping": {
+          "input": {"offset": 0, "length": 2},
+          "output": {"offset": 2, "length": 4},
+          "bitsPerElement": 2
+        },
+        "sequences": []
+      }
+    })";
+    Machine m = load_machine_from_json_string(raw, "machine-packed");
+    assert(m.perceptualMapping.has_value());
+    assert(m.perceptualMapping->bitsPerElement.has_value());
+    assert(*m.perceptualMapping->bitsPerElement == 2);
+    Json mapping = to_json(*m.perceptualMapping);
+    assert(mapping.at("bitsPerElement").as_number() == 2.0);
   }
 
   std::cout << "RealityEngine_CPP smoke tests passed\n";

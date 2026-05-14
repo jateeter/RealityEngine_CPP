@@ -41,6 +41,15 @@ struct RegionMapping {
 struct PerceptualMapping {
   RegionMapping input;
   RegionMapping output;
+  // Option A1 narrow-cell declaration.  Internal engine cells remain
+  // double-valued; API compact mode uses this for packed wire payloads.
+  std::optional<int> bitsPerElement = std::nullopt;
+};
+
+struct StorageFootprint {
+  size_t float64Bytes = 0;
+  size_t packedBytes = 0;
+  double shrinkFactor = 0.0;
 };
 
 struct VectorElement {
@@ -512,8 +521,21 @@ private:
   Vector persistentVector;
 };
 
-Machine load_machine_from_json_string(const std::string& raw, std::optional<std::string> id = std::nullopt);
-std::vector<Machine> load_machines_from_directory(const std::string& directory);
+// Loader options — `strictSta=true` runs the Single Transition Assumption
+// analyzer (see reality/sta_checker.hpp) on the raw JSON before construction
+// and throws sta::StaViolationError when a machine tagged
+// `metadata.severity == "life-safety"` carries any intra-sequence HD>1
+// transition.  Non-life-safety machines are accepted regardless.  Default
+// strictSta=false preserves the historical permissive behaviour.
+struct LoadOptions {
+  bool strictSta = false;
+};
+
+Machine load_machine_from_json_string(const std::string& raw,
+                                      std::optional<std::string> id = std::nullopt,
+                                      const LoadOptions& opts = {});
+std::vector<Machine> load_machines_from_directory(const std::string& directory,
+                                                  const LoadOptions& opts = {});
 
 Json to_json(const RegionMapping& r);
 Json to_json(const PerceptualMapping& m);
@@ -526,6 +548,13 @@ Json to_json(const SimulationStep& step, bool includeMachineResults, bool includ
 Json to_json(const SourceConfig& source);
 Json worker_pool_metrics_json();
 Json to_json(const PagingDecision& d);
+
+bool is_allowed_bits_per_element(int bits);
+void validate_cell_range(const Vector& values, int bitsPerElement);
+std::vector<unsigned char> pack_cells(const Vector& values, int bitsPerElement);
+Vector unpack_cells(const std::vector<unsigned char>& bytes, size_t length, int bitsPerElement);
+std::string encode_packed_base64(const Vector& values, int bitsPerElement);
+StorageFootprint storage_footprint(size_t length, int bitsPerElement);
 
 // Resolve a paging contract for one fired output.  Walks
 // machine.metadata.triggerConfig.rules looking for a (sequenceId, values)

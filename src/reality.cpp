@@ -1,4 +1,5 @@
 #include "reality/reality.hpp"
+#include "reality/sta_checker.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -21,6 +22,11 @@
 #include <thread>
 
 namespace reality {
+
+namespace {
+constexpr char kBase64Alphabet[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+}
 
 long long now_ms() {
   using namespace std::chrono;
@@ -995,8 +1001,14 @@ static RegionMapping parse_region(const Json& j) {
   return {static_cast<int>(j.at("offset").as_number()), static_cast<int>(j.at("length").as_number())};
 }
 
-Machine load_machine_from_json_string(const std::string& raw, std::optional<std::string> overrideId) {
+Machine load_machine_from_json_string(const std::string& raw,
+                                      std::optional<std::string> overrideId,
+                                      const LoadOptions& opts) {
   Json root = json::parse(raw);
+  // STA strict-load gate — mirrors RealityEngine_AI's MachineLoader.loadFromJSON
+  // option of the same name.  Runs before any RealityVector is constructed so
+  // a violating life-safety machine cannot reach the engine.
+  if (opts.strictSta) sta::assert_sta_for_life_safety(root);
   const Json& m = root.at("machine");
   std::string id = overrideId.value_or(make_id("machine"));
   std::string name = m.at("name").as_string("unnamed");
@@ -1005,7 +1017,13 @@ Machine load_machine_from_json_string(const std::string& raw, std::optional<std:
   if (!m.at("arbiterRule").is_null()) arbiter = arbiter_from_string(m.at("arbiterRule").as_string("PASSTHROUGH"));
   std::optional<PerceptualMapping> mapping;
   const auto& pm = m.at("perceptualMapping");
-  if (pm.is_object()) mapping = PerceptualMapping{parse_region(pm.at("input")), parse_region(pm.at("output"))};
+  if (pm.is_object()) {
+    mapping = PerceptualMapping{parse_region(pm.at("input")), parse_region(pm.at("output")), std::nullopt};
+    if (pm.at("bitsPerElement").is_number()) {
+      int bits = static_cast<int>(pm.at("bitsPerElement").as_number());
+      if (is_allowed_bits_per_element(bits)) mapping->bitsPerElement = bits;
+    }
+  }
   Machine machine(name, desc, arbiter, mapping, id);
   if (m.at("matchAlgorithm").is_string()) machine.matchAlgorithm = comparator_from_string(m.at("matchAlgorithm").as_string());
   if (m.at("metadata").is_object()) machine.metadata = m.at("metadata").object();
@@ -1042,7 +1060,7 @@ Machine load_machine_from_json_string(const std::string& raw, std::optional<std:
   return machine;
 }
 
-std::vector<Machine> load_machines_from_directory(const std::string& directory) {
+std::vector<Machine> load_machines_from_directory(const std::string& directory, const LoadOptions& opts) {
   std::vector<Machine> out;
   namespace fs = std::filesystem;
   if (!fs::exists(directory)) return out;
@@ -1054,14 +1072,105 @@ std::vector<Machine> load_machines_from_directory(const std::string& directory) 
     std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::string stem = file.stem().string();
     std::transform(stem.begin(), stem.end(), stem.begin(), [](unsigned char c) { return std::isalnum(c) ? static_cast<char>(std::tolower(c)) : '-'; });
-    try { out.push_back(load_machine_from_json_string(raw, "machine-" + stem)); }
+    try { out.push_back(load_machine_from_json_string(raw, "machine-" + stem, opts)); }
     catch (const std::exception& e) { std::cerr << "Failed to load " << file << ": " << e.what() << "\n"; }
   }
   return out;
 }
 
 Json to_json(const RegionMapping& r) { return Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}}; }
-Json to_json(const PerceptualMapping& m) { return Json::Object{{"input", to_json(m.input)}, {"output", to_json(m.output)}}; }
+Json to_json(const PerceptualMapping& m) {
+  Json::Object out{{"input", to_json(m.input)}, {"output", to_json(m.output)}};
+  if (m.bitsPerElement) out["bitsPerElement"] = static_cast<double>(*m.bitsPerElement);
+  return out;
+}
+
+bool is_allowed_bits_per_element(int bits) {
+  return bits == 1 || bits == 2 || bits == 4 || bits == 8;
+}
+
+void validate_cell_range(const Vector& values, int bitsPerElement) {
+  if (!is_allowed_bits_per_element(bitsPerElement)) {
+    throw std::range_error("bitsPerElement must be one of 1, 2, 4, 8");
+  }
+  const int maxValue = (1 << bitsPerElement) - 1;
+  for (size_t i = 0; i < values.size(); ++i) {
+    double v = values[i];
+    if (!std::isfinite(v) || v < 0.0 || v > maxValue || std::floor(v) != v) {
+      std::ostringstream ss;
+      ss << "cell[" << i << "]=" << v << " does not fit in "
+         << bitsPerElement << "-bit cell (range 0.." << maxValue << ")";
+      throw std::range_error(ss.str());
+    }
+  }
+}
+
+std::vector<unsigned char> pack_cells(const Vector& values, int bitsPerElement) {
+  validate_cell_range(values, bitsPerElement);
+  std::vector<unsigned char> bytes((values.size() * static_cast<size_t>(bitsPerElement) + 7) / 8, 0);
+  if (bitsPerElement == 8) {
+    for (size_t i = 0; i < values.size(); ++i) bytes[i] = static_cast<unsigned char>(values[i]);
+    return bytes;
+  }
+  const unsigned int mask = static_cast<unsigned int>((1 << bitsPerElement) - 1);
+  for (size_t i = 0; i < values.size(); ++i) {
+    size_t bitIdx = i * static_cast<size_t>(bitsPerElement);
+    size_t byteIdx = bitIdx >> 3;
+    int shift = 8 - bitsPerElement - static_cast<int>(bitIdx & 7);
+    bytes[byteIdx] |= static_cast<unsigned char>((static_cast<unsigned int>(values[i]) & mask) << shift);
+  }
+  return bytes;
+}
+
+Vector unpack_cells(const std::vector<unsigned char>& bytes, size_t length, int bitsPerElement) {
+  if (!is_allowed_bits_per_element(bitsPerElement)) {
+    throw std::range_error("bitsPerElement must be one of 1, 2, 4, 8");
+  }
+  size_t required = (length * static_cast<size_t>(bitsPerElement) + 7) / 8;
+  if (bytes.size() < required) throw std::range_error("bytes too small for packed cell payload");
+  Vector out(length, 0.0);
+  if (bitsPerElement == 8) {
+    for (size_t i = 0; i < length; ++i) out[i] = bytes[i];
+    return out;
+  }
+  const unsigned int mask = static_cast<unsigned int>((1 << bitsPerElement) - 1);
+  for (size_t i = 0; i < length; ++i) {
+    size_t bitIdx = i * static_cast<size_t>(bitsPerElement);
+    size_t byteIdx = bitIdx >> 3;
+    int shift = 8 - bitsPerElement - static_cast<int>(bitIdx & 7);
+    out[i] = static_cast<double>((bytes[byteIdx] >> shift) & mask);
+  }
+  return out;
+}
+
+std::string encode_packed_base64(const Vector& values, int bitsPerElement) {
+  const auto bytes = pack_cells(values, bitsPerElement);
+  std::string out;
+  out.reserve(((bytes.size() + 2) / 3) * 4);
+  for (size_t i = 0; i < bytes.size(); i += 3) {
+    unsigned int b0 = bytes[i];
+    unsigned int b1 = (i + 1 < bytes.size()) ? bytes[i + 1] : 0;
+    unsigned int b2 = (i + 2 < bytes.size()) ? bytes[i + 2] : 0;
+    unsigned int triple = (b0 << 16) | (b1 << 8) | b2;
+    out.push_back(kBase64Alphabet[(triple >> 18) & 0x3F]);
+    out.push_back(kBase64Alphabet[(triple >> 12) & 0x3F]);
+    out.push_back(i + 1 < bytes.size() ? kBase64Alphabet[(triple >> 6) & 0x3F] : '=');
+    out.push_back(i + 2 < bytes.size() ? kBase64Alphabet[triple & 0x3F] : '=');
+  }
+  return out;
+}
+
+StorageFootprint storage_footprint(size_t length, int bitsPerElement) {
+  if (!is_allowed_bits_per_element(bitsPerElement)) {
+    throw std::range_error("bitsPerElement must be one of 1, 2, 4, 8");
+  }
+  StorageFootprint out;
+  out.float64Bytes = length * 8;
+  out.packedBytes = (length * static_cast<size_t>(bitsPerElement) + 7) / 8;
+  out.shrinkFactor = out.packedBytes == 0 ? 0.0 : static_cast<double>(out.float64Bytes) / static_cast<double>(out.packedBytes);
+  return out;
+}
+
 Json to_json(const OutputVector& o) {
   Json::Array prov;
   for (const auto& vid : o.provenance) prov.emplace_back(vid);

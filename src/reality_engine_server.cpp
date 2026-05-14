@@ -15,9 +15,9 @@ namespace {
 
 class RealityService {
 public:
-  RealityService(const std::string& machinesDir, int vectorDimension)
+  RealityService(const std::string& machinesDir, int vectorDimension, const LoadOptions& loadOpts = {})
       : dimension(vectorDimension), simulator(vectorDimension), preception(vectorDimension), machinesDirectory(machinesDir) {
-    for (const auto& m : load_machines_from_directory(machinesDir)) add_machine(m);
+    for (const auto& m : load_machines_from_directory(machinesDir, loadOpts)) add_machine(m);
   }
 
   void mount(http::Server& server) {
@@ -196,6 +196,9 @@ public:
         {"encoding", "dense-float64-clamped-0-1"},
         {"mappingVersion", static_cast<double>(simulator.mapping_version())}
       });
+    });
+    server.route("GET", "/api/runtime/storage-footprint", [this](const http::Request&) {
+      return ok(storage_footprint_json());
     });
     server.route("GET", "/api/runtime/options", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(simulatorMutex);
@@ -550,7 +553,12 @@ public:
         step = simulator.process_immediate(assembled, overrideType);
         preception.perceptual_space().set_vector(step.perceptualSpace);
       }
-      return ok(to_json(step, includeMachineResults, includePerceptualSpace));
+      Json out = to_json(step, includeMachineResults, includePerceptualSpace);
+      bool compact = body.at("compact").as_bool(false);
+      auto compactQuery = req.queryParams.find("compact");
+      if (compactQuery != req.queryParams.end()) compact = compactQuery->second == "true" || compactQuery->second == "1";
+      if (compact) add_packed_merge_values(out);
+      return ok(out);
     });
   }
 
@@ -612,6 +620,76 @@ private:
   static std::string collection_name() {
     const char* value = std::getenv("COLLECTION_NAME");
     return value ? value : "reality-vectors";
+  }
+
+  int bits_per_element_for_machine(const std::string& machineId) const {
+    std::shared_lock<std::shared_mutex> lock(registryMutex);
+    auto it = machines.find(machineId);
+    if (it == machines.end() || !it->second.perceptualMapping || !it->second.perceptualMapping->bitsPerElement) return 8;
+    int bits = *it->second.perceptualMapping->bitsPerElement;
+    return is_allowed_bits_per_element(bits) ? bits : 8;
+  }
+
+  Json storage_footprint_json() const {
+    Json::Array perMachine;
+    Json::Object widthHistogram{{"1", 0.0}, {"2", 0.0}, {"4", 0.0}, {"8", 0.0}};
+    size_t totalCells = 0;
+    size_t totalFloat64Bytes = 0;
+    size_t totalPackedBytes = 0;
+
+    std::shared_lock<std::shared_mutex> lock(registryMutex);
+    for (const auto& [id, machine] : machines) {
+      if (!machine.perceptualMapping) continue;
+      int bits = machine.perceptualMapping->bitsPerElement.value_or(8);
+      if (!is_allowed_bits_per_element(bits)) bits = 8;
+      const size_t cells = static_cast<size_t>(machine.perceptualMapping->input.length + machine.perceptualMapping->output.length);
+      auto footprint = storage_footprint(cells, bits);
+      totalCells += cells;
+      totalFloat64Bytes += footprint.float64Bytes;
+      totalPackedBytes += footprint.packedBytes;
+      widthHistogram[std::to_string(bits)] = widthHistogram[std::to_string(bits)].as_number() + 1.0;
+      perMachine.push_back(Json::Object{
+        {"machineId", id},
+        {"machineName", machine.name},
+        {"bitsPerElement", static_cast<double>(bits)},
+        {"inputCells", static_cast<double>(machine.perceptualMapping->input.length)},
+        {"outputCells", static_cast<double>(machine.perceptualMapping->output.length)},
+        {"float64Bytes", static_cast<double>(footprint.float64Bytes)},
+        {"packedBytes", static_cast<double>(footprint.packedBytes)},
+        {"shrinkFactor", footprint.shrinkFactor}
+      });
+    }
+
+    double shrink = totalPackedBytes == 0 ? 0.0 : static_cast<double>(totalFloat64Bytes) / static_cast<double>(totalPackedBytes);
+    return Json::Object{
+      {"machinesRegistered", static_cast<double>(machines.size())},
+      {"totalCells", static_cast<double>(totalCells)},
+      {"totalFloat64Bytes", static_cast<double>(totalFloat64Bytes)},
+      {"totalPackedBytes", static_cast<double>(totalPackedBytes)},
+      {"cumulativeShrinkFactor", shrink},
+      {"widthHistogram", widthHistogram},
+      {"perMachine", perMachine}
+    };
+  }
+
+  void add_packed_merge_values(Json& step) const {
+    Json& mergeBatch = step.object()["mergeBatch"];
+    if (!mergeBatch.is_array()) return;
+    for (auto& operation : mergeBatch.array()) {
+      if (!operation.is_object()) continue;
+      const int bits = bits_per_element_for_machine(operation.at("machineId").as_string());
+      const Vector values = json::to_numbers(operation.at("values"));
+      Json::Object packed{
+        {"bitsPerElement", static_cast<double>(bits)},
+        {"length", static_cast<double>(values.size())}
+      };
+      try {
+        packed["base64"] = encode_packed_base64(values, bits);
+      } catch (const std::exception& e) {
+        packed["error"] = e.what();
+      }
+      operation.object()["valuesPacked"] = packed;
+    }
   }
 
   void add_machine(const Machine& m) {
@@ -750,8 +828,12 @@ int main(int argc, char** argv) {
   int port = argc > 1 ? std::stoi(argv[1]) : 3299;
   std::string machinesDir = argc > 2 ? argv[2] : "examples/machines";
   int vectorDimension = argc > 3 ? std::stoi(argv[3]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 768);
+  // RE_STRICT_STA=1 opts the corpus into life-safety STA enforcement at load.
+  // Off by default to match the AI runtime's permissive production behaviour.
+  LoadOptions loadOpts;
+  if (const char* s = std::getenv("RE_STRICT_STA"); s && *s && std::string(s) != "0") loadOpts.strictSta = true;
   http::Server server;
-  RealityService service(machinesDir, vectorDimension);
+  RealityService service(machinesDir, vectorDimension, loadOpts);
   service.mount(server);
   server.listen(port);
   return 0;
