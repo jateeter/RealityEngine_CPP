@@ -14,7 +14,7 @@ static Machine make_rs_like_machine() {
   start.add_next_vector("terminal");
 
   RealityVector terminal({VectorElement{0.0, ComparatorType::Gte, 0.5}, VectorElement{1.0, ComparatorType::Gte, 0.5}}, false, "terminal");
-  terminal.add_output_vector({"out", {1.0, 0.0}, {{"description", "terminal fired"}}, now_ms()});
+  terminal.add_output_vector({"out", {1.0, 0.0}, {{"description", "terminal fired"}}, now_ms(), {}});
 
   seq.add_vector(start);
   seq.add_vector(terminal);
@@ -28,7 +28,7 @@ static Machine make_output_machine(const std::string& id, double outputValue) {
   CriticalEventSequence seq("Immediate output", "seq-" + id);
 
   RealityVector start({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, "start-" + id);
-  start.add_output_vector({"out-" + id, {outputValue}, {{"description", "merge policy output"}}, now_ms()});
+  start.add_output_vector({"out-" + id, {outputValue}, {{"description", "merge policy output"}}, now_ms(), {}});
 
   seq.add_vector(start);
   m.add_sequence(seq);

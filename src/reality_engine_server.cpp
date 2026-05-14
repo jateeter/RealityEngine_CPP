@@ -136,6 +136,58 @@ public:
       std::shared_lock<std::shared_mutex> lock(registryMutex);
       return ok(Json::Object{{"stats", stats()}, {"domainWorkerPool", worker_pool_metrics_json()}});
     });
+    server.route("GET", "/api/metrics", [this](const http::Request&) {
+      // CES coverage telemetry + runtime gauges, Prometheus text format.
+      // Metric names + labels match RealityEngine_AI's /api/metrics so one
+      // scrape config covers both targets.
+      std::string body;
+      {
+        std::shared_lock<std::shared_mutex> registryLock(registryMutex);
+        std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+        body = simulator.ces_coverage().to_prometheus_text(machines);
+        std::ostringstream extras;
+        extras << "# HELP re_runtime_dimension Current dimension of the shared perceptual space.\n";
+        extras << "# TYPE re_runtime_dimension gauge\n";
+        extras << "re_runtime_dimension{runtime=\"cpp\"} " << simulator.dimension() << "\n";
+        extras << "# HELP re_runtime_required_dimension Max(offset+length) across all registered machine mappings.\n";
+        extras << "# TYPE re_runtime_required_dimension gauge\n";
+        extras << "re_runtime_required_dimension{runtime=\"cpp\"} " << simulator.required_dimension() << "\n";
+        extras << "# HELP re_runtime_mapping_version Monotonic version bumped on every add/remove_machine.\n";
+        extras << "# TYPE re_runtime_mapping_version gauge\n";
+        extras << "re_runtime_mapping_version{runtime=\"cpp\"} " << simulator.mapping_version() << "\n";
+        body += extras.str();
+      }
+      http::Response r;
+      r.status = 200;
+      r.body = body;
+      r.contentType = "text/plain; version=0.0.4; charset=utf-8";
+      return r;
+    });
+    // Governance / paging contract resolver — identical wire shape to the
+    // AI runtime.  Single source of truth for on-call routing.
+    server.route("GET", "/api/governance/route", [this](const http::Request& req) {
+      auto mid = req.queryParams.find("machineId");
+      auto sid = req.queryParams.find("sequenceId");
+      auto vQ  = req.queryParams.find("values");
+      if (mid == req.queryParams.end() || sid == req.queryParams.end() || vQ == req.queryParams.end()) {
+        return http::error_response("machineId, sequenceId, and values query parameters are required", 400);
+      }
+      std::vector<double> values;
+      std::stringstream ss(vQ->second);
+      std::string tok;
+      while (std::getline(ss, tok, ',')) {
+        try { values.push_back(std::stod(tok)); } catch (...) { /* skip */ }
+      }
+      std::shared_lock<std::shared_mutex> lock(registryMutex);
+      auto it = machines.find(mid->second);
+      if (it == machines.end()) return http::error_response("Machine not found: " + mid->second, 404);
+      auto decision = resolve_governance(it->second, sid->second, values);
+      if (!decision) {
+        return http::error_response(
+          "No triggerConfig rule matches (sequenceId=" + sid->second + ", values=" + vQ->second + ")", 404);
+      }
+      return ok(Json::Object{{"success", true}, {"decision", to_json(*decision)}});
+    });
     server.route("GET", "/api/runtime/vector-space", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(simulatorMutex);
       return ok(Json::Object{
@@ -543,7 +595,7 @@ private:
     for (const auto& output : body.at("outputVectors").is_array() ? body.at("outputVectors").array() : Json::Array{}) {
       std::map<std::string, Json> metadata;
       if (output.at("metadata").is_object()) metadata = output.at("metadata").object();
-      vector.add_output_vector({output.at("id").as_string(make_id("output")), json::to_numbers(output.at("vector")), metadata, now_ms()});
+      vector.add_output_vector({output.at("id").as_string(make_id("output")), json::to_numbers(output.at("vector")), metadata, now_ms(), {}});
     }
     return vector;
   }

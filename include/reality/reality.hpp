@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -59,6 +60,12 @@ struct OutputVector {
   Vector vector;
   std::map<std::string, Json> metadata;
   long long timestamp = 0;
+  // Ordered vector IDs whose matches led to this output — populated by the
+  // engine, not the source JSON.  Mirrors `OutputVector.provenance` in the
+  // TypeScript runtime so listeners get the same evidence chain on both
+  // sides.  Empty when the asserter was an isInitial vector emitting on
+  // first match (chain is just [vector.id]).
+  std::vector<std::string> provenance;
 };
 
 struct SequenceResult {
@@ -94,8 +101,15 @@ public:
   RealityVector(std::vector<VectorElement> elems, bool initial, std::string vectorId = make_id("vector"));
 
   bool is_active() const;
-  void set_active();
+  // Activate with an optional predecessor chain so downstream outputs can
+  // carry the full evidence trail.  Empty chain = activated as an initial
+  // vector (provenance starts at this.id).
+  void set_active(const std::vector<std::string>& predecessorChain = {});
   void clear_active();
+  // Full ordered chain that would justify this vector's next emitted output:
+  // predecessorChain + [this.id].  Used by CriticalEventSequence to thread
+  // provenance into successor activations.
+  std::vector<std::string> provenance_chain() const;
   bool was_just_matched() const;
   void set_was_just_matched();
   void clear_was_just_matched();
@@ -109,6 +123,10 @@ public:
     std::vector<std::string> nextVectorIds;
     std::vector<OutputVector> outputVectors;
     MatchResult matchResult;
+    // Full evidence chain through this match — predecessor chain + this.id.
+    // Forwarded by CriticalEventSequence::transition to every successor it
+    // activates so the chain extends until the terminal output fires.
+    std::vector<std::string> provenanceChain;
   };
   Transition transition(const Vector& input, std::optional<ComparatorType> overrideType = std::nullopt);
   Json to_json() const;
@@ -118,6 +136,7 @@ private:
   std::vector<std::string> nextVectorIds;
   std::vector<OutputVector> outputVectors;
   bool justMatched = false;
+  std::vector<std::string> predecessorChain;
 };
 
 class CriticalEventSequence {
@@ -125,6 +144,16 @@ public:
   std::string id;
   std::string name;
   std::map<std::string, Json> metadata;
+  // Lifecycle metadata — schemaVersion/deprecatedAt/replacedBy mirror the
+  // AI runtime fields parsed by MachineLoader from the top level of the
+  // sequence JSON.  Listeners read deprecatedAt to surface stale CESs.
+  std::string schemaVersion;
+  std::string deprecatedAt;
+  std::string replacedBy;
+
+  bool is_deprecated() const { return !deprecatedAt.empty(); }
+  // Days elapsed since the sequence was deprecated (0 when not set or unparseable).
+  long days_since_deprecation() const;
 
   explicit CriticalEventSequence(std::string sequenceName = "unnamed", std::string sequenceId = make_id("sequence"));
   void add_vector(const RealityVector& vector);
@@ -234,12 +263,67 @@ struct ActiveRegion {
   std::string type;
 };
 
+// Paging decision resolved by the governance contract — owner team, SLA,
+// runbook URL, escalation policy — derived from the machine's metadata.
+// Mirrors PagingDecision in src/services/GovernanceResolver.ts so the wire
+// shape is byte-identical across runtimes.  `processStatus`, `ragStatusCode`,
+// `escalationPolicy`, and `runbook` may be empty when the source machine
+// hasn't declared the field; consumers should treat empty as "not set".
+struct PagingDecision {
+  std::string machineId;
+  std::string machineName;
+  std::string sequenceId;
+  std::string ragStatusCode;      // "GREEN" | "AMBER" | "RED" | ""
+  std::string processStatus;      // "ok" | "info" | "warning" | "error" | ""
+  std::string ownerTeam;
+  std::optional<int> slaSeconds;
+  std::string runbook;
+  std::string escalationPolicy;
+  std::string contactPrimary;
+  std::string contactSecondary;
+  std::string description;
+  std::string source;             // "rule-with-override" | "rule-only" | "machine-fallback"
+  bool hasMachineGovernance = false;
+};
+
+struct DeprecationMark {
+  std::string since;        // deprecatedAt
+  std::string replacedBy;
+  long ageDays = 0;
+};
+
 struct MergeOperation {
   RegionMapping region;
   std::string machineId;
   std::string sequenceId;
   size_t outputIndex = 0;
   Vector values;
+  // Same field as MergeOperation.provenance in the AI runtime — emitted in
+  // mergeBatch JSON so listeners can render the evidence chain alongside
+  // the asserted output.
+  std::vector<std::string> provenance;
+  // Resolved paging contract.  std::nullopt when the fired output is not
+  // covered by a triggerConfig rule — paging is opt-in per (sequenceId, values).
+  std::optional<PagingDecision> governance;
+  // Populated when the firing sequence carries deprecatedAt — listeners and
+  // dashboards use this to surface stale CESs without re-deriving from JSON.
+  std::optional<DeprecationMark> deprecation;
+};
+
+// Secondary write triggered by a primary merge — emitted when a fired
+// (machineId, sequenceId) matches a subscription declared by another
+// machine via metadata.compose.subscriptions[*].  Latches 1.0 at the
+// subscriber's bit offset so the next step's snapshot sees the producer's
+// "fired" signal as an input bit.  Lets meta-CES domain workflows run as
+// ordinary CESs over an event-bus region of perceptual space.  Mirrors
+// EventBusWrite in src/engine/PerceptualSpaceSimulator.ts.
+struct EventBusWrite {
+  std::string producerMachineId;
+  std::string producerSequenceId;
+  std::string subscriberMachineId;
+  int bitOffset = 0;
+  double value = 1.0;
+  std::vector<std::string> provenance;
 };
 
 struct MachineStepResult {
@@ -259,6 +343,9 @@ struct SimulationStep {
   std::map<std::string, MachineStepResult> machineResults;
   std::vector<ActiveRegion> activeRegions;
   std::vector<MergeOperation> mergeBatch;
+  // Empty when no subscriptions are active.  Same wire shape as the AI
+  // runtime's step.eventBus so cross-runtime parity covers composition too.
+  std::vector<EventBusWrite> eventBus;
 };
 
 struct WorkerPoolMetrics {
@@ -268,6 +355,41 @@ struct WorkerPoolMetrics {
   size_t completed = 0;
   size_t rejected = 0;
   size_t capacity = 0;
+};
+
+// CES coverage telemetry — matched/activated/output counters keyed by
+// (machineId, sequenceId, vectorId).  Mirrors src/services/CesCoverageRegistry.ts
+// in the AI runtime so the /metrics endpoints in both engines share the same
+// metric names, label sets, and unfired-* gauge derivations.
+class CesCoverageRegistry {
+public:
+  void record(const Machine& machine, const MachineTransitionResult& result);
+  // Bump the paging-decisions counter.  Called by the simulator whenever
+  // a mergeBatch entry carries a resolved governance contract.
+  void record_paging_decision(const std::string& ownerTeam,
+                              const std::string& processStatus,
+                              const std::string& ragStatusCode,
+                              const std::string& machineId);
+  // Bump the deprecated-fires counter — emitted as ces_deprecated_fires_total.
+  void record_deprecated_fire(const std::string& machineId,
+                              const std::string& machineName,
+                              const std::string& sequenceId,
+                              const std::string& replacedBy);
+  void reset();
+  // Render Prometheus text-format exposition.  Caller passes every registered
+  // machine so we can derive the unfired-* gauges from the corpus, not just
+  // the counters we've seen.
+  std::string to_prometheus_text(const std::map<std::string, Machine>& machines) const;
+
+private:
+  // Tab-separated keys to keep a single std::map alloc instead of nested maps.
+  std::map<std::string, long long> matched;          // mid \t mname \t sid \t vid
+  std::map<std::string, long long> activated;        // mid \t mname \t sid \t vid
+  std::map<std::string, long long> outputs;          // mid \t mname \t sid
+  std::map<std::string, long long> steps;            // mid \t mname
+  std::map<std::string, long long> pagingDecisions;  // team \t pstatus \t rag \t mid
+  std::map<std::string, long long> deprecatedFires;  // mid \t mname \t sid \t replacedBy
+  long long startedAtMs = now_ms();
 };
 
 class PerceptualSpaceSimulator {
@@ -282,6 +404,12 @@ public:
   // dimension or the set of mappings. External clients can cache shape
   // assumptions keyed by this value.
   long mapping_version() const;
+  // Coverage telemetry accumulated across every process_immediate / step call.
+  CesCoverageRegistry& ces_coverage();
+  const CesCoverageRegistry& ces_coverage() const;
+  // Number of declared (subscriberMachine, producerMachineId, producerSequenceId)
+  // subscriptions, summed across all registered meta-machines.
+  size_t event_bus_subscription_count() const;
   void add_machine(const Machine& machine);
   bool remove_machine(const std::string& machineId);
   void configure(std::vector<Vector> inputSequence, RegionMapping inputRegion, long stepDelayMs, std::optional<int> maxSteps = std::nullopt);
@@ -316,6 +444,23 @@ private:
   bool running = false;
   bool configured = false;
   long mappingVersion = 0;
+  CesCoverageRegistry coverage;
+  struct ComposeSubscription {
+    std::string subscriberMachineId;
+    int bitOffset = 0;
+    std::string producerMachineId;
+    std::string producerSequenceId;
+  };
+  // Keyed by `producerMachineId|producerSequenceId`.  Maps producer-fired
+  // events to the list of subscribers that want a bit latched.
+  std::map<std::string, std::vector<ComposeSubscription>> eventBusSubscriptions;
+  // Bits that have fired at least once since reset.  Re-applied at the
+  // top of every process_immediate call so a caller-provided input vector
+  // (which zero-fills past its length) doesn't clobber persistent
+  // workflow milestones.  Same semantic as latchedEventBits in the AI
+  // PerceptualSpaceSimulator.
+  std::set<int> latchedEventBits;
+  std::vector<EventBusWrite> apply_event_bus(const std::vector<MergeOperation>& mergeBatch);
 };
 
 struct SourceConfig {
@@ -380,5 +525,14 @@ Json to_json(const SimulationStep& step, bool includeMachineResults);
 Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace);
 Json to_json(const SourceConfig& source);
 Json worker_pool_metrics_json();
+Json to_json(const PagingDecision& d);
+
+// Resolve a paging contract for one fired output.  Walks
+// machine.metadata.triggerConfig.rules looking for a (sequenceId, values)
+// match, then merges in metadata.governance defaults.  Returns std::nullopt
+// when no rule matches.  Same precedence as the AI runtime:
+//   rule.governance.<field>  →  machine.metadata.governance.<field>  →  null.
+std::optional<PagingDecision> resolve_governance(
+    const Machine& machine, const std::string& sequenceId, const std::vector<double>& values);
 
 } // namespace reality
