@@ -144,7 +144,9 @@ public:
       {
         std::shared_lock<std::shared_mutex> registryLock(registryMutex);
         std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
-        body = simulator.ces_coverage().to_prometheus_text(machines);
+        // Stamp every line with runtime="cpp" so a single Prometheus scrape
+        // config can drive a cross-runtime Grafana dashboard.
+        body = simulator.ces_coverage().to_prometheus_text(machines, {{"runtime", "cpp"}});
         std::ostringstream extras;
         extras << "# HELP re_runtime_dimension Current dimension of the shared perceptual space.\n";
         extras << "# TYPE re_runtime_dimension gauge\n";

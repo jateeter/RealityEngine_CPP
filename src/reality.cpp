@@ -1290,11 +1290,24 @@ std::string prom_escape(const std::string& s) {
   return out;
 }
 
-std::string prom_labels(std::initializer_list<std::pair<const char*, std::string>> pairs) {
+// Variant that accepts an arbitrary number of label pairs.  Used by the
+// /api/metrics emitter to prepend baseLabels (e.g. runtime="cpp") onto
+// every metric line without duplicating the call sites for the base case.
+std::string prom_labels_v(const std::vector<std::pair<std::string, std::string>>& base,
+                          std::initializer_list<std::pair<const char*, std::string>> extras) {
   std::string out;
+  if (base.empty() && extras.size() == 0) return out;
   out += "{";
   bool first = true;
-  for (const auto& [k, v] : pairs) {
+  for (const auto& [k, v] : base) {
+    if (!first) out += ",";
+    first = false;
+    out += k;
+    out += "=\"";
+    out += prom_escape(v);
+    out += "\"";
+  }
+  for (const auto& [k, v] : extras) {
     if (!first) out += ",";
     first = false;
     out += k;
@@ -1358,7 +1371,9 @@ void CesCoverageRegistry::reset() {
   startedAtMs = now_ms();
 }
 
-std::string CesCoverageRegistry::to_prometheus_text(const std::map<std::string, Machine>& machines) const {
+std::string CesCoverageRegistry::to_prometheus_text(
+    const std::map<std::string, Machine>& machines,
+    const std::vector<std::pair<std::string, std::string>>& baseLabels) const {
   std::ostringstream out;
   size_t totalSequences = 0, totalVectors = 0;
   for (const auto& [_, m] : machines) {
@@ -1368,17 +1383,22 @@ std::string CesCoverageRegistry::to_prometheus_text(const std::map<std::string, 
     }
   }
 
+  // bl() renders only the base labels (used for the unlabelled gauges so
+  // they still carry the runtime tag).  An empty baseLabels produces an
+  // empty string, preserving the historical `ces_machines_total N` form.
+  auto bl = [&]() -> std::string { return prom_labels_v(baseLabels, {}); };
+
   out << "# HELP ces_machines_total Number of machines registered with the simulator.\n";
   out << "# TYPE ces_machines_total gauge\n";
-  out << "ces_machines_total " << machines.size() << "\n";
+  out << "ces_machines_total" << bl() << " " << machines.size() << "\n";
 
   out << "# HELP ces_sequences_total Number of sequences across all registered machines.\n";
   out << "# TYPE ces_sequences_total gauge\n";
-  out << "ces_sequences_total " << totalSequences << "\n";
+  out << "ces_sequences_total" << bl() << " " << totalSequences << "\n";
 
   out << "# HELP ces_vectors_total Number of event vectors across all registered machines.\n";
   out << "# TYPE ces_vectors_total gauge\n";
-  out << "ces_vectors_total " << totalVectors << "\n";
+  out << "ces_vectors_total" << bl() << " " << totalVectors << "\n";
 
   out << "# HELP ces_vector_matched_total Number of times a vector matched its input during a transition phase.\n";
   out << "# TYPE ces_vector_matched_total counter\n";
@@ -1386,7 +1406,7 @@ std::string CesCoverageRegistry::to_prometheus_text(const std::map<std::string, 
     auto parts = split_key(k);
     if (parts.size() == 4) {
       out << "ces_vector_matched_total"
-          << prom_labels({{"machine", parts[1]}, {"machine_id", parts[0]}, {"sequence", parts[2]}, {"vector", parts[3]}})
+          << prom_labels_v(baseLabels, {{"machine", parts[1]}, {"machine_id", parts[0]}, {"sequence", parts[2]}, {"vector", parts[3]}})
           << " " << count << "\n";
     }
   }
@@ -1397,7 +1417,7 @@ std::string CesCoverageRegistry::to_prometheus_text(const std::map<std::string, 
     auto parts = split_key(k);
     if (parts.size() == 4) {
       out << "ces_vector_activated_total"
-          << prom_labels({{"machine", parts[1]}, {"machine_id", parts[0]}, {"sequence", parts[2]}, {"vector", parts[3]}})
+          << prom_labels_v(baseLabels, {{"machine", parts[1]}, {"machine_id", parts[0]}, {"sequence", parts[2]}, {"vector", parts[3]}})
           << " " << count << "\n";
     }
   }
@@ -1408,7 +1428,7 @@ std::string CesCoverageRegistry::to_prometheus_text(const std::map<std::string, 
     auto parts = split_key(k);
     if (parts.size() == 3) {
       out << "ces_sequence_outputs_total"
-          << prom_labels({{"machine", parts[1]}, {"machine_id", parts[0]}, {"sequence", parts[2]}})
+          << prom_labels_v(baseLabels, {{"machine", parts[1]}, {"machine_id", parts[0]}, {"sequence", parts[2]}})
           << " " << count << "\n";
     }
   }
@@ -1419,7 +1439,7 @@ std::string CesCoverageRegistry::to_prometheus_text(const std::map<std::string, 
     auto parts = split_key(k);
     if (parts.size() == 2) {
       out << "ces_machine_steps_total"
-          << prom_labels({{"machine", parts[1]}, {"machine_id", parts[0]}})
+          << prom_labels_v(baseLabels, {{"machine", parts[1]}, {"machine_id", parts[0]}})
           << " " << count << "\n";
     }
   }
@@ -1432,7 +1452,7 @@ std::string CesCoverageRegistry::to_prometheus_text(const std::map<std::string, 
     auto parts = split_key(k);
     if (parts.size() == 4) {
       out << "ces_paging_decisions_total"
-          << prom_labels({
+          << prom_labels_v(baseLabels, {
             {"owner_team",      parts[0]},
             {"process_status",  parts[1]},
             {"rag_status_code", parts[2]},
@@ -1450,7 +1470,7 @@ std::string CesCoverageRegistry::to_prometheus_text(const std::map<std::string, 
     auto parts = split_key(k);
     if (parts.size() == 4) {
       out << "ces_deprecated_fires_total"
-          << prom_labels({
+          << prom_labels_v(baseLabels, {
             {"machine",     parts[1]},
             {"machine_id",  parts[0]},
             {"sequence",    parts[2]},
@@ -1469,7 +1489,7 @@ std::string CesCoverageRegistry::to_prometheus_text(const std::map<std::string, 
       ++total;
       if (outputs.count(m.id + "\t" + m.name + "\t" + seq.id) > 0) ++fired;
     }
-    out << "ces_unfired_sequences" << prom_labels({{"machine", m.name}, {"machine_id", m.id}})
+    out << "ces_unfired_sequences" << prom_labels_v(baseLabels, {{"machine", m.name}, {"machine_id", m.id}})
         << " " << (total - fired) << "\n";
   }
 
@@ -1484,28 +1504,28 @@ std::string CesCoverageRegistry::to_prometheus_text(const std::map<std::string, 
         if (matched.count(key) > 0 || activated.count(key) > 0) ++fired;
       }
     }
-    out << "ces_unfired_vectors" << prom_labels({{"machine", m.name}, {"machine_id", m.id}})
+    out << "ces_unfired_vectors" << prom_labels_v(baseLabels, {{"machine", m.name}, {"machine_id", m.id}})
         << " " << (total - fired) << "\n";
   }
 
   out << "# HELP ces_machine_sequence_count Total sequences declared by this machine.\n";
   out << "# TYPE ces_machine_sequence_count gauge\n";
   for (const auto& [_, m] : machines) {
-    out << "ces_machine_sequence_count" << prom_labels({{"machine", m.name}, {"machine_id", m.id}})
+    out << "ces_machine_sequence_count" << prom_labels_v(baseLabels, {{"machine", m.name}, {"machine_id", m.id}})
         << " " << m.sequence_count() << "\n";
   }
 
   out << "# HELP ces_machine_vector_count Total vectors declared by this machine.\n";
   out << "# TYPE ces_machine_vector_count gauge\n";
   for (const auto& [_, m] : machines) {
-    out << "ces_machine_vector_count" << prom_labels({{"machine", m.name}, {"machine_id", m.id}})
+    out << "ces_machine_vector_count" << prom_labels_v(baseLabels, {{"machine", m.name}, {"machine_id", m.id}})
         << " " << m.total_vector_count() << "\n";
   }
 
   long long uptimeMs = now_ms() - startedAtMs;
   out << "# HELP ces_registry_uptime_seconds Seconds since the coverage registry was instantiated.\n";
   out << "# TYPE ces_registry_uptime_seconds gauge\n";
-  out << "ces_registry_uptime_seconds " << (uptimeMs / 1000.0) << "\n";
+  out << "ces_registry_uptime_seconds" << bl() << " " << (uptimeMs / 1000.0) << "\n";
 
   return out.str();
 }

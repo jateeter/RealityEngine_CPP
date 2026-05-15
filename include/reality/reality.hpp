@@ -387,8 +387,11 @@ public:
   void reset();
   // Render Prometheus text-format exposition.  Caller passes every registered
   // machine so we can derive the unfired-* gauges from the corpus, not just
-  // the counters we've seen.
-  std::string to_prometheus_text(const std::map<std::string, Machine>& machines) const;
+  // the counters we've seen.  `baseLabels` is stamped onto every metric line
+  // (used to attach a runtime="cpp" identifier so a single Prometheus scrape
+  // config can drive a cross-runtime Grafana dashboard).
+  std::string to_prometheus_text(const std::map<std::string, Machine>& machines,
+                                 const std::vector<std::pair<std::string, std::string>>& baseLabels = {}) const;
 
 private:
   // Tab-separated keys to keep a single std::map alloc instead of nested maps.
