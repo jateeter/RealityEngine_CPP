@@ -107,8 +107,14 @@ public:
     std::vector<std::string> captures;  // values of + and # wildcards (in order)
   };
   // Find the first rule whose topicFilter matches `topic`.  Returns nullopt
-  // when no rule matches.  First-match semantics (rules are tried in order).
+  // when no rule matches.  Kept for callers that want to short-circuit; the
+  // bridge dispatches via match_all so a single PUBLISH fans out to every
+  // rule that shares a filter (e.g. five JSON-pointer extractions from one
+  // multi-field sensor payload).
   std::optional<Match> match(const std::string& topic) const;
+  // Find every rule whose topicFilter matches `topic`, in declaration order.
+  // Empty when no rule matches.
+  std::vector<Match> match_all(const std::string& topic) const;
 
   // Substitute capture groups into the sensorIdTemplate.  When the template
   // is empty, returns the topic itself.  {1}, {2}, ... are 1-indexed.

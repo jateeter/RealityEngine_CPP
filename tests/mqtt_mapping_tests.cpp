@@ -283,6 +283,45 @@ void test_no_overlap_clean() {
 
 // ── End-to-end via the in-process dispatcher ───────────────────────────────
 
+// Fan-out: a single message on a topic shared by N rules should drive all N.
+// Important because typical sensor payloads carry many fields under one topic,
+// each extracted by its own json-pointer rule.
+void test_match_all_fan_out() {
+  auto reg = registry_from_string(R"({"mappings":[
+    {"id":"temp","topicFilter":"s/x/v1","region":{"offset":0,"length":1},
+     "extract":{"type":"json","pointer":"/t"},
+     "normalize":{"mode":"passthrough","clamp":false}},
+    {"id":"humid","topicFilter":"s/x/v1","region":{"offset":1,"length":1},
+     "extract":{"type":"json","pointer":"/h"},
+     "normalize":{"mode":"passthrough","clamp":false}},
+    {"id":"other","topicFilter":"s/y/v1","region":{"offset":2,"length":1},
+     "extract":{"type":"csv-float"}}
+  ]})");
+  auto all = reg.match_all("s/x/v1");
+  EXPECT(all.size() == 2, "match_all returns every matching rule");
+  if (all.size() == 2) {
+    EXPECT(all[0].ruleIndex == 0 && all[1].ruleIndex == 1,
+           "match_all preserves declaration order");
+  }
+  EXPECT(reg.match_all("s/y/v1").size() == 1, "match_all excludes non-matching filters");
+  EXPECT(reg.match_all("nothing").empty(), "match_all returns empty for no match");
+
+  // Drive the bridge with a single payload; both x-rules should ingest.
+  auto registryPtr = std::make_unique<mq::MappingRegistry>(reg);
+  int ingestCount = 0;
+  std::vector<std::string> sensors;
+  mq::ClientConfig cfg; cfg.brokerHost = "127.0.0.1"; cfg.brokerPort = 1;
+  mq::MqttBridge bridge(cfg, std::move(registryPtr),
+    [&](const std::string& sid, int, int, const reality::Vector&, long,
+        const std::string&, const std::string&) {
+      ingestCount++; sensors.push_back(sid);
+    },
+    []() {});
+  bridge.inject_message("s/x/v1", {'{','"','t','"',':','0',',','"','h','"',':','1','}'});
+  EXPECT(ingestCount == 2, "one PUBLISH → two ingests under fan-out");
+  EXPECT(bridge.stats().messagesMapped == 2, "bridge counts both fan-out mappings");
+}
+
 void test_bridge_in_process_dispatch() {
   // The bridge talks to a real broker via MqttClient; for unit testing we
   // use the inject_message() entry point to drive the full extract → normalize
@@ -400,6 +439,7 @@ int main() {
   test_topic_filter_plus_wildcard();
   test_topic_filter_hash_wildcard();
   test_topic_filter_first_match_wins();
+  test_match_all_fan_out();
   test_sensor_id_template();
   test_sensor_id_template_empty();
   test_extract_csv_single();

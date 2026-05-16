@@ -186,41 +186,62 @@ MappingRegistry MappingRegistry::from_file(const std::string& path) {
 
 // ── Topic-filter matching (MQTT v3.1.1 §4.7) ────────────────────────────────
 
+namespace {
+// Shared topic-filter match logic — returns true + captures when `filter`
+// matches `topic`, false otherwise.  Used by both match() and match_all().
+bool match_one(const std::vector<std::string>& topicLevels,
+               const std::vector<std::string>& filterLevels,
+               std::vector<std::string>& captures) {
+  captures.clear();
+  size_t fi = 0, ti = 0;
+  for (; fi < filterLevels.size(); ++fi) {
+    const auto& f = filterLevels[fi];
+    if (f == "#") {
+      std::string tail;
+      for (size_t k = ti; k < topicLevels.size(); ++k) {
+        if (k > ti) tail += "/";
+        tail += topicLevels[k];
+      }
+      captures.push_back(tail);
+      ti = filterLevels.size();
+      ++fi;
+      return fi == filterLevels.size();
+    }
+    if (ti >= topicLevels.size()) return false;
+    if (f == "+") {
+      captures.push_back(topicLevels[ti]);
+    } else if (f != topicLevels[ti]) {
+      return false;
+    }
+    ++ti;
+  }
+  return fi == filterLevels.size() && ti == topicLevels.size();
+}
+}  // namespace
+
 std::optional<MappingRegistry::Match> MappingRegistry::match(const std::string& topic) const {
   auto topicLevels = split_topic(topic);
   for (size_t i = 0; i < rules_.size(); ++i) {
-    const auto& rule = rules_[i];
-    auto filterLevels = split_topic(rule.topicFilter);
+    auto filterLevels = split_topic(rules_[i].topicFilter);
     Match m;
     m.ruleIndex = i;
-    bool ok = true;
-    size_t fi = 0, ti = 0;
-    for (; fi < filterLevels.size(); ++fi) {
-      const auto& f = filterLevels[fi];
-      if (f == "#") {
-        // Multi-level wildcard absorbs the rest of the topic — capture the
-        // tail (slash-rejoined) so the template can reference it as {N}.
-        std::string tail;
-        for (size_t k = ti; k < topicLevels.size(); ++k) {
-          if (k > ti) tail += "/";
-          tail += topicLevels[k];
-        }
-        m.captures.push_back(tail);
-        ti = topicLevels.size();
-        ++fi;
-        break;
-      }
-      if (ti >= topicLevels.size()) { ok = false; break; }
-      if (f == "+") {
-        m.captures.push_back(topicLevels[ti]);
-      } else if (f != topicLevels[ti]) {
-        ok = false; break;
-      }
-      ++ti;
-    }
-    if (ok && fi == filterLevels.size() && ti == topicLevels.size()) return m;
+    if (match_one(topicLevels, filterLevels, m.captures)) return m;
   }
   return std::nullopt;
+}
+
+std::vector<MappingRegistry::Match> MappingRegistry::match_all(const std::string& topic) const {
+  std::vector<Match> out;
+  auto topicLevels = split_topic(topic);
+  for (size_t i = 0; i < rules_.size(); ++i) {
+    auto filterLevels = split_topic(rules_[i].topicFilter);
+    Match m;
+    m.ruleIndex = i;
+    if (match_one(topicLevels, filterLevels, m.captures)) {
+      out.push_back(std::move(m));
+    }
+  }
+  return out;
 }
 
 // ── Sensor-ID template substitution ─────────────────────────────────────────

@@ -125,49 +125,60 @@ void MqttBridge::on_message(const std::string& topic, const std::vector<uint8_t>
     std::lock_guard<std::mutex> lock(statsMutex_);
     ++stats_.messagesReceived;
   }
-  auto match = registry_->match(topic);
-  if (!match) {
+  // Fan out to every rule whose topicFilter matches.  A single PUBLISH on
+  // a multi-field sensor topic often drives many mappings (one per
+  // JSON-pointer extraction), so we dispatch each rule independently.
+  auto matches = registry_->match_all(topic);
+  if (matches.empty()) {
     std::lock_guard<std::mutex> lock(statsMutex_);
     ++stats_.messagesUnmatched;
     return;
   }
-  auto& rule = registry_->rules()[match->ruleIndex];
-  auto& metrics = registry_->metrics(match->ruleIndex);
-  metrics.received.fetch_add(1);
-  metrics.lastMessageAtMs.store(now_ms());
 
-  auto decoded = registry_->decode(rule, payload);
-  if (!decoded.valid) {
-    note_error(metrics, topic, decoded.error);
-    std::lock_guard<std::mutex> lock(statsMutex_);
-    ++stats_.messagesRejected;
-    return;
-  }
-  std::string sensorId = registry_->resolve_sensor_id(rule, topic, match->captures);
-  if (ingest_) {
-    ingest_(sensorId, rule.offset, rule.length, decoded.values, rule.ttlMs, topic, rule.id);
-  }
-  metrics.mapped.fetch_add(1);
-  {
-    std::lock_guard<std::mutex> lock(statsMutex_);
-    ++stats_.messagesMapped;
+  bool anyImmediate = false;
+  long minDebounce = -1;
+
+  for (const auto& match : matches) {
+    auto& rule = registry_->rules()[match.ruleIndex];
+    auto& metrics = registry_->metrics(match.ruleIndex);
+    metrics.received.fetch_add(1);
+    metrics.lastMessageAtMs.store(now_ms());
+
+    auto decoded = registry_->decode(rule, payload);
+    if (!decoded.valid) {
+      note_error(metrics, topic, decoded.error);
+      std::lock_guard<std::mutex> lock(statsMutex_);
+      ++stats_.messagesRejected;
+      continue;
+    }
+    std::string sensorId = registry_->resolve_sensor_id(rule, topic, match.captures);
+    if (ingest_) {
+      ingest_(sensorId, rule.offset, rule.length, decoded.values, rule.ttlMs, topic, rule.id);
+    }
+    metrics.mapped.fetch_add(1);
+    {
+      std::lock_guard<std::mutex> lock(statsMutex_);
+      ++stats_.messagesMapped;
+    }
+
+    switch (rule.pushMode) {
+      case PushMode::Immediate: anyImmediate = true; break;
+      case PushMode::Debounced:
+        if (minDebounce < 0 || rule.debounceMs < minDebounce) minDebounce = rule.debounceMs;
+        break;
+      case PushMode::Manual: break;
+    }
   }
 
-  // Push policy.  Immediate fires synchronously; Debounced schedules a
-  // wakeup; Manual does nothing — caller must POST /api/push.
-  switch (rule.pushMode) {
-    case PushMode::Immediate:
-      if (pushTrigger_) pushTrigger_();
-      {
-        std::lock_guard<std::mutex> lock(statsMutex_);
-        ++stats_.pushesTriggered;
-      }
-      break;
-    case PushMode::Debounced:
-      schedule_push(rule.debounceMs);
-      break;
-    case PushMode::Manual:
-      break;
+  // Push policy across a fan-out: Immediate wins over Debounced (fires
+  // synchronously once for the whole fan-out, not N times).  Debounced
+  // schedules a single wakeup using the smallest declared debounce window.
+  if (anyImmediate) {
+    if (pushTrigger_) pushTrigger_();
+    std::lock_guard<std::mutex> lock(statsMutex_);
+    ++stats_.pushesTriggered;
+  } else if (minDebounce >= 0) {
+    schedule_push(minDebounce);
   }
 }
 
