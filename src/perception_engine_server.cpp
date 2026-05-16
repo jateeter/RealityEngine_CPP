@@ -168,20 +168,26 @@ public:
     pushWorker = std::thread([this]() { push_worker_loop(); });
     // MQTT bridge — disabled unless MQTT_BROKER_HOST is set.  When enabled,
     // the bridge connects to the broker in its own I/O thread and forwards
-    // each PUBLISH into feed_mqtt_signal() below, which mirrors the body of
-    // the existing POST /api/signals handler minus the HTTP shell.
+    // each PUBLISH (after extract + normalize + length-validate) into
+    // feed_mqtt_signal() below, which mirrors the body of the existing
+    // POST /api/signals handler minus the HTTP shell.  The push trigger
+    // fires an async do_push when a mapping with pushMode != "manual"
+    // settles its debounce window.
     if (auto envCfg = mqtt::MqttBridge::from_environment()) {
       try {
+        size_t mappingCount = envCfg->registry->size();
         mqttBridge = std::make_unique<mqtt::MqttBridge>(
-          envCfg->first, envCfg->second,
+          envCfg->client, std::move(envCfg->registry),
           [this](const std::string& sensorId, int offset, int length,
-                 const Vector& values, const std::string& topic) {
-            feed_mqtt_signal(sensorId, offset, length, values, topic);
-          });
+                 const Vector& values, long ttlMs,
+                 const std::string& topic, const std::string& mappingId) {
+            feed_mqtt_signal(sensorId, offset, length, values, ttlMs, topic, mappingId);
+          },
+          [this]() { do_push(/*includeMachineResults=*/false, /*async=*/true); });
         mqttBridge->start();
-        std::cerr << "MQTT bridge enabled — broker=" << envCfg->first.brokerHost
-                  << ":" << envCfg->first.brokerPort
-                  << " bindings=" << envCfg->second.size() << "\n";
+        std::cerr << "MQTT bridge enabled — broker=" << envCfg->client.brokerHost
+                  << ":" << envCfg->client.brokerPort
+                  << " mappings=" << mappingCount << "\n";
       } catch (const std::exception& e) {
         std::cerr << "MQTT bridge failed to start: " << e.what() << "\n";
         mqttBridge.reset();
@@ -230,14 +236,43 @@ public:
     server.route("POST", "/api/signals", [this](const http::Request& req) {
       return ingest_signal(parse_body(req));
     });
-    // MQTT bridge status — connection state + per-binding configuration +
-    // ingest counters.  Returns "enabled":false when the bridge is not
-    // configured (env-driven; see MqttBridge::from_environment).
+    // MQTT bridge status — connection state, bridge-level counters,
+    // per-mapping counters.  Returns "enabled":false when the bridge is
+    // not configured (env-driven; see MqttBridge::from_environment).
     server.route("GET", "/api/mqtt/status", [this](const http::Request&) {
       if (!mqttBridge) return ok(Json::Object{{"enabled", false}});
-      Json status = mqttBridge->status_json();
-      if (status.is_object()) status.object()["enabled"] = true;
-      return ok(status);
+      auto clientStats = mqttBridge->client_stats();
+      auto bridgeStats = mqttBridge->stats();
+      const auto& cfg = mqttBridge->config();
+      return ok(Json::Object{
+        {"enabled",          true},
+        {"connected",        mqttBridge->is_connected()},
+        {"brokerHost",       cfg.brokerHost},
+        {"brokerPort",       static_cast<double>(cfg.brokerPort)},
+        {"clientId",         cfg.clientId},
+        {"connectAttempts",  static_cast<double>(clientStats.connectAttempts)},
+        {"connectSuccesses", static_cast<double>(clientStats.connectSuccesses)},
+        {"messagesReceived", static_cast<double>(clientStats.messagesReceived)},
+        {"bytesReceived",    static_cast<double>(clientStats.bytesReceived)},
+        {"pingsSent",        static_cast<double>(clientStats.pingsSent)},
+        {"reconnects",       static_cast<double>(clientStats.reconnects)},
+        {"lastMessageAtMs",  static_cast<double>(clientStats.lastMessageAtMs)},
+        {"bridge", Json::Object{
+          {"messagesMapped",   static_cast<double>(bridgeStats.messagesMapped)},
+          {"messagesRejected", static_cast<double>(bridgeStats.messagesRejected)},
+          {"messagesUnmatched",static_cast<double>(bridgeStats.messagesUnmatched)},
+          {"pushesTriggered",  static_cast<double>(bridgeStats.pushesTriggered)},
+        }},
+      });
+    });
+    // MQTT mapping registry — the loaded rules with per-mapping counters.
+    // Surfaces the authority for how topics project into perceptual space
+    // (per the design rule: mappings, not topic strings, encode RE offsets).
+    server.route("GET", "/api/mqtt/mappings", [this](const http::Request&) {
+      if (!mqttBridge) return ok(Json::Object{{"enabled", false}, {"mappings", Json::Array{}}});
+      Json out = mqttBridge->registry().to_json();
+      if (out.is_object()) out.object()["enabled"] = true;
+      return ok(out);
     });
     server.route("POST", "/api/push", [this](const http::Request& req) {
       auto body = parse_body(req);
@@ -658,12 +693,18 @@ private:
   // ingest_signal() minus the HTTP shell: takes the same stateMutex, calls
   // engine.update_sensor_value()/add_source(), then broadcasts a state
   // update over the WebSocket hub so visualizers see the live signal.
-  // Errors are logged (no caller to return an HTTP error to).
+  // Errors are logged (no caller to return an HTTP error to).  Per the
+  // design rule, MQTT-sourced signals enter via exactly the same path as
+  // HTTP /api/signals — nothing downstream knows or cares that the values
+  // came from an MQTT broker.
   void feed_mqtt_signal(const std::string& sensorId,
                         int offset, int length,
                         const Vector& values,
-                        const std::string& topic) {
+                        long ttlMs,
+                        const std::string& topic,
+                        const std::string& mappingId) {
     if (values.empty()) return;
+    if (static_cast<int>(values.size()) != length) return;
     SourceConfig source;
     {
       std::lock_guard<std::mutex> lock(stateMutex);
@@ -676,7 +717,7 @@ private:
         source.sensorId = sensorId;
         source.region = { offset, length };
         source.active = true;
-        source.ttlMs = 30000;
+        source.ttlMs = ttlMs > 0 ? ttlMs : 30000;
         source.lastValue = values;
         source.lastUpdated = now_ms();
         source = engine.add_source(source);
@@ -686,6 +727,7 @@ private:
       wsHub->broadcast(json::stringify(Json::Object{
         {"type", "mqtt-signal"},
         {"topic", topic},
+        {"mappingId", mappingId},
         {"sensorId", sensorId},
         {"source", to_json(source)},
         {"timestamp", static_cast<double>(now_ms())},

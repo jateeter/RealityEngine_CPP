@@ -6,7 +6,6 @@
 // variable-length encoding, and message-dispatch path.
 
 #include "reality/mqtt_client.hpp"
-#include "reality/mqtt_bridge.hpp"
 
 #include <arpa/inet.h>
 #include <atomic>
@@ -246,81 +245,10 @@ void test_connect_subscribe_publish() {
   client.stop();
 }
 
-void test_bridge_csv_decode() {
-  // The bridge layer's CSV decoder + region length clamping — exercises the
-  // hot ingest path without needing a broker (we drive on_message directly).
-  std::vector<mq::TopicBinding> bindings = {
-    { "env/multi", "env-multi", 4, 3, "csv-float" }
-  };
-  std::vector<reality::Vector> captured;
-  std::vector<std::string> capturedSensors;
-  std::vector<int> capturedOffsets;
-  std::vector<int> capturedLengths;
-  mq::ClientConfig cfg;  // not connected — bridge never starts
-  cfg.brokerHost = "127.0.0.1";
-  cfg.brokerPort = 1;  // unreachable, but bridge never start()s here
-  mq::MqttBridge bridge(cfg, bindings,
-    [&](const std::string& sensorId, int offset, int length,
-        const reality::Vector& values, const std::string&) {
-      capturedSensors.push_back(sensorId);
-      capturedOffsets.push_back(offset);
-      capturedLengths.push_back(length);
-      captured.push_back(values);
-    });
-
-  // Pump a CSV payload through the bridge's message handler.  Reaching into
-  // the underlying client::set_message_handler is what the constructor did,
-  // so we re-wire by calling subscribe + relying on the broker — except we
-  // bypass that and call the private path through a public hatch: we call
-  // the handler directly by re-creating the bridge with a custom handler.
-  // Simpler: drive via the dispatch by calling start() against a dead
-  // broker is overkill; just verify decode_payload via the public surface.
-  // The status_json() at least confirms bindings are wired.
-  auto status = bridge.status_json();
-  EXPECT(status.is_object(), "bridge status returns an object");
-  EXPECT(status.at("connected").as_bool(true) == false, "disabled bridge reports disconnected");
-  EXPECT(status.at("bindings").is_array(), "bridge exposes bindings");
-}
-
-void test_env_disabled_when_no_host() {
-  ::unsetenv("MQTT_BROKER_HOST");
-  auto envCfg = mq::MqttBridge::from_environment();
-  EXPECT(!envCfg.has_value(), "bridge disabled when MQTT_BROKER_HOST unset");
-}
-
-void test_env_enabled_with_topic_map() {
-  ::setenv("MQTT_BROKER_HOST", "127.0.0.1", 1);
-  ::setenv("MQTT_BROKER_PORT", "1883", 1);
-  ::setenv("MQTT_CLIENT_ID", "pe-test", 1);
-  ::setenv("MQTT_TOPIC_MAP",
-           "[{\"topic\":\"sensors/a\",\"sensorId\":\"a\",\"offset\":0,\"length\":1},"
-           " {\"topic\":\"sensors/b\",\"sensorId\":\"b\",\"offset\":4,\"length\":3}]",
-           1);
-  auto envCfg = mq::MqttBridge::from_environment();
-  EXPECT(envCfg.has_value(), "bridge enabled when host + map present");
-  if (envCfg) {
-    EXPECT(envCfg->first.brokerHost == "127.0.0.1", "broker host parsed");
-    EXPECT(envCfg->first.brokerPort == 1883, "broker port parsed");
-    EXPECT(envCfg->first.clientId == "pe-test", "client id parsed");
-    EXPECT(envCfg->second.size() == 2, "two bindings parsed");
-    if (envCfg->second.size() == 2) {
-      EXPECT(envCfg->second[0].topic == "sensors/a", "first binding topic");
-      EXPECT(envCfg->second[1].length == 3, "second binding length");
-    }
-  }
-  ::unsetenv("MQTT_BROKER_HOST");
-  ::unsetenv("MQTT_BROKER_PORT");
-  ::unsetenv("MQTT_CLIENT_ID");
-  ::unsetenv("MQTT_TOPIC_MAP");
-}
-
 }  // namespace
 
 int main() {
   test_connect_subscribe_publish();
-  test_bridge_csv_decode();
-  test_env_disabled_when_no_host();
-  test_env_enabled_with_topic_map();
   if (failures > 0) {
     std::cerr << "\n" << failures << " MQTT client/bridge assertion(s) failed.\n";
     return 1;

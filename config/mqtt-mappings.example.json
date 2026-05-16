@@ -1,0 +1,65 @@
+{
+  "_comment": "Example MQTT mapping registry for the Perception Engine.  Point MQTT_MAPPINGS_FILE at this file (or set MQTT_MAPPINGS_JSON inline) to enable broker ingest.  Every rule maps one topic-filter pattern onto one perceptual-space region; capture groups in the wildcards are interpolated into sensorIdTemplate so wildcarded filters expand to many distinct sensors at runtime.",
+  "version": "1.0",
+  "defaults": {
+    "_comment": "Per-rule fields override these defaults.",
+    "ttlMs": 30000,
+    "qos": 0,
+    "acceptRetained": true,
+    "pushMode": "debounced",
+    "debounceMs": 250
+  },
+  "mappings": [
+    {
+      "id": "zone-temperature",
+      "_comment": "JSON payload + MinMax normalization.  Topic 'sensors/zone/3/temp' captures '3' which becomes sensor id 'zone.3.temp'.",
+      "topicFilter": "sensors/zone/+/temp",
+      "sensorIdTemplate": "zone.{1}.temp",
+      "region": { "offset": 0, "length": 1 },
+      "extract": { "type": "json", "pointer": "/value" },
+      "normalize": { "mode": "minmax", "min": -40, "max": 80, "clamp": true },
+      "ttlMs": 60000,
+      "pushMode": "debounced",
+      "debounceMs": 500
+    },
+    {
+      "id": "humidity-csv",
+      "_comment": "Plain CSV float, no transformation other than range clamp.",
+      "topicFilter": "sensors/+/humidity",
+      "sensorIdTemplate": "humidity.{1}",
+      "region": { "offset": 4, "length": 1 },
+      "extract": { "type": "csv-float" },
+      "normalize": { "mode": "passthrough", "clamp": true }
+    },
+    {
+      "id": "rgb-triple",
+      "_comment": "Multi-element payload — CSV with all three values mapped into a 3-wide region.  Length must match the transformed value count.",
+      "topicFilter": "displays/+/rgb",
+      "sensorIdTemplate": "rgb.{1}",
+      "region": { "offset": 8, "length": 3 },
+      "extract": { "type": "csv-float" },
+      "normalize": { "mode": "minmax", "min": 0, "max": 255, "clamp": true }
+    },
+    {
+      "id": "alarm-state",
+      "_comment": "Boolean alarm flag — JSON pointer extracts the bool and normalize.linear scales (false→0, true→1).",
+      "topicFilter": "alarms/+/state",
+      "sensorIdTemplate": "alarm.{1}",
+      "region": { "offset": 12, "length": 1 },
+      "extract": { "type": "json", "pointer": "/triggered" },
+      "normalize": { "mode": "passthrough", "clamp": true },
+      "pushMode": "immediate"
+    },
+    {
+      "id": "low-rate-telemetry",
+      "_comment": "Manual push — the value gets stored but no automatic push fires.  Use POST /api/push to batch with other slow-changing inputs.",
+      "topicFilter": "telemetry/slow/#",
+      "sensorIdTemplate": "telemetry.{1}",
+      "region": { "offset": 13, "length": 1 },
+      "extract": { "type": "raw" },
+      "normalize": { "mode": "minmax", "min": 0, "max": 1000, "clamp": true },
+      "pushMode": "manual",
+      "ttlMs": 300000
+    }
+  ]
+}
