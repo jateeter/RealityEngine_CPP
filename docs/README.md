@@ -19,6 +19,7 @@ This is the maintained documentation set for RealityEngine_CPP.
 | --- | --- |
 | [OPERATIONS.md](OPERATIONS.md) | Startup, shutdown, environment variables, and Qdrant ownership. |
 | [LOCAL_AI_INTEGRATION.md](LOCAL_AI_INTEGRATION.md) | localAIStack bridge and guarded invocation endpoints. |
+| [MQTT_YUMA_DEMONSTRATION.md](MQTT_YUMA_DEMONSTRATION.md) | End-to-end MQTT integration walk-through against `yuma.lateraledge.cloud:1883`. |
 | [E2E_TESTING.md](E2E_TESTING.md) | Corpus, domain, and service-boundary validation. |
 
 ## API Contracts
