@@ -37,6 +37,7 @@ NormalizeMode parse_normalize_mode(const std::string& s) {
   if (s == "minmax")      return NormalizeMode::MinMax;
   if (s == "linear")      return NormalizeMode::Linear;
   if (s == "passthrough") return NormalizeMode::Passthrough;
+  if (s == "band")        return NormalizeMode::Band;
   if (s.empty())          return NormalizeMode::Passthrough;
   throw std::runtime_error("unknown normalize.mode: " + s);
 }
@@ -346,6 +347,13 @@ MappingRegistry::Decode MappingRegistry::decode(const MappingRule& rule,
       case NormalizeMode::Linear:
         n = v * rule.normalize.scale + rule.normalize.offset;
         break;
+      case NormalizeMode::Band:
+        // Status-bit semantics — 1.0 when the raw value is inside the
+        // [min,max] band, 0.0 otherwise.  Lets an MQTT-driven sensor feed
+        // one bit of a machine's 4-bit status input without an upstream
+        // conditioner CES.
+        n = (v >= rule.normalize.min && v <= rule.normalize.max) ? 1.0 : 0.0;
+        break;
     }
     if (rule.normalize.clamp) n = clamp_unit(n);
     if (!std::isfinite(n)) { out.error = "value not finite after normalize"; return out; }
@@ -405,6 +413,7 @@ std::string normalize_mode_str(NormalizeMode m) {
     case NormalizeMode::Passthrough: return "passthrough";
     case NormalizeMode::MinMax:      return "minmax";
     case NormalizeMode::Linear:      return "linear";
+    case NormalizeMode::Band:        return "band";
   }
   return "passthrough";
 }

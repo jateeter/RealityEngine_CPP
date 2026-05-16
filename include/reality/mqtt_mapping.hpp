@@ -40,7 +40,8 @@ enum class ExtractType {
 enum class NormalizeMode {
   Passthrough,  // pass values through (with optional clamp)
   MinMax,       // (v - min) / (max - min)
-  Linear        // v * scale + offset
+  Linear,       // v * scale + offset
+  Band          // 1.0 if min <= v <= max else 0.0 — status-bit semantics
 };
 
 enum class PushMode {

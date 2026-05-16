@@ -215,6 +215,27 @@ void test_normalize_minmax_clamp() {
   EXPECT(d.valid && d.values[0] == 1.0, "above-max clamps to 1.0");
 }
 
+void test_normalize_band() {
+  // Band semantics — 1.0 when value ∈ [min,max], 0.0 otherwise.  Used to
+  // turn a continuous sensor reading into a status bit that feeds the
+  // initial-event element of an ag-domain operational CES.
+  auto reg = registry_from_string(R"({"mappings":[
+    {"id":"a","topicFilter":"t","region":{"offset":0,"length":1},
+     "extract":{"type":"csv-float"},
+     "normalize":{"mode":"band","min":6.5,"max":8.5}}
+  ]})");
+  EXPECT(reg.decode(reg.rules()[0], std::vector<uint8_t>{'7','.','0'}).values[0] == 1.0,
+         "band in-range (7.0 in [6.5,8.5]) -> 1.0");
+  EXPECT(reg.decode(reg.rules()[0], std::vector<uint8_t>{'5','.','0'}).values[0] == 0.0,
+         "band below-min (5.0 in [6.5,8.5]) -> 0.0");
+  EXPECT(reg.decode(reg.rules()[0], std::vector<uint8_t>{'9','.','0'}).values[0] == 0.0,
+         "band above-max (9.0 in [6.5,8.5]) -> 0.0");
+  EXPECT(reg.decode(reg.rules()[0], std::vector<uint8_t>{'6','.','5'}).values[0] == 1.0,
+         "band edge (6.5 == min) -> 1.0 (inclusive)");
+  EXPECT(reg.decode(reg.rules()[0], std::vector<uint8_t>{'8','.','5'}).values[0] == 1.0,
+         "band edge (8.5 == max) -> 1.0 (inclusive)");
+}
+
 void test_normalize_linear() {
   auto reg = registry_from_string(R"({"mappings":[
     {"id":"a","topicFilter":"t","region":{"offset":0,"length":1},
@@ -450,6 +471,7 @@ int main() {
   test_extract_json_pointer_missing();
   test_normalize_minmax();
   test_normalize_minmax_clamp();
+  test_normalize_band();
   test_normalize_linear();
   test_length_mismatch_rejected();
   test_nan_rejected();
