@@ -33,6 +33,18 @@ LOCAL_AI_API_URL="${LOCAL_AI_API_URL:-http://localhost:4000}"
 LOCAL_AI_MACHINES_DIR="${LOCAL_AI_MACHINES_DIR:-../localAIStack/data/machines}"
 LOCAL_AI_BOOTSTRAP="${LOCAL_AI_BOOTSTRAP:-false}"
 
+# ── MQTT bridge env passthrough ────────────────────────────────────────────
+# When MQTT_BROKER_HOST is set, the PE will boot the MQTT bridge from
+# MQTT_MAPPINGS_FILE (or MQTT_MAPPINGS_JSON / MQTT_TOPIC_MAP).  Defaults
+# point at the yuma-agriculture demo mapping file shipped in config/;
+# operators override by exporting the env vars before invoking start.sh.
+MQTT_BROKER_HOST="${MQTT_BROKER_HOST:-}"
+MQTT_BROKER_PORT="${MQTT_BROKER_PORT:-1883}"
+MQTT_CLIENT_ID="${MQTT_CLIENT_ID:-reality-engine-pe}"
+MQTT_KEEPALIVE="${MQTT_KEEPALIVE:-60}"
+MQTT_MAPPINGS_FILE="${MQTT_MAPPINGS_FILE:-}"
+MQTT_ALLOW_REGION_OVERLAP="${MQTT_ALLOW_REGION_OVERLAP:-0}"
+
 RUN_DIR="$ROOT_DIR/run"
 LOG_DIR="$ROOT_DIR/logs"
 mkdir -p "$RUN_DIR" "$LOG_DIR"
@@ -192,6 +204,9 @@ check_port_free "$PERCEPTION_ENGINE_PORT" "$RUN_DIR/perception_engine.pid"
 export QDRANT_URL QDRANT_GRPC_URL QDRANT_STORAGE_DIR QDRANT_LOCALAI_COLLECTION QDRANT_REALITY_COLLECTION
 export LOCAL_AI_API_URL LOCAL_AI_MACHINES_DIR LOCAL_AI_BOOTSTRAP
 export VECTOR_DIMENSION
+# MQTT bridge: env vars consumed by perception_engine_server when present.
+export MQTT_BROKER_HOST MQTT_BROKER_PORT MQTT_CLIENT_ID MQTT_KEEPALIVE
+export MQTT_MAPPINGS_FILE MQTT_ALLOW_REGION_OVERLAP
 
 info "Starting Reality Engine on port $REALITY_ENGINE_PORT..."
 nohup "$ROOT_DIR/bin/reality_engine_server" "$REALITY_ENGINE_PORT" "$MACHINES_DIR" "$VECTOR_DIMENSION" \
@@ -250,6 +265,12 @@ printf "  %-24s %s\n" "Vector dimension" "${VECTOR_DIMENSION}"
 printf "  %-24s %s\n" "local AI API" "${LOCAL_AI_API_URL}"
 printf "  %-24s %s\n" "Qdrant shared store" "${QDRANT_URL}"
 printf "  %-24s %s\n" "Qdrant data repo" "${QDRANT_STORAGE_DIR}"
+# Show the resolved MQTT bridge intent — the PE itself will log "MQTT
+# bridge enabled" or remain quiet when no broker is configured.
+if [ -n "$MQTT_BROKER_HOST" ]; then
+  printf "  %-24s %s\n" "MQTT broker" "${MQTT_BROKER_HOST}:${MQTT_BROKER_PORT}"
+  [ -n "$MQTT_MAPPINGS_FILE" ] && printf "  %-24s %s\n" "MQTT mappings" "${MQTT_MAPPINGS_FILE}"
+fi
 echo ""
 echo "Logs:"
 echo "  $LOG_DIR/reality_engine.log"
