@@ -1,4 +1,5 @@
 #include "reality/http.hpp"
+#include "reality/mqtt_bridge.hpp"
 #include "reality/reality.hpp"
 
 #include <cstdlib>
@@ -165,9 +166,31 @@ public:
       }
     }
     pushWorker = std::thread([this]() { push_worker_loop(); });
+    // MQTT bridge — disabled unless MQTT_BROKER_HOST is set.  When enabled,
+    // the bridge connects to the broker in its own I/O thread and forwards
+    // each PUBLISH into feed_mqtt_signal() below, which mirrors the body of
+    // the existing POST /api/signals handler minus the HTTP shell.
+    if (auto envCfg = mqtt::MqttBridge::from_environment()) {
+      try {
+        mqttBridge = std::make_unique<mqtt::MqttBridge>(
+          envCfg->first, envCfg->second,
+          [this](const std::string& sensorId, int offset, int length,
+                 const Vector& values, const std::string& topic) {
+            feed_mqtt_signal(sensorId, offset, length, values, topic);
+          });
+        mqttBridge->start();
+        std::cerr << "MQTT bridge enabled — broker=" << envCfg->first.brokerHost
+                  << ":" << envCfg->first.brokerPort
+                  << " bindings=" << envCfg->second.size() << "\n";
+      } catch (const std::exception& e) {
+        std::cerr << "MQTT bridge failed to start: " << e.what() << "\n";
+        mqttBridge.reset();
+      }
+    }
   }
 
   ~PerceptionService() {
+    if (mqttBridge) mqttBridge->stop();
     stop_auto();
     {
       std::lock_guard<std::mutex> lock(pushQueueMutex);
@@ -206,6 +229,15 @@ public:
     });
     server.route("POST", "/api/signals", [this](const http::Request& req) {
       return ingest_signal(parse_body(req));
+    });
+    // MQTT bridge status — connection state + per-binding configuration +
+    // ingest counters.  Returns "enabled":false when the bridge is not
+    // configured (env-driven; see MqttBridge::from_environment).
+    server.route("GET", "/api/mqtt/status", [this](const http::Request&) {
+      if (!mqttBridge) return ok(Json::Object{{"enabled", false}});
+      Json status = mqttBridge->status_json();
+      if (status.is_object()) status.object()["enabled"] = true;
+      return ok(status);
     });
     server.route("POST", "/api/push", [this](const http::Request& req) {
       auto body = parse_body(req);
@@ -622,6 +654,45 @@ private:
     };
   }
 
+  // Internal ingest path used by the MQTT bridge.  Mirrors the body of
+  // ingest_signal() minus the HTTP shell: takes the same stateMutex, calls
+  // engine.update_sensor_value()/add_source(), then broadcasts a state
+  // update over the WebSocket hub so visualizers see the live signal.
+  // Errors are logged (no caller to return an HTTP error to).
+  void feed_mqtt_signal(const std::string& sensorId,
+                        int offset, int length,
+                        const Vector& values,
+                        const std::string& topic) {
+    if (values.empty()) return;
+    SourceConfig source;
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      bool updated = engine.update_sensor_value(sensorId, values);
+      if (updated) {
+        if (auto existing = sensor_source_by_id(sensorId)) source = *existing;
+      } else {
+        source.kind = "sensor";
+        source.name = "mqtt:" + topic;
+        source.sensorId = sensorId;
+        source.region = { offset, length };
+        source.active = true;
+        source.ttlMs = 30000;
+        source.lastValue = values;
+        source.lastUpdated = now_ms();
+        source = engine.add_source(source);
+      }
+    }
+    if (wsHub) {
+      wsHub->broadcast(json::stringify(Json::Object{
+        {"type", "mqtt-signal"},
+        {"topic", topic},
+        {"sensorId", sensorId},
+        {"source", to_json(source)},
+        {"timestamp", static_cast<double>(now_ms())},
+      }));
+    }
+  }
+
   http::Response ingest_signal(const Json& body) {
     Vector values = json::to_numbers(body.at("values"));
     if (values.empty()) return http::error_response("values must be a non-empty array", 400);
@@ -926,6 +997,9 @@ private:
   bool autoRunning = false;
   long autoIntervalMs = 1000;
   std::optional<long long> lastPush;
+  // MQTT bridge — optional; null when MQTT_BROKER_HOST is unset.  Owned by
+  // PerceptionService so its lifetime is bounded by the service's.
+  std::unique_ptr<mqtt::MqttBridge> mqttBridge;
 };
 
 } // namespace
