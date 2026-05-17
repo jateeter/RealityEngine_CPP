@@ -233,9 +233,24 @@ void MqttBridge::inject_message(const std::string& topic, const std::vector<uint
 
 // ── Env-driven config loader ───────────────────────────────────────────────
 
+// Default broker target — points at the Lateral Edge sensor mesh that the
+// live yuma demonstration runs against, so operators get a sensible
+// default without configuration.  Setting MQTT_BROKER_HOST='' (empty) or
+// MQTT_DISABLED=1 explicitly opts out.  Bridge still requires mappings
+// (file or inline) before it actually boots.
+static constexpr const char* DEFAULT_MQTT_BROKER_HOST = "yuma.lateraledge.cloud";
+
 std::optional<MqttBridge::EnvConfig> MqttBridge::from_environment() {
-  const char* host = get_env("MQTT_BROKER_HOST");
-  if (!host) return std::nullopt;
+  if (truthy_env(get_env("MQTT_DISABLED"))) return std::nullopt;
+  const char* host_env = std::getenv("MQTT_BROKER_HOST");  // explicit empty check, not get_env
+  std::string host;
+  if (host_env == nullptr) {
+    host = DEFAULT_MQTT_BROKER_HOST;
+  } else if (*host_env == '\0') {
+    return std::nullopt;  // explicit opt-out: MQTT_BROKER_HOST=""
+  } else {
+    host = host_env;
+  }
 
   ClientConfig cfg;
   cfg.brokerHost = host;
@@ -260,7 +275,7 @@ std::optional<MqttBridge::EnvConfig> MqttBridge::from_environment() {
     return std::nullopt;
   }
   if (!registry || registry->size() == 0) {
-    std::cerr << "MQTT_BROKER_HOST set but no mappings resolved — bridge disabled\n";
+    std::cerr << "MQTT broker " << host << " configured but no mappings resolved — bridge disabled\n";
     return std::nullopt;
   }
 
