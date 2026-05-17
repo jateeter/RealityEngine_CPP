@@ -1,12 +1,15 @@
 openapi: 3.0.3
 info:
   title: RealityEngine CPP - Reality Engine API
-  version: 1.0.0-cpp
+  version: 1.1.0-cpp
   description: |
     OpenAPI contract for the native C++ Reality Engine service.
 
-    The service defaults to `http://localhost:3299` and mirrors the
-    RealityEngine_AI Scala/Akka route surface where implemented.
+    The service defaults to `http://localhost:3299`.  Wire-compatible
+    with the AI (TypeScript / Node.js) and LSP (Common Lisp) runtimes —
+    the same JSON corpus runs unchanged across all three, produces
+    byte-identical mergeBatch ordering, and emits the same Prometheus
+    metrics shape (only the `runtime` label differs).
 servers:
   - url: http://localhost:3299
     description: Local Reality Engine default
@@ -17,6 +20,8 @@ tags:
   - name: Machines
   - name: Simulation
   - name: Preception
+  - name: Governance
+  - name: Metrics
 paths:
   /:
     get:
@@ -504,6 +509,117 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Object"
+  /api/metrics:
+    get:
+      tags: [Metrics]
+      summary: Prometheus text-format exposition
+      description: |
+        CES coverage telemetry + runtime gauges in the standard Prometheus
+        text exposition format.  Every metric line carries a `runtime`
+        label (`runtime="cpp"` here) so a single scrape config can drive
+        a cross-runtime Grafana dashboard.
+
+        Metric families emitted: ces_machines_total, ces_sequences_total,
+        ces_vectors_total, ces_vector_matched_total, ces_vector_activated_total,
+        ces_sequence_outputs_total, ces_machine_steps_total,
+        ces_paging_decisions_total (governance routing), ces_deprecated_fires_total,
+        ces_unfired_sequences, ces_unfired_vectors, ces_machine_sequence_count,
+        ces_machine_vector_count, ces_registry_uptime_seconds, plus
+        re_runtime_dimension / re_runtime_required_dimension /
+        re_runtime_mapping_version.
+      responses:
+        "200":
+          description: Prometheus text-format metrics (Content-Type text/plain)
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/governance/route:
+    get:
+      tags: [Governance]
+      summary: Resolve a paging decision for one fired output
+      description: |
+        Walks the named machine's `metadata.triggerConfig.rules` looking
+        for a (sequenceId, outputMatches) match, then merges in
+        `metadata.governance` defaults — owner team, SLA, runbook,
+        escalation policy, contact roster.  Same precedence rule across
+        AI / CPP / LSP: `rule.governance.<field>` → `machine.metadata.governance.<field>` → null.
+      parameters:
+        - name: machineId
+          in: query
+          required: true
+          schema: { type: string }
+        - name: sequenceId
+          in: query
+          required: true
+          schema: { type: string }
+        - name: values
+          in: query
+          required: true
+          description: Comma-separated numeric values matching `outputMatches` on a rule.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Resolved paging decision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PagingDecision"
+        "400":
+          description: Missing or malformed query parameters
+        "404":
+          description: Machine not found or no triggerConfig rule matched
+  /api/runtime/vector-space:
+    get:
+      tags: [Runtime]
+      summary: Current perceptual-space shape
+      description: |
+        Returns the current vector dimension, the required dimension
+        (max offset+length across all registered machine mappings), the
+        encoding identifier, and a monotonic mapping version that
+        increments on every add/remove machine.  Mirrors the AI runtime's
+        endpoint of the same name.
+      responses:
+        "200":
+          description: Vector-space snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dimension: { type: integer }
+                  requiredDimension: { type: integer }
+                  encoding: { type: string, example: "dense-float64-clamped-0-1" }
+                  mappingVersion: { type: integer }
+  /api/runtime/storage-footprint:
+    get:
+      tags: [Runtime]
+      summary: Option A1 per-machine storage footprint
+      description: |
+        Per-machine cell-storage footprint under the Option A1 narrow-cell
+        declaration (`perceptualMapping.bitsPerElement`).  Reports the
+        Float64 baseline + the equivalent packed bytes assuming every
+        machine emits at its declared bit width.
+      responses:
+        "200":
+          description: Per-machine storage footprint
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  machines:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        machineId: { type: string }
+                        machineName: { type: string }
+                        bitsPerElement: { type: integer, enum: [1, 2, 4, 8] }
+                        cells: { type: integer }
+                        float64Bytes: { type: integer }
+                        packedBytes: { type: integer }
+                        shrinkFactor: { type: number }
   /api/perceive:
     post:
       tags: [Preception]
@@ -537,6 +653,30 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    PagingDecision:
+      type: object
+      description: |
+        Governance contract resolved when a CES fires.  Same shape across
+        AI / CPP / LSP; produced by `/api/governance/route` and stamped
+        onto every mergeBatch entry whose `triggerConfig.rules` match.
+      properties:
+        machineId:       { type: string }
+        machineName:     { type: string }
+        sequenceId:      { type: string }
+        ragStatusCode:   { type: string, enum: [GREEN, AMBER, RED] }
+        processStatus:   { type: string, enum: [ok, info, warning, error] }
+        ownerTeam:       { type: string }
+        slaSeconds:      { type: integer, nullable: true }
+        runbook:         { type: string }
+        escalationPolicy: { type: string }
+        contact:
+          type: object
+          properties:
+            primary:   { type: string }
+            secondary: { type: string }
+        description:     { type: string }
+        source:          { type: string, enum: [rule-with-override, rule-only, machine-fallback] }
+        hasMachineGovernance: { type: boolean }
     Object:
       type: object
       additionalProperties: true

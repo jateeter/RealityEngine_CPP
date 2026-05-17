@@ -1,12 +1,16 @@
 openapi: 3.0.3
 info:
   title: RealityEngine CPP - Perception Engine API
-  version: 1.0.0-cpp
+  version: 1.1.0-cpp
   description: |
     OpenAPI contract for the native C++ Perception Engine service.
 
     The service defaults to `http://localhost:3300` and pushes assembled
     vectors into the Reality Engine at `http://localhost:3299/api/perceive`.
+    The MQTT bridge, when enabled, subscribes to a broker (default
+    `mqtt://yuma.lateraledge.cloud:1883`) and projects sensor messages
+    into perceptual-space regions via the mapping registry — same
+    contract across AI / CPP / LSP runtimes.
 servers:
   - url: http://localhost:3300
     description: Local Perception Engine default
@@ -16,6 +20,7 @@ tags:
   - name: Push
   - name: Sources
   - name: Sensors
+  - name: MQTT
   - name: LocalAI
   - name: Machines
 paths:
@@ -303,6 +308,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Object"
+  /api/mqtt/status:
+    get:
+      tags: [MQTT]
+      summary: MQTT bridge connection state + counters
+      description: |
+        Returns `enabled=false` when MQTT_BROKER_HOST is unset or
+        MQTT_DISABLED=1.  Otherwise reports connection state, broker
+        config, and bridge-level counters: messagesReceived,
+        messagesMapped, messagesRejected, messagesUnmatched,
+        pushesTriggered.  Same shape across AI / CPP / LSP.
+      responses:
+        "200":
+          description: Bridge status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MqttBridgeStatus"
+  /api/mqtt/mappings:
+    get:
+      tags: [MQTT]
+      summary: Loaded MQTT mapping registry + per-rule counters
+      description: |
+        Returns the topic→region projection rules currently in force,
+        each decorated with runtime counters (received / mapped /
+        rejected / lastError).  Per the design rule, topics never
+        embed offsets — the registry is the sole authority.
+      responses:
+        "200":
+          description: Mapping registry snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MqttMappingsResponse"
   /api/integrations/localai/status:
     get:
       tags: [LocalAI]
@@ -588,3 +626,72 @@ components:
         payload:
           type: object
           additionalProperties: true
+    MqttBridgeStatus:
+      type: object
+      description: Snapshot returned by GET /api/mqtt/status.
+      properties:
+        enabled:    { type: boolean }
+        connected:  { type: boolean }
+        brokerHost: { type: string }
+        brokerPort: { type: integer }
+        clientId:   { type: string }
+        mappings:   { type: integer, description: number of mapping rules loaded }
+        bridge:
+          type: object
+          properties:
+            messagesReceived:        { type: integer }
+            messagesMapped:          { type: integer }
+            messagesRejected:        { type: integer }
+            messagesUnmatched:       { type: integer }
+            messagesRetainedDropped: { type: integer }
+            pushesTriggered:         { type: integer }
+    MqttMappingRule:
+      type: object
+      description: |
+        One topic→region projection rule.  Same schema across AI / CPP / LSP.
+      properties:
+        id:               { type: string }
+        topicFilter:      { type: string, description: "MQTT v3.1.1 filter with + and # wildcards" }
+        sensorIdTemplate: { type: string, description: "{1}, {2}, ... interpolate captures" }
+        region:
+          type: object
+          properties:
+            offset: { type: integer }
+            length: { type: integer }
+        extract:
+          type: object
+          properties:
+            type:    { type: string, enum: [csv-float, json, raw, single-float] }
+            pointer: { type: string, description: "RFC 6901 JSON pointer (when type=json)" }
+            index:   { type: integer, description: "CSV element index (optional)" }
+        normalize:
+          type: object
+          properties:
+            mode:   { type: string, enum: [passthrough, minmax, linear, band] }
+            min:    { type: number }
+            max:    { type: number }
+            scale:  { type: number }
+            offset: { type: number }
+            clamp:  { type: boolean }
+        ttlMs:          { type: integer }
+        qos:            { type: integer, enum: [0, 1, 2] }
+        acceptRetained: { type: boolean }
+        pushMode:       { type: string, enum: [debounced, manual, immediate] }
+        debounceMs:     { type: integer }
+        counters:
+          type: object
+          properties:
+            received:        { type: integer }
+            mapped:          { type: integer }
+            rejected:        { type: integer }
+            stale:           { type: integer }
+            lastMessageAtMs: { type: integer }
+            lastError:       { type: string }
+            lastErrorAtMs:   { type: integer }
+    MqttMappingsResponse:
+      type: object
+      properties:
+        enabled:  { type: boolean }
+        mappings:
+          type: array
+          items: { $ref: "#/components/schemas/MqttMappingRule" }
