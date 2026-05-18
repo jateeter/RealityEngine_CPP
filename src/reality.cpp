@@ -1446,17 +1446,23 @@ std::string CesCoverageRegistry::to_prometheus_text(
 
   // Paging decisions resolved by the governance contract — same label
   // shape as the AI runtime so a single Prom scrape config covers both.
+  // The `machine` (name) label is derived from machine_id so the dashboard
+  // `machine=~"$machine"` filter resolves; the event hash key carries id
+  // only because owner_team/process_status are the partitioning axes.
   out << "# HELP ces_paging_decisions_total Number of governance-resolved paging decisions issued by the engine.\n";
   out << "# TYPE ces_paging_decisions_total counter\n";
   for (const auto& [k, count] : pagingDecisions) {
     auto parts = split_key(k);
     if (parts.size() == 4) {
+      auto mit = machines.find(parts[3]);
+      std::string mname = (mit != machines.end()) ? mit->second.name : "";
       out << "ces_paging_decisions_total"
           << prom_labels_v(baseLabels, {
             {"owner_team",      parts[0]},
             {"process_status",  parts[1]},
             {"rag_status_code", parts[2]},
             {"machine_id",      parts[3]},
+            {"machine",         mname},
           })
           << " " << count << "\n";
     }
@@ -1477,6 +1483,27 @@ std::string CesCoverageRegistry::to_prometheus_text(
             {"replaced_by", parts[3]},
           })
           << " " << count << "\n";
+    }
+  }
+
+  // Zero-baseline counter series — dashboards plot rate() / by(machine)
+  // against these before any events fire.  Event-keyed series above carry
+  // sequence/vector sub-labels so they live in a distinct Prom label set
+  // and coexist without duplication; ces_machine_steps_total has the same
+  // label shape as its baseline so we skip machines already seen in the
+  // events hash.
+  std::set<std::string> seenSteps;
+  for (const auto& [k, _v] : steps) {
+    auto parts = split_key(k);
+    if (parts.size() == 2) seenSteps.insert(parts[0]);
+  }
+  for (const auto& [_id, m] : machines) {
+    out << "ces_vector_matched_total"   << prom_labels_v(baseLabels, {{"machine", m.name}, {"machine_id", m.id}}) << " 0\n";
+    out << "ces_vector_activated_total" << prom_labels_v(baseLabels, {{"machine", m.name}, {"machine_id", m.id}}) << " 0\n";
+    out << "ces_sequence_outputs_total" << prom_labels_v(baseLabels, {{"machine", m.name}, {"machine_id", m.id}}) << " 0\n";
+    out << "ces_deprecated_fires_total" << prom_labels_v(baseLabels, {{"machine", m.name}, {"machine_id", m.id}}) << " 0\n";
+    if (!seenSteps.count(m.id)) {
+      out << "ces_machine_steps_total"  << prom_labels_v(baseLabels, {{"machine", m.name}, {"machine_id", m.id}}) << " 0\n";
     }
   }
 

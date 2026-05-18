@@ -125,9 +125,9 @@ std::string source_id_part(const std::string& value) {
   return out.empty() ? "unnamed" : out;
 }
 
-std::string test_source_id(const std::string& machineId, size_t index, const Json& sequence) {
+std::string test_source_id(const std::string& machineId) {
   std::ostringstream out;
-  out << "test-" << source_id_part(machineId) << "-" << index << "-" << source_id_part(sequence.at("name").as_string("sequence"));
+  out << "test-" << source_id_part(machineId);
   return out.str();
 }
 
@@ -482,35 +482,76 @@ private:
     const Json& sequences = machine.at("metadata").at("inputSequences");
     if (!sequences.is_array()) return 0;
 
-    size_t added = 0;
     std::lock_guard<std::mutex> lock(stateMutex);
+    // One source per machine — the machine encapsulates its test sequences
+    // and stages them end-to-end inside a single source.  Concatenated
+    // `inputs` plays sequence-1 to completion, then sequence-2, …, then
+    // loops the entire set.  `segments` retains per-sequence boundaries
+    // for UI display.
+    const std::string id = test_source_id(machineId);
+    if (engine.get_source(id)) return 0;
+
+    SourceConfig source;
+    source.kind = "test";
+    source.id = id;
+    source.machineId = machineId;
+    source.machineName = machine.at("name").as_string(machineId);
+    source.region = region;
+    source.active = false;  // overridden below if any segment was marked active
+    source.loop = true;
+
+    Json::Array segments;
+    std::vector<std::string> segmentNames;
     for (size_t i = 0; i < sequences.array().size(); ++i) {
       const Json& seq = sequences.array()[i];
-      if (!seq.at("vectors").is_array()) continue;
-      std::string id = test_source_id(machineId, i, seq);
-      if (engine.get_source(id)) continue;
-
-      SourceConfig source;
-      source.kind = "test";
-      source.id = id;
-      source.name = machine.at("name").as_string(machineId) + " / " + seq.at("name").as_string("Test sequence");
-      source.active = seq.at("active").as_bool(false);
-      source.machineId = machineId;
-      source.machineName = machine.at("name").as_string(machineId);
-      source.sequenceName = seq.at("name").as_string("Test sequence");
-      source.region = region;
-      source.sequenceMetadata = seq.at("metadata").is_object() ? seq.at("metadata") : Json::Object{};
-      source.testSequence = seq;
-      source.loop = seq.at("loop").as_bool(false);
-      for (const auto& vector : seq.at("vectors").array()) source.inputs.push_back(json::to_numbers(vector));
-      if (source.inputs.empty()) continue;
-      engine.add_source(source);
-      ++added;
+      if (!seq.at("vectors").is_array() || seq.at("vectors").array().empty()) continue;
+      std::string segName = seq.at("name").as_string("Test sequence");
+      segmentNames.push_back(segName);
+      size_t beforeLen = source.inputs.size();
+      for (const auto& vector : seq.at("vectors").array())
+        source.inputs.push_back(json::to_numbers(vector));
+      size_t segLen = source.inputs.size() - beforeLen;
+      segments.push_back(Json::Object{
+        {"name",   segName},
+        {"length", static_cast<double>(segLen)},
+      });
+      if (seq.at("active").as_bool(false)) source.active = true;
     }
-    return added;
+    if (source.inputs.empty()) return 0;
+
+    if (segmentNames.size() == 1) {
+      source.sequenceName = segmentNames.front();
+      source.name = source.machineName + " / " + segmentNames.front();
+    } else {
+      std::ostringstream label;
+      label << segmentNames.size() << " sequences";
+      source.sequenceName = label.str();
+      source.name = source.machineName + " / " + label.str();
+    }
+    source.sequenceMetadata = Json::Object{{"segments", Json(segments)}};
+    source.testSequence = Json::Object{};
+
+    engine.add_source(source);
+    return 1;
+  }
+
+  // Migration: prior bootstrap created one source per sequence.  Clear
+  // any pre-existing per-machine source group so the consolidated source
+  // above can replace it; runs once per bootstrap call.
+  void consolidate_stale_test_sources() {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    std::map<std::string, std::vector<std::string>> perMachine;
+    for (const auto& s : engine.get_sources()) {
+      if (s.kind != "test" || s.machineId.empty()) continue;
+      perMachine[s.machineId].push_back(s.id);
+    }
+    for (const auto& [_mid, ids] : perMachine) {
+      if (ids.size() > 1) for (const auto& id : ids) engine.remove_source(id);
+    }
   }
 
   size_t sync_test_sources_from_machine_list(const Json& data) {
+    consolidate_stale_test_sources();
     size_t added = 0;
     for (const auto& machine : data.at("machines").is_array() ? data.at("machines").array() : Json::Array{}) {
       added += sync_test_sources_from_machine(machine);
