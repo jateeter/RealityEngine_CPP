@@ -9,7 +9,7 @@ SRC := src/reality.cpp src/http.cpp src/sta_checker.cpp src/mqtt_client.cpp src/
 
 .PHONY: all clean test e2e e2e-corpus e2e-services
 
-all: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/sta_checker_tests $(BIN_DIR)/mqtt_client_tests $(BIN_DIR)/mqtt_mapping_tests $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/cesgen_index_compile $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity $(BIN_DIR)/cesgen_deprecation
+all: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/sta_checker_tests $(BIN_DIR)/mqtt_client_tests $(BIN_DIR)/mqtt_mapping_tests $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_index_compile $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity $(BIN_DIR)/cesgen_deprecation
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -41,6 +41,12 @@ $(BIN_DIR)/e2e_machine_domains: $(SRC) tests/e2e_machine_domains.cpp | $(BIN_DIR
 $(BIN_DIR)/e2e_domain_scenarios: $(SRC) tests/e2e_domain_scenarios.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $(SRC) tests/e2e_domain_scenarios.cpp -o $@ $(LDFLAGS)
 
+$(BIN_DIR)/e2e_ai_trigger_dispatch: $(SRC) tests/e2e_ai_trigger_dispatch.cpp | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $(SRC) tests/e2e_ai_trigger_dispatch.cpp -o $@ $(LDFLAGS)
+
+$(BIN_DIR)/e2e_yuma_localai_cascade: $(SRC) tests/e2e_yuma_localai_cascade.cpp | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $(SRC) tests/e2e_yuma_localai_cascade.cpp -o $@ $(LDFLAGS)
+
 $(BIN_DIR)/cesgen_index_compile: tests/cesgen_index_compile.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) tests/cesgen_index_compile.cpp -o $@
 
@@ -68,10 +74,12 @@ test: $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/sta_checker_tests $(BIN_DIR)/mq
 	$(BIN_DIR)/mqtt_client_tests
 	$(BIN_DIR)/mqtt_mapping_tests
 
-e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity
+e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity
 	$(BIN_DIR)/e2e_machine_sequences ../RealityEngine_AI/examples/machines
 	$(BIN_DIR)/e2e_machine_domains ../RealityEngine_AI/examples/machines
 	$(BIN_DIR)/e2e_domain_scenarios ../RealityEngine_AI/examples/machines
+	$(BIN_DIR)/e2e_ai_trigger_dispatch ../RealityEngine_AI/examples/machines
+	$(BIN_DIR)/e2e_yuma_localai_cascade ../RealityEngine_AI/examples/machines
 	$(BIN_DIR)/cesgen_oracles_parity ../RealityEngine_AI/examples/oracles.json ../RealityEngine_AI/examples/machines
 	$(BIN_DIR)/cesgen_provenance ../RealityEngine_AI/examples/machines
 	$(BIN_DIR)/cesgen_composition ../RealityEngine_AI/examples/machines
