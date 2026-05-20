@@ -912,6 +912,7 @@ private:
       {"tokenConfigured", !careKitBridgeToken.empty()},
       {"nativeAppRequired", true},
       {"nativeWorkOutsideRepo", true},
+      {"statusEndpoint", "/api/integrations/carekit/status"},
       {"ingestEndpoint", "/api/integrations/carekit/ingest"},
       {"contract", Json::Object{
         {"transport", "https"},
@@ -1772,7 +1773,8 @@ private:
 
   http::Response ingest_carekit(const Json& body) {
     if (!body.is_object()) return http::error_response("CareKit ingest body must be a JSON object", 400);
-    if (!careKitBridgeToken.empty() && body.at("bridgeToken").as_string() != careKitBridgeToken) {
+    if (!careKitBridgeToken.empty() &&
+        body.at("bridgeToken").as_string(body.at("token").as_string()) != careKitBridgeToken) {
       return http::error_response("CareKit bridge token rejected", 401);
     }
 
