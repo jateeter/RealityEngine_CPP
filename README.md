@@ -84,6 +84,8 @@ bin/reality_engine_cli pe ollama-status --pe-url http://localhost:3300
 bin/reality_engine_cli pe ollama-dispatch <dispatchId> --source-mapping-id agent-completion-risk
 bin/reality_engine_cli pe openai-status --pe-url http://localhost:3300
 bin/reality_engine_cli pe openai-dispatch <dispatchId> --source-mapping-id agent-completion-risk
+bin/reality_engine_cli pe acp-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe acp-dispatch <dispatchId> --source-mapping-id acp-openclaw-completion
 bin/reality_engine_cli pe healthkit-status --pe-url http://localhost:3300
 bin/reality_engine_cli pe healthkit-ingest --sample-type step-count --source-mapping-id healthkit-activity --values 1,0,0.9,0
 bin/reality_engine_cli pe carekit-status --pe-url http://localhost:3300
@@ -162,6 +164,11 @@ flags):
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible Responses API base URL |
 | `OPENAI_MODEL` | `gpt-5` | Default OpenAI model for PE-controlled dispatch |
 | `OPENAI_COMPLETION_SOURCE_MAPPING_ID` | `agent-completion-risk` | Default source mapping for OpenAI completion commits |
+| `ACP_ENABLED` | `false` | Enable ACP/OpenClaw adapter metadata in PE status |
+| `ACP_COMMAND` / `OPENCLAW_ACP_COMMAND` | `openclaw acp` | External OpenClaw ACP command recorded in no-wait handoff receipts |
+| `ACP_GATEWAY_URL` / `OPENCLAW_GATEWAY_URL` | `ws://127.0.0.1:18789` | OpenClaw Gateway URL recorded for xACP handoff |
+| `ACP_SESSION_KEY` / `OPENCLAW_ACP_SESSION` | `agent:main:main` | OpenClaw Gateway session key for example xACP handoff |
+| `ACP_COMPLETION_SOURCE_MAPPING_ID` | `agent-completion-risk` | Default source mapping for ACP/OpenClaw completion commits |
 | `HEALTHKIT_BRIDGE_ID` | `healthkit-ios-bridge` | Expected Apple-platform HealthKit bridge identity |
 | `HEALTHKIT_DEFAULT_SOURCE_MAPPING_ID` | `healthkit-activity` | Default source mapping for HealthKit bridge ingest |
 | `HEALTHKIT_BRIDGE_TOKEN` | unset | Optional shared token required in HealthKit bridge ingest payloads |
@@ -177,7 +184,7 @@ flags):
 | `MQTT_MAPPINGS_JSON` | unset | Inline registry JSON (alternative to file) |
 | `MQTT_ALLOW_REGION_OVERLAP` | `0` | Suppress overlap warnings when `1` |
 | `TRIGGERS_ENABLED` | `false` | Enable PE trigger envelope recording from RE `mergeBatch` results |
-| `TRIGGER_DISPATCH_MODE` | `dry-run` | Label for trigger dispatch target (`dry-run`, `graphql`, `openai`, `ollama`, `mcp`) |
+| `TRIGGER_DISPATCH_MODE` | `dry-run` | Label for trigger dispatch target (`dry-run`, `graphql`, `openai`, `ollama`, `acp`, `mcp`) |
 | `TRIGGER_GRAPHQL_URL` | `${LOCAL_AI_API_URL}/graphql` | localAIStack GraphQL target metadata for trigger envelopes |
 
 ## Documentation

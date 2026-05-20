@@ -54,6 +54,20 @@
       "completionMode": "local-adapter"
     },
     {
+      "id": "openclaw-xacp",
+      "kind": "acp",
+      "enabled": false,
+      "platform": "OpenClaw",
+      "surface": "xACP",
+      "command": "openclaw acp",
+      "gatewayUrl": "ws://127.0.0.1:18789",
+      "sessionKey": "agent:main:main",
+      "targetAgent": "openclaw",
+      "completionSourceMappingId": "acp-openclaw-completion",
+      "dispatchMode": "accepted-no-wait",
+      "completionMode": "pe-source-mapping"
+    },
+    {
       "id": "healthkit-ios-bridge",
       "kind": "healthkit",
       "enabled": false,
@@ -96,6 +110,19 @@
       },
       "normalize": { "mode": "passthrough", "clamp": true },
       "ttlMs": 900000,
+      "pushMode": "debounced",
+      "debounceMs": 250
+    },
+    {
+      "id": "acp-openclaw-completion",
+      "sensorIdTemplate": "acp.openclaw.{agent}.completion",
+      "region": { "offset": 4210, "length": 4 },
+      "extract": {
+        "type": "json",
+        "pointers": ["/completed", "/failed", "/confidence", "/actionClass"]
+      },
+      "normalize": { "mode": "passthrough", "clamp": true },
+      "ttlMs": 300000,
       "pushMode": "debounced",
       "debounceMs": 250
     },

@@ -24,6 +24,7 @@ tags:
   - name: LocalAI
   - name: Ollama
   - name: OpenAI
+  - name: ACP
   - name: HealthKit
   - name: CareKit
   - name: Completions
@@ -515,6 +516,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/integrations/acp/status:
+    get:
+      tags: [ACP]
+      summary: ACP/OpenClaw xACP adapter status
+      description: |
+        Reports the configured OpenClaw ACP command, Gateway URL, session key,
+        target agent, completion source mapping, and fixed no-wait dispatch
+        contract. This endpoint does not contact OpenClaw.
+      responses:
+        "200":
+          description: ACP adapter status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/integrations/acp/dispatch:
+    post:
+      tags: [ACP]
+      summary: Accept a recorded dispatch envelope for external ACP/OpenClaw handling
+      description: |
+        Caller-driven no-wait adapter receipt. PE reads an existing dispatch
+        record, annotates the dispatch ledger with an OpenClaw/xACP handoff,
+        and returns `202 Accepted`. PE does not launch OpenClaw and does not
+        wait for ACP output. Finished ACP work must return through
+        `/api/integrations/completions`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcpDispatchRequest"
+      responses:
+        "202":
+          description: ACP handoff accepted and recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/integrations/healthkit/status:
     get:
       tags: [HealthKit]
@@ -1067,6 +1110,30 @@ components:
           default: true
         values:
           $ref: "#/components/schemas/Vector"
+    AcpDispatchRequest:
+      type: object
+      required: [dispatchId]
+      properties:
+        dispatchId:
+          type: string
+        targetAgent:
+          type: string
+          description: OpenClaw target agent or Gateway agent id.
+        sessionKey:
+          type: string
+          description: OpenClaw Gateway session key, for example agent:main:main.
+        sourceMappingId:
+          type: string
+          default: agent-completion-risk
+        prompt:
+          type: string
+        gatewayUrl:
+          type: string
+        command:
+          type: string
+          default: openclaw acp
+        externalRunId:
+          type: string
     HealthKitIngestRequest:
       type: object
       properties:

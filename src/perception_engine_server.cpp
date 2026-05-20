@@ -271,6 +271,12 @@ public:
     server.route("POST", "/api/integrations/openai/dispatch", [this](const http::Request& req) {
       return dispatch_openai(parse_body(req));
     });
+    server.route("GET", "/api/integrations/acp/status", [this](const http::Request&) {
+      return ok(acp_status());
+    });
+    server.route("POST", "/api/integrations/acp/dispatch", [this](const http::Request& req) {
+      return dispatch_acp(parse_body(req));
+    });
     server.route("GET", "/api/integrations/healthkit/status", [this](const http::Request&) {
       return ok(healthkit_status());
     });
@@ -341,6 +347,54 @@ public:
       Json out = mqttBridge->registry().to_json();
       if (out.is_object()) out.object()["enabled"] = true;
       return ok(out);
+    });
+    // PUT /api/mqtt/mappings — hot-reload the mapping registry without
+    // bouncing the broker connection.  Stops the existing bridge, constructs
+    // a new one with the same client config + callbacks, and re-starts it.
+    // Returns 409 if no broker config exists (PE was started without MQTT).
+    server.route("PUT", "/api/mqtt/mappings", [this](const http::Request& req) {
+      if (!mqttBridge)
+        return http::error_response(
+          "no broker config — set MQTT_BROKER_HOST at PE startup before reloading mappings", 409);
+      auto body = parse_body(req);
+      std::unique_ptr<mqtt::MappingRegistry> newRegistry;
+      try {
+        newRegistry = std::make_unique<mqtt::MappingRegistry>(mqtt::MappingRegistry::from_json(body));
+      } catch (const std::exception& e) {
+        return http::error_response(std::string("schema: ") + e.what(), 400);
+      }
+      if (newRegistry->size() == 0)
+        return http::error_response(
+          "mappings array is empty — at least one rule is required", 400);
+      const char* overlapEnv = std::getenv("MQTT_ALLOW_REGION_OVERLAP");
+      bool allowOverlap = overlapEnv &&
+        (std::string(overlapEnv) == "1" || std::string(overlapEnv) == "true");
+      auto warnings = newRegistry->validate_overlaps(allowOverlap);
+      mqtt::ClientConfig cfg = mqttBridge->config();
+      mqttBridge->stop();
+      mqttBridge = std::make_unique<mqtt::MqttBridge>(
+        cfg, std::move(newRegistry),
+        [this](const std::string& sId, int off, int len, const Vector& vals, long ttl,
+               const std::string& topic, const std::string& mId) {
+          feed_mqtt_signal(sId, off, len, vals, ttl, topic, mId);
+        },
+        [this]() { do_push(false, true); });
+      mqttBridge->start();
+      if (wsHub) {
+        wsHub->broadcast(json::stringify(Json::Object{
+          {"type", "mqtt-mappings-reloaded"},
+          {"mappings", static_cast<double>(mqttBridge->registry().size())},
+          {"timestamp", static_cast<double>(now_ms())},
+        }));
+      }
+      Json::Array warnArr;
+      for (const auto& w : warnings) warnArr.push_back(w);
+      return ok(Json::Object{
+        {"success", true},
+        {"enabled", true},
+        {"mappings", static_cast<double>(mqttBridge->registry().size())},
+        {"warnings", warnArr},
+      });
     });
     server.route("POST", "/api/push", [this](const http::Request& req) {
       auto body = parse_body(req);
@@ -781,6 +835,15 @@ private:
             if (item.at("baseUrl").is_string()) openaiBaseUrl = item.at("baseUrl").as_string();
             if (item.at("model").is_string()) openaiModel = item.at("model").as_string();
             if (item.at("completionSourceMappingId").is_string()) openaiCompletionSourceMappingId = item.at("completionSourceMappingId").as_string();
+          } else if (kind == "acp" || kind == "openclaw-acp") {
+            acpEnabled = item.at("enabled").as_bool(acpEnabled);
+            if (item.at("platform").is_string()) acpPlatform = item.at("platform").as_string();
+            if (item.at("surface").is_string()) acpSurface = item.at("surface").as_string();
+            if (item.at("command").is_string()) acpCommand = item.at("command").as_string();
+            if (item.at("gatewayUrl").is_string()) acpGatewayUrl = item.at("gatewayUrl").as_string();
+            if (item.at("sessionKey").is_string()) acpSessionKey = item.at("sessionKey").as_string();
+            if (item.at("targetAgent").is_string()) acpTargetAgent = item.at("targetAgent").as_string();
+            if (item.at("completionSourceMappingId").is_string()) acpCompletionSourceMappingId = item.at("completionSourceMappingId").as_string();
           } else if (kind == "healthkit") {
             if (item.at("bridgeId").is_string()) healthKitBridgeId = item.at("bridgeId").as_string();
             if (item.at("defaultSourceMappingId").is_string()) healthKitDefaultSourceMappingId = item.at("defaultSourceMappingId").as_string();
@@ -810,6 +873,17 @@ private:
     if (const char* mapping = std::getenv("OPENAI_COMPLETION_SOURCE_MAPPING_ID")) openaiCompletionSourceMappingId = mapping;
     if (const char* apiKey = std::getenv("OPENAI_API_KEY")) openaiApiKey = apiKey;
     while (!openaiBaseUrl.empty() && openaiBaseUrl.back() == '/') openaiBaseUrl.pop_back();
+    if (const char* enabled = std::getenv("ACP_ENABLED")) acpEnabled = truthy_env(enabled);
+    if (const char* platform = std::getenv("ACP_PLATFORM")) acpPlatform = platform;
+    if (const char* surface = std::getenv("ACP_SURFACE")) acpSurface = surface;
+    if (const char* command = std::getenv("ACP_COMMAND")) acpCommand = command;
+    if (const char* command = std::getenv("OPENCLAW_ACP_COMMAND")) acpCommand = command;
+    if (const char* url = std::getenv("ACP_GATEWAY_URL")) acpGatewayUrl = url;
+    if (const char* url = std::getenv("OPENCLAW_GATEWAY_URL")) acpGatewayUrl = url;
+    if (const char* session = std::getenv("ACP_SESSION_KEY")) acpSessionKey = session;
+    if (const char* session = std::getenv("OPENCLAW_ACP_SESSION")) acpSessionKey = session;
+    if (const char* agent = std::getenv("ACP_TARGET_AGENT")) acpTargetAgent = agent;
+    if (const char* mapping = std::getenv("ACP_COMPLETION_SOURCE_MAPPING_ID")) acpCompletionSourceMappingId = mapping;
     if (const char* bridgeId = std::getenv("HEALTHKIT_BRIDGE_ID")) healthKitBridgeId = bridgeId;
     if (const char* mapping = std::getenv("HEALTHKIT_DEFAULT_SOURCE_MAPPING_ID")) healthKitDefaultSourceMappingId = mapping;
     if (const char* token = std::getenv("HEALTHKIT_BRIDGE_TOKEN")) healthKitBridgeToken = token;
@@ -871,10 +945,11 @@ private:
         {"statusEndpoint", "/api/integrations/openai/status"},
         {"dispatchEndpoint", "/api/integrations/openai/dispatch"}
       }},
+      {"acp", acp_status()},
       {"healthkit", Json::Object{
         {"bridgeId", healthKitBridgeId},
-        {"defaultSourceMappingId", healthKitDefaultSourceMappingId},
         {"tokenConfigured", !healthKitBridgeToken.empty()},
+        {"registryKey", "healthkit:<typeIdentifier>"},
         {"statusEndpoint", "/api/integrations/healthkit/status"},
         {"ingestEndpoint", "/api/integrations/healthkit/ingest"}
       }},
@@ -891,16 +966,17 @@ private:
   Json healthkit_status() const {
     return Json::Object{
       {"bridgeId", healthKitBridgeId},
-      {"defaultSourceMappingId", healthKitDefaultSourceMappingId},
       {"tokenConfigured", !healthKitBridgeToken.empty()},
       {"nativeAppRequired", true},
       {"nativeWorkOutsideRepo", true},
+      {"statusEndpoint", "/api/integrations/healthkit/status"},
       {"ingestEndpoint", "/api/integrations/healthkit/ingest"},
+      {"registryKey", "healthkit:<typeIdentifier>"},
       {"contract", Json::Object{
         {"transport", "https"},
-        {"singleSample", Json::Array{"bridgeId", "sampleType", "sourceMappingId", "values"}},
+        {"singleSample", Json::Array{"type", "value", "sourceName"}},
         {"batchSamples", Json::Array{"bridgeId", "samples[]"}},
-        {"auth", healthKitBridgeToken.empty() ? "external-transport" : "bridgeToken"}
+        {"auth", healthKitBridgeToken.empty() ? "none" : "bridgeToken"}
       }}
     };
   }
@@ -968,6 +1044,27 @@ private:
       {"models", models},
       {"error", error},
       {"dispatchEndpoint", "/api/integrations/openai/dispatch"}
+    };
+  }
+
+  Json acp_status() const {
+    return Json::Object{
+      {"enabled", acpEnabled},
+      {"platform", acpPlatform},
+      {"surface", acpSurface},
+      {"adapter", "openclaw-xacp"},
+      {"command", acpCommand},
+      {"gatewayUrl", acpGatewayUrl.empty() ? Json(nullptr) : Json(acpGatewayUrl)},
+      {"sessionKey", acpSessionKey.empty() ? Json(nullptr) : Json(acpSessionKey)},
+      {"targetAgent", acpTargetAgent},
+      {"completionSourceMappingId", acpCompletionSourceMappingId},
+      {"dispatchEndpoint", "/api/integrations/acp/dispatch"},
+      {"completionEndpoint", "/api/integrations/completions"},
+      {"noWaitDispatch", true},
+      {"contract", Json::Object{
+        {"dispatch", "Record an ACP/OpenClaw handoff receipt only; do not run or wait for the harness in the PE cycle."},
+        {"completion", "External ACP/OpenClaw adapters commit finished results through /api/integrations/completions."}
+      }}
     };
   }
 
@@ -1398,6 +1495,64 @@ private:
     }
   }
 
+  http::Response dispatch_acp(const Json& body) {
+    if (!body.is_object()) return http::error_response("ACP dispatch body must be a JSON object", 400);
+    const std::string dispatchId = body.at("dispatchId").as_string(body.at("id").as_string());
+    if (dispatchId.empty()) return http::error_response("ACP dispatch requires dispatchId", 400);
+    auto maybeRecord = dispatch_record_snapshot(dispatchId);
+    if (!maybeRecord) return http::error_response("Dispatch record not found", 404);
+    DispatchRecord record = *maybeRecord;
+
+    const std::string targetAgent = body.at("targetAgent").as_string(
+      body.at("agent").as_string(record.target.empty() ? acpTargetAgent : record.target));
+    const std::string sessionKey = body.at("sessionKey").as_string(acpSessionKey);
+    const std::string sourceMappingId = body.at("sourceMappingId").as_string(acpCompletionSourceMappingId);
+    const std::string prompt = body.at("prompt").as_string(
+      "Handle this RealityEngine trigger envelope through the configured OpenClaw ACP session and return a PE completion values array.");
+    const std::string externalRunId = body.at("externalRunId").as_string(make_id("acp-handoff"));
+
+    Json::Object handoff{
+      {"protocol", "ACP"},
+      {"surface", acpSurface},
+      {"platform", acpPlatform},
+      {"adapter", "openclaw-xacp"},
+      {"command", body.at("command").as_string(acpCommand)},
+      {"gatewayUrl", body.at("gatewayUrl").as_string(acpGatewayUrl)},
+      {"sessionKey", sessionKey.empty() ? Json(nullptr) : Json(sessionKey)},
+      {"targetAgent", targetAgent},
+      {"completionEndpoint", "/api/integrations/completions"},
+      {"completionSourceMappingId", sourceMappingId},
+      {"noWaitDispatch", true},
+      {"prompt", prompt},
+      {"dispatchId", dispatchId},
+      {"envelopeId", record.envelopeId},
+      {"correlationId", record.correlationId}
+    };
+    if (body.at("metadata").is_object()) handoff["metadata"] = body.at("metadata");
+
+    (void)update_dispatch_record(dispatchId, Json::Object{
+      {"status", body.at("status").as_string("accepted")},
+      {"adapter", "openclaw-xacp"},
+      {"provider", "acp"},
+      {"externalRunId", externalRunId},
+      {"incrementAttempts", body.at("incrementAttempts").as_bool(true)},
+      {"clearError", true},
+      {"providerReceipt", Json::Object(handoff)}
+    });
+
+    return http::json_response(json::stringify(Json::Object{
+      {"success", true},
+      {"accepted", true},
+      {"dispatchId", dispatchId},
+      {"provider", "acp"},
+      {"platform", acpPlatform},
+      {"surface", acpSurface},
+      {"externalRunId", externalRunId},
+      {"noWaitDispatch", true},
+      {"handoff", Json(handoff)}
+    }), 202);
+  }
+
   Json bootstrap_localai() {
     Json::Array registeredSensors;
     Json::Array skippedSensors;
@@ -1489,7 +1644,7 @@ private:
     }
     if (wsHub) {
       wsHub->broadcast(json::stringify(Json::Object{
-        {"type", "mqtt-signal"},
+        {"type", "mqtt-ingest"},
         {"topic", topic},
         {"mappingId", mappingId},
         {"sensorId", sensorId},
@@ -1636,93 +1791,159 @@ private:
     return mapping;
   }
 
-  Json::Object build_healthkit_signal(const Json& body, const Json& mapping) const {
-    const std::string bridgeId = body.at("bridgeId").as_string(healthKitBridgeId);
-    const std::string sampleType = body.at("sampleType").as_string(body.at("type").as_string("sample"));
-    std::string sensorId = body.at("sensorId").as_string(mapping.at("sensorId").as_string());
-    if (sensorId.empty() && mapping.at("sensorIdTemplate").is_string()) {
-      sensorId = mapping.at("sensorIdTemplate").as_string();
-      sensorId = replace_all(sensorId, "{bridgeId}", source_id_part(bridgeId));
-      sensorId = replace_all(sensorId, "{sampleType}", source_id_part(sampleType));
-      sensorId = replace_all(sensorId, "{type}", source_id_part(sampleType));
-    }
-    if (sensorId.empty()) sensorId = "healthkit." + source_id_part(sampleType);
+  // ── HealthKit AI-model helpers ──────────────────────────────────────────
 
-    Json::Object signal;
-    signal["sensorId"] = sensorId;
-    signal["name"] = body.at("name").as_string(mapping.at("name").as_string("healthkit:" + sampleType));
-    if (mapping.at("region").is_object()) signal["region"] = mapping.at("region");
-    if (body.at("region").is_object()) signal["region"] = body.at("region");
-    if (body.at("values").is_array()) signal["values"] = body.at("values");
-    else if (body.at("value").is_number()) signal["values"] = Json::Array{body.at("value").as_number()};
-    else signal["values"] = Json::Array{};
-    signal["active"] = body.at("active").as_bool(true);
-    signal["ttlMs"] = body.at("ttlMs").is_number() ? body.at("ttlMs") : mapping.at("ttlMs").is_number() ? mapping.at("ttlMs") : Json(300000);
-    signal["triggerPush"] = body.at("triggerPush").as_bool(false);
-    signal["compactPush"] = body.at("compactPush").as_bool(true);
-    return signal;
+  // Collapse "HKQuantityTypeIdentifierHeartRate" → "heartrate" for sensorId slugs.
+  // Mirrors compactHKIdentifier in AI HealthKitBridge.ts.
+  static std::string compact_hk_identifier(const std::string& type) {
+    static const std::vector<std::string> prefixes = {
+      "HKQuantityTypeIdentifier", "HKCategoryTypeIdentifier",
+      "HKWorkoutTypeIdentifier",  "HKCorrelationTypeIdentifier",
+      "HKDocumentTypeIdentifier", "HKClinicalTypeIdentifier",
+      "HKSeriesTypeIdentifier",   "HKTypeIdentifier",
+    };
+    std::string stripped = type;
+    for (const auto& p : prefixes) {
+      if (type.size() >= p.size() && type.substr(0, p.size()) == p) {
+        stripped = type.substr(p.size());
+        break;
+      }
+    }
+    std::string out;
+    for (char c : stripped) if (std::isalnum(static_cast<unsigned char>(c))) out += std::tolower(c);
+    return out.empty() ? "unknown" : out;
+  }
+
+  // Priority: mapping.sensorId > sensorIdTemplate (tokens: {type},{sampleType},{source},{provider},{agent}) > slug.
+  static std::string derive_hk_sensor_id(
+      const std::string& type, const std::string& source_name, const Json& mapping) {
+    const std::string fixed = mapping.at("sensorId").as_string();
+    if (!fixed.empty()) return fixed;
+    const std::string tpl = mapping.at("sensorIdTemplate").as_string();
+    if (!tpl.empty()) {
+      std::string id = tpl;
+      id = replace_all(id, "{type}",       source_id_part(type));
+      id = replace_all(id, "{sampleType}", source_id_part(type));
+      id = replace_all(id, "{source}",     source_id_part(source_name));
+      id = replace_all(id, "{provider}",   "healthkit");
+      id = replace_all(id, "{agent}",      source_id_part(source_name));
+      return id;
+    }
+    const std::string slug   = compact_hk_identifier(type);
+    const std::string suffix = source_name.empty() ? "" : "." + source_id_part(source_name);
+    return "hk." + slug + suffix;
+  }
+
+  // Two-level lookup: healthkit:<type>:<sourceName> wins over healthkit:<type>.
+  Json lookup_hk_mapping(const std::string& type, const std::string& source_name) const {
+    if (!source_name.empty()) {
+      Json specific = configured_source_mapping("healthkit:" + type + ":" + source_name);
+      if (specific.is_object()) return specific;
+    }
+    return configured_source_mapping("healthkit:" + type);
   }
 
   Json ingest_healthkit_one(const Json& body) {
-    Json mapping = resolve_source_mapping_from_body(body, healthKitDefaultSourceMappingId);
-    Json::Object signal = build_healthkit_signal(body, mapping);
-    http::Response response = ingest_signal(Json(signal));
-    Json parsed = parse_json_or_null(response.body);
+    const std::string type        = body.at("type").as_string(body.at("sampleType").as_string());
+    const std::string source_name = body.at("sourceName").as_string();
+
+    if (type.empty())
+      return Json::Object{{"unmapped", true}, {"type", type},
+                          {"sourceName", source_name}, {"reason", "sample.type is required"}};
+
+    Vector values;
+    if (body.at("values").is_array()) {
+      values = json::to_numbers(body.at("values"));
+    } else if (body.at("value").is_number()) {
+      values = { body.at("value").as_number() };
+    }
+    if (values.empty())
+      return Json::Object{{"unmapped", true}, {"type", type},
+                          {"sourceName", source_name}, {"reason", "sample.value must be a finite number"}};
+
+    Json mapping = lookup_hk_mapping(type, source_name);
+    if (!mapping.is_object())
+      return Json::Object{{"unmapped", true}, {"type", type}, {"sourceName", source_name},
+                          {"reason", "no registry mapping (declare healthkit:" + type + "[:<sourceName>])"}};
+
+    if (!mapping.at("region").is_object())
+      return Json::Object{{"unmapped", true}, {"type", type},
+                          {"sourceName", source_name}, {"reason", "mapping is missing region.offset/region.length"}};
+
+    const std::string sensor_id = derive_hk_sensor_id(type, source_name, mapping);
+    const long ttl_ms  = mapping.at("ttlMs").is_number()
+                           ? static_cast<long>(mapping.at("ttlMs").as_number()) : 3600000L;
+    const std::string name = mapping.at("name").as_string("healthkit:" + type);
+
+    Json::Object signal;
+    signal["sensorId"] = sensor_id;
+    signal["name"]     = name;
+    signal["region"]   = mapping.at("region");
+    signal["values"]   = body.at("values").is_array() ? body.at("values") : Json(Json::Array{body.at("value").as_number()});
+    signal["active"]   = true;
+    signal["ttlMs"]    = static_cast<double>(ttl_ms);
+    http::Response resp = ingest_signal(Json(signal));
+    Json parsed = parse_json_or_null(resp.body);
+
+    if (resp.status < 200 || resp.status >= 300)
+      return Json::Object{{"unmapped", true}, {"type", type}, {"sourceName", source_name},
+                          {"reason", parsed.at("error").as_string("ingest_signal failed")}};
+
+    Json::Array val_arr;
+    for (double v : values) val_arr.push_back(v);
     return Json::Object{
-      {"success", response.status >= 200 && response.status < 300},
-      {"status", static_cast<double>(response.status)},
-      {"sampleType", body.at("sampleType").as_string(body.at("type").as_string())},
+      {"resolved",        true},
+      {"sensorId",        sensor_id},
+      {"name",            name},
+      {"type",            type},
+      {"sourceName",      source_name},
       {"sourceMappingId", mapping.at("id").as_string()},
-      {"sensorId", signal["sensorId"]},
-      {"result", parsed}
+      {"region",          mapping.at("region")},
+      {"values",          val_arr},
+      {"ttlMs",           static_cast<double>(ttl_ms)},
+      {"source",          parsed.at("source")},
     };
   }
 
   http::Response ingest_healthkit(const Json& body) {
     if (!body.is_object()) return http::error_response("HealthKit ingest body must be a JSON object", 400);
-    if (!healthKitBridgeToken.empty() && body.at("bridgeToken").as_string() != healthKitBridgeToken) {
+    if (!healthKitBridgeToken.empty() && body.at("bridgeToken").as_string() != healthKitBridgeToken)
       return http::error_response("HealthKit bridge token rejected", 401);
-    }
 
-    Json::Array results;
-    bool allOk = true;
+    Json::Array resolved, unmapped;
     try {
       const Json& samples = body.at("samples");
       if (samples.is_array()) {
         for (const auto& sample : samples.array()) {
-          Json merged = merge_objects(body, sample);
-          if (merged.is_object()) {
-            merged.object().erase("samples");
-            merged.object().erase("bridgeToken");
-          }
-          Json result = ingest_healthkit_one(merged);
-          allOk = allOk && result.at("success").as_bool(false);
-          results.push_back(result);
+          Json r = ingest_healthkit_one(sample);
+          (r.at("resolved").as_bool(false) ? resolved : unmapped).push_back(r);
         }
       } else {
-        Json result = ingest_healthkit_one(body);
-        allOk = result.at("success").as_bool(false);
-        results.push_back(result);
+        Json r = ingest_healthkit_one(body);
+        (r.at("resolved").as_bool(false) ? resolved : unmapped).push_back(r);
       }
     } catch (const std::exception& e) {
       return http::error_response(e.what(), 400);
     }
 
+    const bool allResolved = unmapped.empty();
+    const int  status      = allResolved ? 200 : (resolved.empty() ? 400 : 207);
     if (wsHub) {
       wsHub->broadcast(json::stringify(Json::Object{
-        {"type", "healthkit.ingest"},
+        {"type",     "healthkit.ingest"},
         {"bridgeId", body.at("bridgeId").as_string(healthKitBridgeId)},
-        {"samples", static_cast<double>(results.size())},
-        {"success", allOk},
-        {"timestamp", static_cast<double>(now_ms())}
+        {"samples",  static_cast<double>(resolved.size() + unmapped.size())},
+        {"resolved", static_cast<double>(resolved.size())},
+        {"unmapped", static_cast<double>(unmapped.size())},
+        {"timestamp", static_cast<double>(now_ms())},
       }));
     }
-
     return http::json_response(json::stringify(Json::Object{
-      {"success", allOk},
+      {"success",  allResolved},
       {"bridgeId", body.at("bridgeId").as_string(healthKitBridgeId)},
-      {"results", results}
-    }), allOk ? 200 : 207);
+      {"resolved", resolved},
+      {"unmapped", unmapped},
+    }), status);
   }
 
   Json::Object build_carekit_signal(const Json& body, const Json& mapping) const {
@@ -2272,6 +2493,14 @@ private:
   std::string openaiModel = "gpt-5";
   std::string openaiCompletionSourceMappingId = "agent-completion-risk";
   std::string openaiApiKey;
+  bool acpEnabled = false;
+  std::string acpPlatform = "OpenClaw";
+  std::string acpSurface = "xACP";
+  std::string acpCommand = "openclaw acp";
+  std::string acpGatewayUrl = "ws://127.0.0.1:18789";
+  std::string acpSessionKey = "agent:main:main";
+  std::string acpTargetAgent = "openclaw";
+  std::string acpCompletionSourceMappingId = "agent-completion-risk";
   std::string healthKitBridgeId = "healthkit-ios-bridge";
   std::string healthKitDefaultSourceMappingId = "healthkit-activity";
   std::string healthKitBridgeToken;

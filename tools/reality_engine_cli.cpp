@@ -75,6 +75,9 @@ void usage() {
     << "  reality_engine_cli pe openai-status [--pe-url URL]\n"
     << "  reality_engine_cli pe openai-dispatch ID [--model NAME] [--source-mapping-id ID]\n"
     << "      [--prompt TEXT] [--instructions TEXT] [--no-commit] [--trigger-push] [--json JSON] [--pe-url URL]\n"
+    << "  reality_engine_cli pe acp-status [--pe-url URL]\n"
+    << "  reality_engine_cli pe acp-dispatch ID [--target-agent NAME] [--session-key KEY]\n"
+    << "      [--source-mapping-id ID] [--prompt TEXT] [--external-run-id ID] [--json JSON] [--pe-url URL]\n"
     << "  reality_engine_cli pe healthkit-status [--pe-url URL]\n"
     << "  reality_engine_cli pe healthkit-ingest --sample-type TYPE --values CSV [--source-mapping-id ID]\n"
     << "      [--bridge-id ID] [--unit UNIT] [--trigger-push] [--json JSON] [--pe-url URL]\n"
@@ -173,6 +176,32 @@ int run_pe(int argc, char** argv) {
       raw = reality::json::stringify(Value(body));
     }
     std::cout << reality::http::request_json("POST", base + "/api/integrations/openai/dispatch", raw) << "\n";
+    return 0;
+  }
+  if (command == "acp-status") {
+    std::cout << reality::http::get(base + "/api/integrations/acp/status") << "\n";
+    return 0;
+  }
+  if (command == "acp-dispatch") {
+    std::string id = positional(argc, argv, 2);
+    if (id.empty()) throw std::invalid_argument("acp-dispatch requires ID");
+    std::string raw = arg_value(argc, argv, "--json");
+    if (raw.empty()) {
+      Value::Object body;
+      body["dispatchId"] = id;
+      std::string targetAgent = arg_value(argc, argv, "--target-agent", arg_value(argc, argv, "--agent"));
+      std::string sessionKey = arg_value(argc, argv, "--session-key", arg_value(argc, argv, "--session"));
+      std::string mappingId = arg_value(argc, argv, "--source-mapping-id", arg_value(argc, argv, "--mapping-id"));
+      std::string prompt = arg_value(argc, argv, "--prompt");
+      std::string externalRunId = arg_value(argc, argv, "--external-run-id");
+      if (!targetAgent.empty()) body["targetAgent"] = targetAgent;
+      if (!sessionKey.empty()) body["sessionKey"] = sessionKey;
+      if (!mappingId.empty()) body["sourceMappingId"] = mappingId;
+      if (!prompt.empty()) body["prompt"] = prompt;
+      if (!externalRunId.empty()) body["externalRunId"] = externalRunId;
+      raw = reality::json::stringify(Value(body));
+    }
+    std::cout << reality::http::request_json("POST", base + "/api/integrations/acp/dispatch", raw) << "\n";
     return 0;
   }
   if (command == "healthkit-status") {

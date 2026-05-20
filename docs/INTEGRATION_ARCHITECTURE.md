@@ -42,6 +42,7 @@ Supported integration kinds are:
 - `localai`
 - `openai`
 - `ollama`
+- `acp`
 - `healthkit`
 - `carekit`
 - `mcp`
@@ -62,8 +63,8 @@ Every accepted inbound result resolves to the existing PE sensor-source shape:
 
 Provider-specific payloads may differ, but PE commit semantics do not. MQTT
 messages, HealthKit bridge uploads, CareKit bridge uploads, OpenAI responses,
-Ollama responses, MCP tool results, and manual callbacks must all enter through
-configured sources.
+Ollama responses, ACP harness results, MCP tool results, and manual callbacks
+must all enter through configured sources.
 
 ### Trigger Envelope Dispatcher
 
@@ -158,6 +159,8 @@ bin/reality_engine_cli pe ollama-status
 bin/reality_engine_cli pe ollama-dispatch <dispatchId> --source-mapping-id agent-completion-risk
 bin/reality_engine_cli pe openai-status
 bin/reality_engine_cli pe openai-dispatch <dispatchId> --source-mapping-id agent-completion-risk
+bin/reality_engine_cli pe acp-status
+bin/reality_engine_cli pe acp-dispatch <dispatchId> --source-mapping-id acp-openclaw-completion
 bin/reality_engine_cli pe healthkit-status
 bin/reality_engine_cli pe healthkit-ingest --sample-type step-count --source-mapping-id healthkit-activity --values 1,0,0.9,0
 bin/reality_engine_cli pe carekit-status
@@ -205,6 +208,39 @@ RealityEngine_CPP preserves the same provider-neutral contract used by Ollama:
 
 OpenAI execution is explicit and caller-driven. PE push cycles still never wait
 on OpenAI, hosted tool execution, or completion handling.
+
+### ACP / OpenClaw xACP
+
+ACP is the editor/client-to-agent protocol boundary. For this integration, PE
+treats OpenClaw as the example xACP platform surface:
+
+- `openclaw acp` is an ACP server bridge that forwards editor/client work into
+  an OpenClaw Gateway session.
+- OpenClaw ACP agent sessions use the ACP runtime path (`/acp ...` and
+  `sessions_spawn({ runtime: "acp" })`) to run external harnesses.
+- PE does not host the ACP session, execute the harness, or wait for an ACP turn.
+
+RealityEngine_CPP exposes the PE-side handoff contract:
+
+- `GET /api/integrations/acp/status` reports the configured OpenClaw command,
+  Gateway URL, session key, target agent, completion mapping, and the fixed
+  no-wait contract.
+- `POST /api/integrations/acp/dispatch` takes a recorded `dispatchId`, annotates
+  the dispatch ledger with an `openclaw-xacp` receipt, and returns `202
+  Accepted`. The endpoint does not launch OpenClaw or block on ACP output.
+- ACP/OpenClaw completion returns through `POST /api/integrations/completions`
+  using `provider: "acp"` and the configured `sourceMappingId`, such as
+  `acp-openclaw-completion`.
+
+The intended external adapter loop is:
+
+1. Poll or read PE dispatch records.
+2. Call `acp-dispatch` to record that an OpenClaw/xACP handoff was accepted.
+3. Drive OpenClaw through its ACP surface outside the PE push cycle.
+4. Commit the finished values through `/api/integrations/completions`.
+
+This preserves the same no-wait dispatch rule used by OpenAI, Ollama, MCP, and
+manual adapters while keeping RE isolated from ACP runtime state.
 
 ### Ollama
 
@@ -291,6 +327,30 @@ RealityEngine_CPP currently includes the first implementation slice:
   state and source mappings.
 - `POST /api/integrations/completions` maps provider/agent results into PE
   sources through the same path as `/api/signals`.
+- `GET /api/integrations/acp/status` and
+  `POST /api/integrations/acp/dispatch` provide the OpenClaw/xACP no-wait
+  handoff surface.
 
 This slice intentionally does not perform provider/model calls inside the PE
 cycle. External completion must return through source mappings.
+
+## ACP / OpenClaw Roadmap
+
+1. Contract hardening: add cross-runtime conformance tests for ACP status,
+   accepted-no-wait dispatch receipts, dispatch ledger patching, and ACP
+   completion ingest through `sourceMappingId`.
+2. External adapter: build a small OpenClaw runner outside PE that reads accepted
+   ACP records, invokes `openclaw acp` or `acpx openclaw`, and posts completion
+   values back through `/api/integrations/completions`.
+3. Session policy: add registry fields for allowed Gateway URLs, session-key
+   prefixes, target agents, working directories, and permission profiles; keep
+   policy validation at the PE adapter edge.
+4. Observability: emit ACP handoff metrics and correlate OpenClaw session keys,
+   ACP run IDs, dispatch IDs, envelope IDs, and PE completion IDs.
+5. Runtime parity: mirror the C++ ACP endpoints in the LSP runtime and document
+   the TypeScript/AI reference contract so AI, CPP, and LSP expose the same
+   integration shape.
+6. OpenClaw example: provide a runnable example that maps
+   `acp-openclaw-completion` into a domain machine, drives an OpenClaw ACP
+   session from a recorded dispatch, and verifies that RE state changes only
+   after PE ingests the completion source.
