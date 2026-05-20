@@ -22,6 +22,13 @@ tags:
   - name: Sensors
   - name: MQTT
   - name: LocalAI
+  - name: Ollama
+  - name: OpenAI
+  - name: HealthKit
+  - name: CareKit
+  - name: Completions
+  - name: Triggers
+  - name: Dispatch
   - name: Machines
 paths:
   /:
@@ -352,6 +359,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Object"
+  /api/integrations/status:
+    get:
+      tags: [Completions]
+      summary: Provider-neutral integration registry status
+      description: |
+        Reports the startup-loaded `INTEGRATIONS_CONFIG` registry, including
+        configured providers and source mappings available to completion
+        callbacks.
+      responses:
+        "200":
+          description: Integration registry status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
   /api/integrations/localai/catalog:
     get:
       tags: [LocalAI]
@@ -405,6 +427,296 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/integrations/ollama/status:
+    get:
+      tags: [Ollama]
+      summary: Local Ollama adapter status
+      description: Reports configured Ollama endpoint/model and `/api/tags` reachability.
+      responses:
+        "200":
+          description: Ollama adapter status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/integrations/ollama/dispatch:
+    post:
+      tags: [Ollama]
+      summary: Deliver a recorded dispatch envelope to local Ollama
+      description: |
+        Caller-driven local adapter execution. PE reads an existing dispatch
+        record, calls Ollama `/api/chat`, annotates the dispatch ledger, and
+        optionally commits model-produced `values` through completion ingest.
+        PE push cycles do not wait on this endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OllamaDispatchRequest"
+      responses:
+        "200":
+          description: Ollama dispatch completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          description: Ollama invocation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/integrations/openai/status:
+    get:
+      tags: [OpenAI]
+      summary: OpenAI Responses API adapter status
+      description: Reports configured OpenAI endpoint/model, API-key presence, and `/models` reachability when configured.
+      responses:
+        "200":
+          description: OpenAI adapter status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/integrations/openai/dispatch:
+    post:
+      tags: [OpenAI]
+      summary: Deliver a recorded dispatch envelope to the OpenAI Responses API
+      description: |
+        Caller-driven provider adapter execution. PE reads an existing dispatch
+        record, calls OpenAI `POST /v1/responses`, annotates the dispatch
+        ledger, and optionally commits model-produced `values` through
+        completion ingest. PE push cycles do not wait on this endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenAIDispatchRequest"
+      responses:
+        "200":
+          description: OpenAI dispatch completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          description: OpenAI invocation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/integrations/healthkit/status:
+    get:
+      tags: [HealthKit]
+      summary: HealthKit bridge ingest contract status
+      description: |
+        Reports PE-side bridge settings. Native HealthKit authorization,
+        anchored reads, device storage, and HealthKit writes are owned by an
+        external Apple-platform bridge app, not this service.
+      responses:
+        "200":
+          description: HealthKit bridge contract status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/integrations/healthkit/ingest:
+    post:
+      tags: [HealthKit]
+      summary: Ingest bridge-approved HealthKit samples into PE sources
+      description: |
+        Accepts normalized values from a native Apple HealthKit bridge and maps
+        them into configured PE sensor sources. The endpoint accepts one sample
+        or `samples[]`; it does not perform native HealthKit authorization,
+        anchored queries, or HealthKit writes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HealthKitIngestRequest"
+      responses:
+        "200":
+          description: HealthKit sample(s) ingested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "207":
+          description: Batch accepted with one or more failed samples
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Optional bridge token rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/integrations/carekit/status:
+    get:
+      tags: [CareKit]
+      summary: CareKit bridge ingest contract status
+      description: |
+        Reports PE-side bridge settings. Native CareKit store access, care
+        plans, tasks, outcomes, contacts, UI, and writeback are owned by an
+        external Apple-platform bridge app, not this service.
+      responses:
+        "200":
+          description: CareKit bridge contract status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/integrations/carekit/ingest:
+    post:
+      tags: [CareKit]
+      summary: Ingest bridge-approved CareKit samples into PE sources
+      description: |
+        Accepts normalized values from a native Apple CareKit bridge and maps
+        them into configured PE sensor sources. The endpoint accepts one task or
+        outcome sample or `samples[]`; it does not perform native CareKit store
+        access or writeback.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CareKitIngestRequest"
+      responses:
+        "200":
+          description: CareKit sample(s) ingested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "207":
+          description: Batch accepted with one or more failed samples
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Optional bridge token rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/integrations/completions:
+    post:
+      tags: [Completions]
+      summary: Commit provider or agent completion as a PE source update
+      description: |
+        Accepts completion callbacks from OpenAI, Ollama, MCP, CLI, HTTPS, or
+        WebSocket adapters and maps them into the same sensor-source path used
+        by `/api/signals`. The request does not wait for agent work; it records
+        a completed result that has already arrived.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompletionInput"
+      responses:
+        "200":
+          description: Completion mapped into a PE source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/triggers/status:
+    get:
+      tags: [Triggers]
+      summary: Trigger envelope dispatcher status
+      description: |
+        Reports whether PE trigger-envelope recording is enabled, the configured
+        dispatch mode, endpoint metadata, and counters for envelopes created or
+        dropped. Trigger dispatch is asynchronous with respect to PE cycles.
+      responses:
+        "200":
+          description: Trigger dispatcher status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/dispatch/ledger:
+    get:
+      tags: [Dispatch]
+      summary: Recent trigger dispatch ledger records
+      description: |
+        Returns recent fire-and-record trigger envelopes. The ledger is audit
+        metadata, not a workflow queue; external completions return later
+        through ordinary PE source mappings.
+      responses:
+        "200":
+          description: Dispatch ledger snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+  /api/dispatch/records/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Dispatch]
+      summary: Read one dispatch ledger record
+      responses:
+        "200":
+          description: Dispatch record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Dispatch]
+      summary: Annotate dispatch delivery state
+      description: |
+        Updates audit metadata for a trigger dispatch record, such as adapter
+        delivery status or provider run id. This is not a completion path and
+        does not resume PE or RE work; completed agent results still return via
+        `/api/integrations/completions` or `/api/signals`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DispatchRecordUpdate"
+      responses:
+        "200":
+          description: Updated dispatch record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Object"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/machines:
     get:
       tags: [Machines]
@@ -611,6 +923,54 @@ components:
         compactPush:
           type: boolean
           default: false
+    CompletionInput:
+      type: object
+      required: [values]
+      properties:
+        provider:
+          type: string
+          description: openai, ollama, localai, mcp, cli, https, ws, or another adapter id.
+        agent:
+          type: string
+        agentId:
+          type: string
+        completionId:
+          type: string
+        sourceMappingId:
+          type: string
+          description: Identifier from the startup-loaded integration registry.
+        mappingId:
+          type: string
+          deprecated: true
+          description: Compatibility alias for sourceMappingId.
+        correlationId:
+          type: string
+        envelopeId:
+          type: string
+        sensorId:
+          type: string
+        name:
+          type: string
+        region:
+          $ref: "#/components/schemas/Region"
+        sourceMapping:
+          type: object
+          additionalProperties: true
+          description: Optional startup-resolved source mapping; direct fields override this block.
+        values:
+          $ref: "#/components/schemas/Vector"
+        ttlMs:
+          type: number
+          default: 300000
+        metadata:
+          type: object
+          additionalProperties: true
+        triggerPush:
+          type: boolean
+          default: false
+        compactPush:
+          type: boolean
+          default: true
     LocalAIInvokeRequest:
       type: object
       properties:
@@ -624,6 +984,206 @@ components:
         path:
           type: string
         payload:
+          type: object
+          additionalProperties: true
+    OllamaDispatchRequest:
+      type: object
+      required: [dispatchId]
+      properties:
+        dispatchId:
+          type: string
+        id:
+          type: string
+          deprecated: true
+          description: Compatibility alias for dispatchId.
+        model:
+          type: string
+        sourceMappingId:
+          type: string
+        prompt:
+          type: string
+        systemPrompt:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+          description: Complete Ollama `/api/chat` payload override.
+        format:
+          type: string
+        formatJson:
+          type: boolean
+          default: true
+        options:
+          type: object
+          additionalProperties: true
+        commitCompletion:
+          type: boolean
+          default: true
+        triggerPush:
+          type: boolean
+          default: false
+        values:
+          $ref: "#/components/schemas/Vector"
+    OpenAIDispatchRequest:
+      type: object
+      required: [dispatchId]
+      properties:
+        dispatchId:
+          type: string
+        id:
+          type: string
+          deprecated: true
+          description: Compatibility alias for dispatchId.
+        model:
+          type: string
+        sourceMappingId:
+          type: string
+        prompt:
+          type: string
+        instructions:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+          description: Complete OpenAI `POST /v1/responses` payload override.
+        maxOutputTokens:
+          type: integer
+        temperature:
+          type: number
+        reasoning:
+          type: object
+          additionalProperties: true
+        text:
+          type: object
+          additionalProperties: true
+        commitCompletion:
+          type: boolean
+          default: true
+        triggerPush:
+          type: boolean
+          default: false
+        store:
+          type: boolean
+          default: true
+        values:
+          $ref: "#/components/schemas/Vector"
+    HealthKitIngestRequest:
+      type: object
+      properties:
+        bridgeId:
+          type: string
+        bridgeToken:
+          type: string
+          description: Optional shared bridge token when HEALTHKIT_BRIDGE_TOKEN is configured.
+        sampleType:
+          type: string
+          description: HealthKit sample type identifier normalized by the native bridge.
+        type:
+          type: string
+          deprecated: true
+          description: Compatibility alias for sampleType.
+        unit:
+          type: string
+        sourceMappingId:
+          type: string
+        sourceMapping:
+          type: object
+          additionalProperties: true
+        sensorId:
+          type: string
+        region:
+          $ref: "#/components/schemas/Region"
+        value:
+          type: number
+        values:
+          $ref: "#/components/schemas/Vector"
+        observedAtMs:
+          type: number
+        metadata:
+          type: object
+          additionalProperties: true
+        triggerPush:
+          type: boolean
+          default: false
+        compactPush:
+          type: boolean
+          default: true
+        samples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    CareKitIngestRequest:
+      type: object
+      properties:
+        bridgeId:
+          type: string
+        bridgeToken:
+          type: string
+          description: Optional shared bridge token when CAREKIT_BRIDGE_TOKEN is configured.
+        sampleType:
+          type: string
+          description: CareKit task or outcome sample type normalized by the native bridge.
+        type:
+          type: string
+          deprecated: true
+          description: Compatibility alias for sampleType.
+        taskId:
+          type: string
+        carePlanId:
+          type: string
+        sourceMappingId:
+          type: string
+        sourceMapping:
+          type: object
+          additionalProperties: true
+        sensorId:
+          type: string
+        region:
+          $ref: "#/components/schemas/Region"
+        value:
+          type: number
+        values:
+          $ref: "#/components/schemas/Vector"
+        observedAtMs:
+          type: number
+        metadata:
+          type: object
+          additionalProperties: true
+        triggerPush:
+          type: boolean
+          default: false
+        compactPush:
+          type: boolean
+          default: true
+        samples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    DispatchRecordUpdate:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Adapter-visible status such as observed, delivered, failed, or superseded.
+        provider:
+          type: string
+        adapter:
+          type: string
+        externalRunId:
+          type: string
+        attempts:
+          type: integer
+        incrementAttempts:
+          type: boolean
+          default: false
+        error:
+          type: string
+        clearError:
+          type: boolean
+          default: false
+        providerReceipt:
           type: object
           additionalProperties: true
     MqttBridgeStatus:

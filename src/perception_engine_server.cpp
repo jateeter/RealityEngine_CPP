@@ -12,6 +12,7 @@
 #include <future>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <thread>
 #include <algorithm>
@@ -21,6 +22,8 @@
 using namespace reality;
 
 namespace {
+
+namespace fs = std::filesystem;
 
 struct LocalAISensorSpec {
   std::string sensorId;
@@ -125,6 +128,22 @@ std::string source_id_part(const std::string& value) {
   return out.empty() ? "unnamed" : out;
 }
 
+std::string replace_all(std::string value, const std::string& needle, const std::string& replacement) {
+  size_t pos = 0;
+  while ((pos = value.find(needle, pos)) != std::string::npos) {
+    value.replace(pos, needle.size(), replacement);
+    pos += replacement.size();
+  }
+  return value;
+}
+
+Json merge_objects(Json base, const Json& overlay) {
+  if (!base.is_object()) base = Json::Object{};
+  if (!overlay.is_object()) return base;
+  for (const auto& [key, value] : overlay.object()) base.object()[key] = value;
+  return base;
+}
+
 std::string test_source_id(const std::string& machineId) {
   std::ostringstream out;
   out << "test-" << source_id_part(machineId);
@@ -157,6 +176,13 @@ public:
         localAIBaseUrl(std::move(localAIUrl)),
         localAIMachinesDirectory(std::move(localAIMachinesDir)),
         engine(vectorDimension) {
+    if (const char* enabled = std::getenv("TRIGGERS_ENABLED")) triggerDispatchEnabled = truthy_env(enabled);
+    if (const char* mode = std::getenv("TRIGGER_DISPATCH_MODE")) triggerDispatchMode = mode;
+    if (triggerDispatchMode.empty()) triggerDispatchMode = "dry-run";
+    if (const char* endpoint = std::getenv("TRIGGER_GRAPHQL_URL")) triggerGraphQLEndpoint = endpoint;
+    if (triggerGraphQLEndpoint.empty()) triggerGraphQLEndpoint = localAIBaseUrl + "/graphql";
+    load_integration_registry();
+    configure_ollama_from_environment();
     sync_test_sources_from_reality();
     if (bootstrapLocalAI) {
       try {
@@ -232,6 +258,48 @@ public:
     });
     server.route("POST", "/api/integrations/localai/invoke", [this](const http::Request& req) {
       return invoke_localai(parse_body(req));
+    });
+    server.route("GET", "/api/integrations/ollama/status", [this](const http::Request&) {
+      return ok(ollama_status());
+    });
+    server.route("POST", "/api/integrations/ollama/dispatch", [this](const http::Request& req) {
+      return dispatch_ollama(parse_body(req));
+    });
+    server.route("GET", "/api/integrations/openai/status", [this](const http::Request&) {
+      return ok(openai_status());
+    });
+    server.route("POST", "/api/integrations/openai/dispatch", [this](const http::Request& req) {
+      return dispatch_openai(parse_body(req));
+    });
+    server.route("GET", "/api/integrations/healthkit/status", [this](const http::Request&) {
+      return ok(healthkit_status());
+    });
+    server.route("POST", "/api/integrations/healthkit/ingest", [this](const http::Request& req) {
+      return ingest_healthkit(parse_body(req));
+    });
+    server.route("GET", "/api/integrations/carekit/status", [this](const http::Request&) {
+      return ok(carekit_status());
+    });
+    server.route("POST", "/api/integrations/carekit/ingest", [this](const http::Request& req) {
+      return ingest_carekit(parse_body(req));
+    });
+    server.route("GET", "/api/integrations/status", [this](const http::Request&) {
+      return ok(integration_status());
+    });
+    server.route("POST", "/api/integrations/completions", [this](const http::Request& req) {
+      return ingest_completion(parse_body(req));
+    });
+    server.route("GET", "/api/triggers/status", [this](const http::Request&) {
+      return ok(trigger_status());
+    });
+    server.route("GET", "/api/dispatch/ledger", [this](const http::Request&) {
+      return ok(dispatch_ledger());
+    });
+    server.route("GET", "/api/dispatch/records/:id", [this](const http::Request& req) {
+      return read_dispatch_record(req.pathParams.at("id"));
+    });
+    server.route("PATCH", "/api/dispatch/records/:id", [this](const http::Request& req) {
+      return update_dispatch_record(req.pathParams.at("id"), parse_body(req));
     });
     server.route("POST", "/api/signals", [this](const http::Request& req) {
       return ingest_signal(parse_body(req));
@@ -384,6 +452,32 @@ private:
     std::string body = "{}";
     long long createdAt = 0;
     long long updatedAt = 0;
+  };
+  struct DispatchRecord {
+    std::string id;
+    std::string envelopeId;
+    std::string correlationId;
+    std::string status = "recorded";
+    std::string mode = "dry-run";
+    std::string target;
+    std::string machineId;
+    std::string sequenceId;
+    std::string ragStatusCode;
+    std::string processStatus;
+    std::string error;
+    long long createdAt = 0;
+    long long updatedAt = 0;
+    int attempts = 0;
+    Json providerReceipt = nullptr;
+    Json envelope = Json::Object{};
+  };
+  struct TriggerDispatchSummary {
+    int mergeOps = 0;
+    int envelopesCreated = 0;
+    int dispatchRecordsCreated = 0;
+    int droppedNoGovernance = 0;
+    int droppedNoDispatch = 0;
+    int errors = 0;
   };
 
   bool sensor_exists(const std::string& sensorId) const {
@@ -551,6 +645,7 @@ private:
   }
 
   size_t sync_test_sources_from_machine_list(const Json& data) {
+    cache_machine_catalog(data);
     consolidate_stale_test_sources();
     size_t added = 0;
     for (const auto& machine : data.at("machines").is_array() ? data.at("machines").array() : Json::Array{}) {
@@ -649,6 +744,339 @@ private:
     };
   }
 
+  void load_integration_registry() {
+    std::string path;
+    if (const char* configured = std::getenv("INTEGRATIONS_CONFIG")) path = configured;
+    if (path.empty() && fs::exists("config/integrations.json")) path = "config/integrations.json";
+    if (path.empty()) return;
+
+    std::lock_guard<std::mutex> lock(integrationMutex);
+    integrationConfigPath = path;
+    integrationRegistryLoaded = false;
+    integrationRegistryError.clear();
+    sourceMappingRegistry.clear();
+
+    try {
+      std::ifstream in(path);
+      if (!in) throw std::runtime_error("unable to open integrations config: " + path);
+      std::ostringstream buffer;
+      buffer << in.rdbuf();
+      integrationConfig = json::parse(buffer.str());
+      const Json& mappings = integrationConfig.at("sourceMappings");
+      if (mappings.is_array()) {
+        for (const auto& mapping : mappings.array()) {
+          std::string id = mapping.at("id").as_string();
+          if (!id.empty()) sourceMappingRegistry[id] = mapping;
+        }
+      }
+      const Json& integrations = integrationConfig.at("integrations");
+      if (integrations.is_array()) {
+        for (const auto& item : integrations.array()) {
+          const std::string kind = item.at("kind").as_string();
+          if (kind == "ollama") {
+            if (item.at("baseUrl").is_string()) ollamaBaseUrl = item.at("baseUrl").as_string();
+            if (item.at("model").is_string()) ollamaModel = item.at("model").as_string();
+            if (item.at("completionSourceMappingId").is_string()) ollamaCompletionSourceMappingId = item.at("completionSourceMappingId").as_string();
+          } else if (kind == "openai") {
+            if (item.at("baseUrl").is_string()) openaiBaseUrl = item.at("baseUrl").as_string();
+            if (item.at("model").is_string()) openaiModel = item.at("model").as_string();
+            if (item.at("completionSourceMappingId").is_string()) openaiCompletionSourceMappingId = item.at("completionSourceMappingId").as_string();
+          } else if (kind == "healthkit") {
+            if (item.at("bridgeId").is_string()) healthKitBridgeId = item.at("bridgeId").as_string();
+            if (item.at("defaultSourceMappingId").is_string()) healthKitDefaultSourceMappingId = item.at("defaultSourceMappingId").as_string();
+          } else if (kind == "carekit") {
+            if (item.at("bridgeId").is_string()) careKitBridgeId = item.at("bridgeId").as_string();
+            if (item.at("defaultSourceMappingId").is_string()) careKitDefaultSourceMappingId = item.at("defaultSourceMappingId").as_string();
+          }
+        }
+      }
+      integrationRegistryLoaded = true;
+      std::cerr << "Integration registry loaded — path=" << path
+                << " sourceMappings=" << sourceMappingRegistry.size() << "\n";
+    } catch (const std::exception& e) {
+      integrationConfig = Json::Object{};
+      integrationRegistryError = e.what();
+      std::cerr << "Integration registry failed to load: " << integrationRegistryError << "\n";
+    }
+  }
+
+  void configure_ollama_from_environment() {
+    if (const char* baseUrl = std::getenv("OLLAMA_BASE_URL")) ollamaBaseUrl = baseUrl;
+    if (const char* model = std::getenv("OLLAMA_MODEL")) ollamaModel = model;
+    if (const char* mapping = std::getenv("OLLAMA_COMPLETION_SOURCE_MAPPING_ID")) ollamaCompletionSourceMappingId = mapping;
+    while (!ollamaBaseUrl.empty() && ollamaBaseUrl.back() == '/') ollamaBaseUrl.pop_back();
+    if (const char* baseUrl = std::getenv("OPENAI_BASE_URL")) openaiBaseUrl = baseUrl;
+    if (const char* model = std::getenv("OPENAI_MODEL")) openaiModel = model;
+    if (const char* mapping = std::getenv("OPENAI_COMPLETION_SOURCE_MAPPING_ID")) openaiCompletionSourceMappingId = mapping;
+    if (const char* apiKey = std::getenv("OPENAI_API_KEY")) openaiApiKey = apiKey;
+    while (!openaiBaseUrl.empty() && openaiBaseUrl.back() == '/') openaiBaseUrl.pop_back();
+    if (const char* bridgeId = std::getenv("HEALTHKIT_BRIDGE_ID")) healthKitBridgeId = bridgeId;
+    if (const char* mapping = std::getenv("HEALTHKIT_DEFAULT_SOURCE_MAPPING_ID")) healthKitDefaultSourceMappingId = mapping;
+    if (const char* token = std::getenv("HEALTHKIT_BRIDGE_TOKEN")) healthKitBridgeToken = token;
+    if (const char* bridgeId = std::getenv("CAREKIT_BRIDGE_ID")) careKitBridgeId = bridgeId;
+    if (const char* mapping = std::getenv("CAREKIT_DEFAULT_SOURCE_MAPPING_ID")) careKitDefaultSourceMappingId = mapping;
+    if (const char* token = std::getenv("CAREKIT_BRIDGE_TOKEN")) careKitBridgeToken = token;
+  }
+
+  Json configured_source_mapping(const std::string& id) const {
+    std::lock_guard<std::mutex> lock(integrationMutex);
+    auto it = sourceMappingRegistry.find(id);
+    return it == sourceMappingRegistry.end() ? Json(nullptr) : it->second;
+  }
+
+  Json integration_status() const {
+    std::lock_guard<std::mutex> lock(integrationMutex);
+    Json::Array integrations;
+    const Json& configuredIntegrations = integrationConfig.at("integrations");
+    if (configuredIntegrations.is_array()) {
+      for (const auto& item : configuredIntegrations.array()) {
+        integrations.push_back(Json::Object{
+          {"id", item.at("id").as_string()},
+          {"kind", item.at("kind").as_string()},
+          {"enabled", item.at("enabled").as_bool(false)}
+        });
+      }
+    }
+    Json::Array sourceMappings;
+    for (const auto& [id, mapping] : sourceMappingRegistry) {
+      sourceMappings.push_back(Json::Object{
+        {"id", id},
+        {"sensorId", mapping.at("sensorId").as_string()},
+        {"sensorIdTemplate", mapping.at("sensorIdTemplate").as_string()},
+        {"region", mapping.at("region").is_object() ? mapping.at("region") : Json(nullptr)},
+        {"ttlMs", mapping.at("ttlMs").is_number() ? mapping.at("ttlMs") : Json(nullptr)}
+      });
+    }
+    return Json::Object{
+      {"loaded", integrationRegistryLoaded},
+      {"path", integrationConfigPath.empty() ? Json(nullptr) : Json(integrationConfigPath)},
+      {"error", integrationRegistryError.empty() ? Json(nullptr) : Json(integrationRegistryError)},
+      {"integrationCount", static_cast<double>(integrations.size())},
+      {"sourceMappingCount", static_cast<double>(sourceMappingRegistry.size())},
+      {"integrations", integrations},
+      {"sourceMappings", sourceMappings},
+      {"completionEndpoint", "/api/integrations/completions"},
+      {"ollama", Json::Object{
+        {"baseUrl", ollamaBaseUrl},
+        {"model", ollamaModel},
+        {"completionSourceMappingId", ollamaCompletionSourceMappingId},
+        {"statusEndpoint", "/api/integrations/ollama/status"},
+        {"dispatchEndpoint", "/api/integrations/ollama/dispatch"}
+      }},
+      {"openai", Json::Object{
+        {"baseUrl", openaiBaseUrl},
+        {"model", openaiModel},
+        {"hasApiKey", !openaiApiKey.empty()},
+        {"completionSourceMappingId", openaiCompletionSourceMappingId},
+        {"statusEndpoint", "/api/integrations/openai/status"},
+        {"dispatchEndpoint", "/api/integrations/openai/dispatch"}
+      }},
+      {"healthkit", Json::Object{
+        {"bridgeId", healthKitBridgeId},
+        {"defaultSourceMappingId", healthKitDefaultSourceMappingId},
+        {"tokenConfigured", !healthKitBridgeToken.empty()},
+        {"statusEndpoint", "/api/integrations/healthkit/status"},
+        {"ingestEndpoint", "/api/integrations/healthkit/ingest"}
+      }},
+      {"carekit", Json::Object{
+        {"bridgeId", careKitBridgeId},
+        {"defaultSourceMappingId", careKitDefaultSourceMappingId},
+        {"tokenConfigured", !careKitBridgeToken.empty()},
+        {"statusEndpoint", "/api/integrations/carekit/status"},
+        {"ingestEndpoint", "/api/integrations/carekit/ingest"}
+      }}
+    };
+  }
+
+  Json healthkit_status() const {
+    return Json::Object{
+      {"bridgeId", healthKitBridgeId},
+      {"defaultSourceMappingId", healthKitDefaultSourceMappingId},
+      {"tokenConfigured", !healthKitBridgeToken.empty()},
+      {"nativeAppRequired", true},
+      {"nativeWorkOutsideRepo", true},
+      {"ingestEndpoint", "/api/integrations/healthkit/ingest"},
+      {"contract", Json::Object{
+        {"transport", "https"},
+        {"singleSample", Json::Array{"bridgeId", "sampleType", "sourceMappingId", "values"}},
+        {"batchSamples", Json::Array{"bridgeId", "samples[]"}},
+        {"auth", healthKitBridgeToken.empty() ? "external-transport" : "bridgeToken"}
+      }}
+    };
+  }
+
+  Json carekit_status() const {
+    return Json::Object{
+      {"bridgeId", careKitBridgeId},
+      {"defaultSourceMappingId", careKitDefaultSourceMappingId},
+      {"tokenConfigured", !careKitBridgeToken.empty()},
+      {"nativeAppRequired", true},
+      {"nativeWorkOutsideRepo", true},
+      {"ingestEndpoint", "/api/integrations/carekit/ingest"},
+      {"contract", Json::Object{
+        {"transport", "https"},
+        {"singleSample", Json::Array{"bridgeId", "sampleType", "sourceMappingId", "values"}},
+        {"batchSamples", Json::Array{"bridgeId", "samples[]"}},
+        {"auth", careKitBridgeToken.empty() ? "external-transport" : "bridgeToken"}
+      }}
+    };
+  }
+
+  Json ollama_status() const {
+    Json tags = nullptr;
+    Json error = nullptr;
+    bool reachable = false;
+    try {
+      tags = json::parse(http::get(ollamaBaseUrl + "/api/tags"));
+      reachable = true;
+    } catch (const std::exception& e) {
+      error = Json(e.what());
+    }
+    return Json::Object{
+      {"baseUrl", ollamaBaseUrl},
+      {"model", ollamaModel},
+      {"completionSourceMappingId", ollamaCompletionSourceMappingId},
+      {"reachable", reachable},
+      {"tags", tags},
+      {"error", error},
+      {"dispatchEndpoint", "/api/integrations/ollama/dispatch"}
+    };
+  }
+
+  Json openai_status() const {
+    Json models = nullptr;
+    Json error = nullptr;
+    bool reachable = false;
+    if (openaiApiKey.empty()) {
+      error = "OPENAI_API_KEY is not configured";
+    } else {
+      try {
+        models = json::parse(http::request_json("GET", openaiBaseUrl + "/models", "", openai_headers()));
+        reachable = !models.at("error").is_object();
+        if (!reachable) error = models.at("error");
+      } catch (const std::exception& e) {
+        error = Json(e.what());
+      }
+    }
+    return Json::Object{
+      {"baseUrl", openaiBaseUrl},
+      {"model", openaiModel},
+      {"hasApiKey", !openaiApiKey.empty()},
+      {"completionSourceMappingId", openaiCompletionSourceMappingId},
+      {"reachable", reachable},
+      {"models", models},
+      {"error", error},
+      {"dispatchEndpoint", "/api/integrations/openai/dispatch"}
+    };
+  }
+
+  Json trigger_status() const {
+    std::lock_guard<std::mutex> lock(dispatchMutex);
+    return Json::Object{
+      {"enabled", triggerDispatchEnabled},
+      {"mode", triggerDispatchMode},
+      {"graphqlEndpoint", triggerGraphQLEndpoint},
+      {"records", static_cast<double>(dispatchRecords.size())},
+      {"envelopesCreated", static_cast<double>(triggerEnvelopesCreated)},
+      {"droppedNoGovernance", static_cast<double>(triggerDroppedNoGovernance)},
+      {"droppedNoDispatch", static_cast<double>(triggerDroppedNoDispatch)},
+      {"dispatchErrors", static_cast<double>(triggerDispatchErrors)}
+    };
+  }
+
+  Json dispatch_record_json(const DispatchRecord& r) const {
+    Json::Object out{
+      {"id", r.id},
+      {"envelopeId", r.envelopeId},
+      {"correlationId", r.correlationId},
+      {"status", r.status},
+      {"mode", r.mode},
+      {"target", r.target},
+      {"machineId", r.machineId},
+      {"sequenceId", r.sequenceId},
+      {"ragStatusCode", r.ragStatusCode.empty() ? Json(nullptr) : Json(r.ragStatusCode)},
+      {"processStatus", r.processStatus.empty() ? Json(nullptr) : Json(r.processStatus)},
+      {"attempts", static_cast<double>(r.attempts)},
+      {"createdAt", static_cast<double>(r.createdAt)},
+      {"updatedAt", static_cast<double>(r.updatedAt)},
+      {"providerReceipt", r.providerReceipt.is_null() ? Json(nullptr) : r.providerReceipt},
+      {"envelope", r.envelope}
+    };
+    if (!r.error.empty()) out["error"] = r.error;
+    return out;
+  }
+
+  Json dispatch_ledger() const {
+    Json::Array arr;
+    std::lock_guard<std::mutex> lock(dispatchMutex);
+    for (const auto& id : dispatchRecordOrder) {
+      auto it = dispatchRecords.find(id);
+      if (it != dispatchRecords.end()) arr.push_back(dispatch_record_json(it->second));
+    }
+    return Json::Object{
+      {"enabled", triggerDispatchEnabled},
+      {"mode", triggerDispatchMode},
+      {"records", arr}
+    };
+  }
+
+  http::Response read_dispatch_record(const std::string& id) const {
+    std::lock_guard<std::mutex> lock(dispatchMutex);
+    auto it = dispatchRecords.find(id);
+    if (it == dispatchRecords.end()) return http::error_response("Dispatch record not found", 404);
+    return ok(Json::Object{{"record", dispatch_record_json(it->second)}});
+  }
+
+  std::optional<DispatchRecord> dispatch_record_snapshot(const std::string& id) const {
+    std::lock_guard<std::mutex> lock(dispatchMutex);
+    auto it = dispatchRecords.find(id);
+    if (it == dispatchRecords.end()) return std::nullopt;
+    return it->second;
+  }
+
+  http::Response update_dispatch_record(const std::string& id, const Json& body) {
+    if (!body.is_object()) return http::error_response("dispatch update body must be a JSON object", 400);
+    DispatchRecord updated;
+    {
+      std::lock_guard<std::mutex> lock(dispatchMutex);
+      auto it = dispatchRecords.find(id);
+      if (it == dispatchRecords.end()) return http::error_response("Dispatch record not found", 404);
+
+      DispatchRecord& record = it->second;
+      if (body.at("status").is_string()) record.status = body.at("status").as_string();
+      if (body.at("error").is_string()) record.error = body.at("error").as_string();
+      if (body.at("clearError").as_bool(false)) record.error.clear();
+      if (body.at("attempts").is_number()) record.attempts = static_cast<int>(body.at("attempts").as_number());
+      else if (body.at("incrementAttempts").as_bool(false)) ++record.attempts;
+
+      Json receipt = record.providerReceipt.is_object() ? record.providerReceipt : Json::Object{};
+      if (body.at("providerReceipt").is_object()) receipt = merge_objects(receipt, body.at("providerReceipt"));
+      if (body.at("provider").is_string()) receipt.object()["provider"] = body.at("provider").as_string();
+      if (body.at("adapter").is_string()) receipt.object()["adapter"] = body.at("adapter").as_string();
+      if (body.at("externalRunId").is_string()) receipt.object()["externalRunId"] = body.at("externalRunId").as_string();
+      if (!receipt.object().empty()) record.providerReceipt = receipt;
+
+      record.updatedAt = now_ms();
+      updated = record;
+    }
+
+    if (wsHub) {
+      wsHub->broadcast(json::stringify(Json::Object{
+        {"type", "dispatch.record.updated"},
+        {"dispatchId", updated.id},
+        {"status", updated.status},
+        {"target", updated.target},
+        {"attempts", static_cast<double>(updated.attempts)},
+        {"timestamp", static_cast<double>(updated.updatedAt)}
+      }));
+    }
+
+    return ok(Json::Object{
+      {"success", true},
+      {"record", dispatch_record_json(updated)}
+    });
+  }
+
   http::Response invoke_localai(const Json& body) const {
     std::string method = body.at("method").as_string("POST");
     std::transform(method.begin(), method.end(), method.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
@@ -672,6 +1100,300 @@ private:
       return ok(Json::Object{{"success", true}, {"endpoint", endpoint}, {"method", method}, {"response", parsed}});
     } catch (const std::exception& e) {
       return http::json_response(json::stringify(Json::Object{{"success", false}, {"endpoint", endpoint}, {"method", method}, {"error", e.what()}}), 502);
+    }
+  }
+
+  static Json parse_json_or_null(const std::string& raw) {
+    try {
+      return json::parse(raw);
+    } catch (...) {
+      return Json(nullptr);
+    }
+  }
+
+  static Json response_values_from_content(const Json& contentJson) {
+    if (contentJson.at("values").is_array()) return contentJson.at("values");
+    if (contentJson.at("completion").at("values").is_array()) return contentJson.at("completion").at("values");
+    return Json(nullptr);
+  }
+
+  std::map<std::string, std::string> openai_headers() const {
+    if (openaiApiKey.empty()) throw std::runtime_error("OPENAI_API_KEY is not configured");
+    return {
+      {"Authorization", "Bearer " + openaiApiKey}
+    };
+  }
+
+  static std::string openai_response_text(const Json& response) {
+    if (response.at("output_text").is_string()) return response.at("output_text").as_string();
+    const Json& output = response.at("output");
+    if (!output.is_array()) return "";
+    std::ostringstream text;
+    for (const auto& item : output.array()) {
+      const Json& content = item.at("content");
+      if (!content.is_array()) continue;
+      for (const auto& part : content.array()) {
+        std::string type = part.at("type").as_string();
+        if ((type == "output_text" || type == "text") && part.at("text").is_string()) {
+          if (text.tellp() > 0) text << "\n";
+          text << part.at("text").as_string();
+        }
+      }
+    }
+    return text.str();
+  }
+
+  Json build_ollama_payload(const DispatchRecord& record, const Json& body, const std::string& model) const {
+    if (body.at("payload").is_object()) return body.at("payload");
+    const std::string systemPrompt = body.at("systemPrompt").as_string(
+      "You are a local PE-controlled Ollama adapter. Analyze the trigger envelope and respond as JSON. "
+      "When committing a PE completion, include a numeric values array matching the configured source mapping.");
+    const std::string userPrompt = body.at("prompt").as_string(
+      "Review this RealityEngine trigger envelope and produce a concise JSON result for PE completion ingest.");
+    Json::Array messages{
+      Json::Object{{"role", "system"}, {"content", systemPrompt}},
+      Json::Object{{"role", "user"}, {"content", userPrompt + "\n\n" + json::stringify(record.envelope)}}
+    };
+    Json::Object payload{
+      {"model", model},
+      {"stream", false},
+      {"messages", messages}
+    };
+    if (body.at("format").is_string()) payload["format"] = body.at("format").as_string();
+    else if (body.at("formatJson").as_bool(true)) payload["format"] = "json";
+    if (body.at("options").is_object()) payload["options"] = body.at("options");
+    return Json(payload);
+  }
+
+  http::Response dispatch_ollama(const Json& body) {
+    if (!body.is_object()) return http::error_response("Ollama dispatch body must be a JSON object", 400);
+    const std::string dispatchId = body.at("dispatchId").as_string(body.at("id").as_string());
+    if (dispatchId.empty()) return http::error_response("Ollama dispatch requires dispatchId", 400);
+    auto maybeRecord = dispatch_record_snapshot(dispatchId);
+    if (!maybeRecord) return http::error_response("Dispatch record not found", 404);
+    DispatchRecord record = *maybeRecord;
+
+    const std::string model = body.at("model").as_string(ollamaModel);
+    const std::string sourceMappingId = body.at("sourceMappingId").as_string(ollamaCompletionSourceMappingId);
+    (void)update_dispatch_record(dispatchId, Json::Object{
+      {"status", "delivering"},
+      {"adapter", "ollama"},
+      {"provider", "ollama"},
+      {"incrementAttempts", true},
+      {"clearError", true},
+      {"providerReceipt", Json::Object{
+        {"baseUrl", ollamaBaseUrl},
+        {"model", model}
+      }}
+    });
+
+    try {
+      Json payload = build_ollama_payload(record, body, model);
+      std::string raw = http::post_json(ollamaBaseUrl + "/api/chat", json::stringify(payload));
+      Json response = json::parse(raw);
+      std::string content = response.at("message").at("content").as_string(response.at("response").as_string());
+      Json contentJson = parse_json_or_null(content);
+
+      Json completionResult = nullptr;
+      bool completionCommitted = false;
+      if (body.at("commitCompletion").as_bool(true) && !sourceMappingId.empty()) {
+        Json values = body.at("values").is_array() ? body.at("values") : response_values_from_content(contentJson);
+        if (values.is_array()) {
+          Json::Object completionBody{
+            {"provider", "ollama"},
+            {"agent", record.target.empty() ? "ollama" : record.target},
+            {"sourceMappingId", sourceMappingId},
+            {"correlationId", record.correlationId},
+            {"envelopeId", record.envelopeId},
+            {"completionId", make_id("ollama-completion")},
+            {"values", values},
+            {"metadata", Json::Object{
+              {"model", model},
+              {"dispatchId", dispatchId},
+              {"content", content}
+            }},
+            {"triggerPush", body.at("triggerPush").as_bool(false)}
+          };
+          http::Response completionResponse = ingest_completion(Json(completionBody));
+          completionResult = parse_json_or_null(completionResponse.body);
+          completionCommitted = completionResponse.status >= 200 && completionResponse.status < 300;
+        }
+      }
+
+      (void)update_dispatch_record(dispatchId, Json::Object{
+        {"status", "delivered"},
+        {"adapter", "ollama"},
+        {"provider", "ollama"},
+        {"externalRunId", response.at("created_at").as_string(make_id("ollama-run"))},
+        {"providerReceipt", Json::Object{
+          {"baseUrl", ollamaBaseUrl},
+          {"model", model},
+          {"content", content},
+          {"completionCommitted", completionCommitted}
+        }}
+      });
+
+      return ok(Json::Object{
+        {"success", true},
+        {"dispatchId", dispatchId},
+        {"provider", "ollama"},
+        {"model", model},
+        {"response", response},
+        {"contentJson", contentJson},
+        {"completionCommitted", completionCommitted},
+        {"completion", completionResult}
+      });
+    } catch (const std::exception& e) {
+      (void)update_dispatch_record(dispatchId, Json::Object{
+        {"status", "failed"},
+        {"adapter", "ollama"},
+        {"provider", "ollama"},
+        {"error", e.what()},
+        {"providerReceipt", Json::Object{
+          {"baseUrl", ollamaBaseUrl},
+          {"model", model}
+        }}
+      });
+      return http::json_response(json::stringify(Json::Object{
+        {"success", false},
+        {"dispatchId", dispatchId},
+        {"provider", "ollama"},
+        {"model", model},
+        {"error", e.what()}
+      }), 502);
+    }
+  }
+
+  Json build_openai_payload(const DispatchRecord& record, const Json& body, const std::string& model) const {
+    if (body.at("payload").is_object()) return body.at("payload");
+    const std::string instructions = body.at("instructions").as_string(
+      "You are a PE-controlled OpenAI adapter. Analyze the trigger envelope and respond as JSON. "
+      "When committing a PE completion, include a numeric values array matching the configured source mapping.");
+    const std::string prompt = body.at("prompt").as_string(
+      "Review this RealityEngine trigger envelope and produce a concise JSON result for PE completion ingest.");
+    Json::Object payload{
+      {"model", model},
+      {"instructions", instructions},
+      {"input", prompt + "\n\n" + json::stringify(record.envelope)},
+      {"store", body.at("store").as_bool(true)},
+      {"stream", false},
+      {"metadata", Json::Object{
+        {"dispatchId", record.id},
+        {"envelopeId", record.envelopeId},
+        {"correlationId", record.correlationId},
+        {"target", record.target}
+      }}
+    };
+    if (body.at("maxOutputTokens").is_number()) payload["max_output_tokens"] = body.at("maxOutputTokens");
+    if (body.at("temperature").is_number()) payload["temperature"] = body.at("temperature");
+    if (body.at("reasoning").is_object()) payload["reasoning"] = body.at("reasoning");
+    if (body.at("text").is_object()) payload["text"] = body.at("text");
+    return Json(payload);
+  }
+
+  http::Response dispatch_openai(const Json& body) {
+    if (!body.is_object()) return http::error_response("OpenAI dispatch body must be a JSON object", 400);
+    const std::string dispatchId = body.at("dispatchId").as_string(body.at("id").as_string());
+    if (dispatchId.empty()) return http::error_response("OpenAI dispatch requires dispatchId", 400);
+    auto maybeRecord = dispatch_record_snapshot(dispatchId);
+    if (!maybeRecord) return http::error_response("Dispatch record not found", 404);
+    DispatchRecord record = *maybeRecord;
+
+    const std::string model = body.at("model").as_string(openaiModel);
+    const std::string sourceMappingId = body.at("sourceMappingId").as_string(openaiCompletionSourceMappingId);
+    (void)update_dispatch_record(dispatchId, Json::Object{
+      {"status", "delivering"},
+      {"adapter", "openai"},
+      {"provider", "openai"},
+      {"incrementAttempts", true},
+      {"clearError", true},
+      {"providerReceipt", Json::Object{
+        {"baseUrl", openaiBaseUrl},
+        {"model", model},
+        {"endpoint", "/responses"}
+      }}
+    });
+
+    try {
+      Json payload = build_openai_payload(record, body, model);
+      std::string raw = http::request_json("POST", openaiBaseUrl + "/responses", json::stringify(payload), openai_headers());
+      Json response = json::parse(raw);
+      if (response.at("error").is_object()) {
+        throw std::runtime_error(json::stringify(response.at("error")));
+      }
+      std::string content = openai_response_text(response);
+      Json contentJson = parse_json_or_null(content);
+
+      Json completionResult = nullptr;
+      bool completionCommitted = false;
+      if (body.at("commitCompletion").as_bool(true) && !sourceMappingId.empty()) {
+        Json values = body.at("values").is_array() ? body.at("values") : response_values_from_content(contentJson);
+        if (values.is_array()) {
+          Json::Object completionBody{
+            {"provider", "openai"},
+            {"agent", record.target.empty() ? "openai" : record.target},
+            {"sourceMappingId", sourceMappingId},
+            {"correlationId", record.correlationId},
+            {"envelopeId", record.envelopeId},
+            {"completionId", response.at("id").as_string(make_id("openai-completion"))},
+            {"values", values},
+            {"metadata", Json::Object{
+              {"model", model},
+              {"dispatchId", dispatchId},
+              {"responseId", response.at("id").as_string()},
+              {"content", content}
+            }},
+            {"triggerPush", body.at("triggerPush").as_bool(false)}
+          };
+          http::Response completionResponse = ingest_completion(Json(completionBody));
+          completionResult = parse_json_or_null(completionResponse.body);
+          completionCommitted = completionResponse.status >= 200 && completionResponse.status < 300;
+        }
+      }
+
+      (void)update_dispatch_record(dispatchId, Json::Object{
+        {"status", "delivered"},
+        {"adapter", "openai"},
+        {"provider", "openai"},
+        {"externalRunId", response.at("id").as_string()},
+        {"providerReceipt", Json::Object{
+          {"baseUrl", openaiBaseUrl},
+          {"model", model},
+          {"responseId", response.at("id").as_string()},
+          {"status", response.at("status").as_string()},
+          {"completionCommitted", completionCommitted}
+        }}
+      });
+
+      return ok(Json::Object{
+        {"success", true},
+        {"dispatchId", dispatchId},
+        {"provider", "openai"},
+        {"model", model},
+        {"response", response},
+        {"contentJson", contentJson},
+        {"completionCommitted", completionCommitted},
+        {"completion", completionResult}
+      });
+    } catch (const std::exception& e) {
+      (void)update_dispatch_record(dispatchId, Json::Object{
+        {"status", "failed"},
+        {"adapter", "openai"},
+        {"provider", "openai"},
+        {"error", e.what()},
+        {"providerReceipt", Json::Object{
+          {"baseUrl", openaiBaseUrl},
+          {"model", model},
+          {"endpoint", "/responses"}
+        }}
+      });
+      return http::json_response(json::stringify(Json::Object{
+        {"success", false},
+        {"dispatchId", dispatchId},
+        {"provider", "openai"},
+        {"model", model},
+        {"error", e.what()}
+      }), 502);
     }
   }
 
@@ -835,6 +1557,266 @@ private:
     return ok(response);
   }
 
+  http::Response ingest_completion(const Json& body) {
+    if (!body.is_object()) return http::error_response("completion body must be a JSON object", 400);
+
+    const std::string sourceMappingId = body.at("sourceMappingId").as_string(body.at("mappingId").as_string());
+    Json mapping = Json::Object{};
+    if (!sourceMappingId.empty()) {
+      mapping = configured_source_mapping(sourceMappingId);
+      if (!mapping.is_object()) return http::error_response("Unknown sourceMappingId \"" + sourceMappingId + "\"", 404);
+    }
+    if (body.at("sourceMapping").is_object()) mapping = merge_objects(mapping, body.at("sourceMapping"));
+    std::string provider = body.at("provider").as_string("external");
+    std::string agent = body.at("agent").as_string(body.at("agentId").as_string("agent"));
+    std::string sensorId = body.at("sensorId").as_string(mapping.at("sensorId").as_string());
+    if (sensorId.empty() && mapping.at("sensorIdTemplate").is_string()) {
+      sensorId = mapping.at("sensorIdTemplate").as_string();
+      sensorId = replace_all(sensorId, "{provider}", source_id_part(provider));
+      sensorId = replace_all(sensorId, "{agent}", source_id_part(agent));
+      sensorId = replace_all(sensorId, "{correlationId}", source_id_part(body.at("correlationId").as_string()));
+      sensorId = replace_all(sensorId, "{envelopeId}", source_id_part(body.at("envelopeId").as_string()));
+    }
+    if (sensorId.empty()) sensorId = "agent." + source_id_part(agent) + ".completion";
+
+    Json::Object signal;
+    signal["sensorId"] = sensorId;
+    signal["name"] = body.at("name").as_string(mapping.at("name").as_string("agent:" + provider + "/" + agent + "/completion"));
+    if (mapping.at("region").is_object()) signal["region"] = mapping.at("region");
+    signal["values"] = body.at("values").is_array() ? body.at("values") : mapping.at("values");
+    signal["active"] = mapping.at("active").as_bool(body.at("active").as_bool(true));
+    signal["ttlMs"] = body.at("ttlMs").is_number() ? body.at("ttlMs") : mapping.at("ttlMs").is_number() ? mapping.at("ttlMs") : Json(300000);
+    signal["triggerPush"] = body.at("triggerPush").as_bool(false);
+    signal["compactPush"] = body.at("compactPush").as_bool(true);
+
+    http::Response signalResponse = ingest_signal(Json(signal));
+    if (signalResponse.status < 200 || signalResponse.status >= 300) return signalResponse;
+
+    Json signalResult = json::parse(signalResponse.body);
+    Json::Object completion{
+      {"provider", provider},
+      {"agent", agent},
+      {"sensorId", sensorId},
+      {"sourceMappingId", sourceMappingId},
+      {"correlationId", body.at("correlationId").as_string()},
+      {"envelopeId", body.at("envelopeId").as_string()},
+      {"completionId", body.at("completionId").as_string(body.at("id").as_string())},
+      {"receivedAt", static_cast<double>(now_ms())}
+    };
+    if (body.at("metadata").is_object()) completion["metadata"] = body.at("metadata");
+
+    if (wsHub) {
+      wsHub->broadcast(json::stringify(Json::Object{
+        {"type", "agent.completion.received"},
+        {"provider", provider},
+        {"agent", agent},
+        {"sensorId", sensorId},
+        {"sourceMappingId", sourceMappingId},
+        {"correlationId", body.at("correlationId").as_string()},
+        {"envelopeId", body.at("envelopeId").as_string()},
+        {"timestamp", static_cast<double>(now_ms())},
+      }));
+    }
+
+    return ok(Json::Object{
+      {"success", true},
+      {"completion", Json(completion)},
+      {"signal", signalResult}
+    });
+  }
+
+  Json resolve_source_mapping_from_body(const Json& body, const std::string& defaultMappingId) const {
+    const std::string sourceMappingId = body.at("sourceMappingId").as_string(body.at("mappingId").as_string(defaultMappingId));
+    Json mapping = Json::Object{};
+    if (!sourceMappingId.empty()) mapping = configured_source_mapping(sourceMappingId);
+    if (!sourceMappingId.empty() && !mapping.is_object()) throw std::runtime_error("Unknown sourceMappingId \"" + sourceMappingId + "\"");
+    if (body.at("sourceMapping").is_object()) mapping = merge_objects(mapping, body.at("sourceMapping"));
+    if (mapping.is_object() && !sourceMappingId.empty()) mapping.object()["id"] = sourceMappingId;
+    return mapping;
+  }
+
+  Json::Object build_healthkit_signal(const Json& body, const Json& mapping) const {
+    const std::string bridgeId = body.at("bridgeId").as_string(healthKitBridgeId);
+    const std::string sampleType = body.at("sampleType").as_string(body.at("type").as_string("sample"));
+    std::string sensorId = body.at("sensorId").as_string(mapping.at("sensorId").as_string());
+    if (sensorId.empty() && mapping.at("sensorIdTemplate").is_string()) {
+      sensorId = mapping.at("sensorIdTemplate").as_string();
+      sensorId = replace_all(sensorId, "{bridgeId}", source_id_part(bridgeId));
+      sensorId = replace_all(sensorId, "{sampleType}", source_id_part(sampleType));
+      sensorId = replace_all(sensorId, "{type}", source_id_part(sampleType));
+    }
+    if (sensorId.empty()) sensorId = "healthkit." + source_id_part(sampleType);
+
+    Json::Object signal;
+    signal["sensorId"] = sensorId;
+    signal["name"] = body.at("name").as_string(mapping.at("name").as_string("healthkit:" + sampleType));
+    if (mapping.at("region").is_object()) signal["region"] = mapping.at("region");
+    if (body.at("region").is_object()) signal["region"] = body.at("region");
+    if (body.at("values").is_array()) signal["values"] = body.at("values");
+    else if (body.at("value").is_number()) signal["values"] = Json::Array{body.at("value").as_number()};
+    else signal["values"] = Json::Array{};
+    signal["active"] = body.at("active").as_bool(true);
+    signal["ttlMs"] = body.at("ttlMs").is_number() ? body.at("ttlMs") : mapping.at("ttlMs").is_number() ? mapping.at("ttlMs") : Json(300000);
+    signal["triggerPush"] = body.at("triggerPush").as_bool(false);
+    signal["compactPush"] = body.at("compactPush").as_bool(true);
+    return signal;
+  }
+
+  Json ingest_healthkit_one(const Json& body) {
+    Json mapping = resolve_source_mapping_from_body(body, healthKitDefaultSourceMappingId);
+    Json::Object signal = build_healthkit_signal(body, mapping);
+    http::Response response = ingest_signal(Json(signal));
+    Json parsed = parse_json_or_null(response.body);
+    return Json::Object{
+      {"success", response.status >= 200 && response.status < 300},
+      {"status", static_cast<double>(response.status)},
+      {"sampleType", body.at("sampleType").as_string(body.at("type").as_string())},
+      {"sourceMappingId", mapping.at("id").as_string()},
+      {"sensorId", signal["sensorId"]},
+      {"result", parsed}
+    };
+  }
+
+  http::Response ingest_healthkit(const Json& body) {
+    if (!body.is_object()) return http::error_response("HealthKit ingest body must be a JSON object", 400);
+    if (!healthKitBridgeToken.empty() && body.at("bridgeToken").as_string() != healthKitBridgeToken) {
+      return http::error_response("HealthKit bridge token rejected", 401);
+    }
+
+    Json::Array results;
+    bool allOk = true;
+    try {
+      const Json& samples = body.at("samples");
+      if (samples.is_array()) {
+        for (const auto& sample : samples.array()) {
+          Json merged = merge_objects(body, sample);
+          if (merged.is_object()) {
+            merged.object().erase("samples");
+            merged.object().erase("bridgeToken");
+          }
+          Json result = ingest_healthkit_one(merged);
+          allOk = allOk && result.at("success").as_bool(false);
+          results.push_back(result);
+        }
+      } else {
+        Json result = ingest_healthkit_one(body);
+        allOk = result.at("success").as_bool(false);
+        results.push_back(result);
+      }
+    } catch (const std::exception& e) {
+      return http::error_response(e.what(), 400);
+    }
+
+    if (wsHub) {
+      wsHub->broadcast(json::stringify(Json::Object{
+        {"type", "healthkit.ingest"},
+        {"bridgeId", body.at("bridgeId").as_string(healthKitBridgeId)},
+        {"samples", static_cast<double>(results.size())},
+        {"success", allOk},
+        {"timestamp", static_cast<double>(now_ms())}
+      }));
+    }
+
+    return http::json_response(json::stringify(Json::Object{
+      {"success", allOk},
+      {"bridgeId", body.at("bridgeId").as_string(healthKitBridgeId)},
+      {"results", results}
+    }), allOk ? 200 : 207);
+  }
+
+  Json::Object build_carekit_signal(const Json& body, const Json& mapping) const {
+    const std::string bridgeId = body.at("bridgeId").as_string(careKitBridgeId);
+    const std::string sampleType = body.at("sampleType").as_string(body.at("type").as_string("task-event"));
+    std::string sensorId = body.at("sensorId").as_string(mapping.at("sensorId").as_string());
+    if (sensorId.empty() && mapping.at("sensorIdTemplate").is_string()) {
+      sensorId = mapping.at("sensorIdTemplate").as_string();
+      sensorId = replace_all(sensorId, "{bridgeId}", source_id_part(bridgeId));
+      sensorId = replace_all(sensorId, "{sampleType}", source_id_part(sampleType));
+      sensorId = replace_all(sensorId, "{type}", source_id_part(sampleType));
+      sensorId = replace_all(sensorId, "{taskId}", source_id_part(body.at("taskId").as_string(sampleType)));
+      sensorId = replace_all(sensorId, "{carePlanId}", source_id_part(body.at("carePlanId").as_string("care-plan")));
+    }
+    if (sensorId.empty()) sensorId = "carekit." + source_id_part(sampleType);
+
+    Json::Object signal;
+    signal["sensorId"] = sensorId;
+    signal["name"] = body.at("name").as_string(mapping.at("name").as_string("carekit:" + sampleType));
+    if (mapping.at("region").is_object()) signal["region"] = mapping.at("region");
+    if (body.at("region").is_object()) signal["region"] = body.at("region");
+    if (body.at("values").is_array()) signal["values"] = body.at("values");
+    else if (body.at("value").is_number()) signal["values"] = Json::Array{body.at("value").as_number()};
+    else signal["values"] = Json::Array{};
+    signal["active"] = body.at("active").as_bool(true);
+    signal["ttlMs"] = body.at("ttlMs").is_number() ? body.at("ttlMs") : mapping.at("ttlMs").is_number() ? mapping.at("ttlMs") : Json(300000);
+    signal["triggerPush"] = body.at("triggerPush").as_bool(false);
+    signal["compactPush"] = body.at("compactPush").as_bool(true);
+    return signal;
+  }
+
+  Json ingest_carekit_one(const Json& body) {
+    Json mapping = resolve_source_mapping_from_body(body, careKitDefaultSourceMappingId);
+    Json::Object signal = build_carekit_signal(body, mapping);
+    http::Response response = ingest_signal(Json(signal));
+    Json parsed = parse_json_or_null(response.body);
+    return Json::Object{
+      {"success", response.status >= 200 && response.status < 300},
+      {"status", static_cast<double>(response.status)},
+      {"sampleType", body.at("sampleType").as_string(body.at("type").as_string())},
+      {"taskId", body.at("taskId").as_string()},
+      {"carePlanId", body.at("carePlanId").as_string()},
+      {"sourceMappingId", mapping.at("id").as_string()},
+      {"sensorId", signal["sensorId"]},
+      {"result", parsed}
+    };
+  }
+
+  http::Response ingest_carekit(const Json& body) {
+    if (!body.is_object()) return http::error_response("CareKit ingest body must be a JSON object", 400);
+    if (!careKitBridgeToken.empty() && body.at("bridgeToken").as_string() != careKitBridgeToken) {
+      return http::error_response("CareKit bridge token rejected", 401);
+    }
+
+    Json::Array results;
+    bool allOk = true;
+    try {
+      const Json& samples = body.at("samples");
+      if (samples.is_array()) {
+        for (const auto& sample : samples.array()) {
+          Json merged = merge_objects(body, sample);
+          if (merged.is_object()) {
+            merged.object().erase("samples");
+            merged.object().erase("bridgeToken");
+          }
+          Json result = ingest_carekit_one(merged);
+          allOk = allOk && result.at("success").as_bool(false);
+          results.push_back(result);
+        }
+      } else {
+        Json result = ingest_carekit_one(body);
+        allOk = result.at("success").as_bool(false);
+        results.push_back(result);
+      }
+    } catch (const std::exception& e) {
+      return http::error_response(e.what(), 400);
+    }
+
+    if (wsHub) {
+      wsHub->broadcast(json::stringify(Json::Object{
+        {"type", "carekit.ingest"},
+        {"bridgeId", body.at("bridgeId").as_string(careKitBridgeId)},
+        {"samples", static_cast<double>(results.size())},
+        {"success", allOk},
+        {"timestamp", static_cast<double>(now_ms())}
+      }));
+    }
+
+    return http::json_response(json::stringify(Json::Object{
+      {"success", allOk},
+      {"bridgeId", body.at("bridgeId").as_string(careKitBridgeId)},
+      {"results", results}
+    }), allOk ? 200 : 207);
+  }
+
   http::Response do_push(bool includeMachineResults = true, bool async = false) {
     sync_test_sources_from_reality();
     bool expected = false;
@@ -929,7 +1911,9 @@ private:
         lastPush = ts;
         step = engine.globalStep;
       }
+      Json dispatch = dispatch_triggers_from_step(parsed);
       Json result = Json::Object{{"success", true}, {"step", parsed}, {"timestamp", static_cast<double>(ts)}, {"globalStep", static_cast<double>(step)}, {"error", nullptr}};
+      if (dispatch.is_object()) result.object()["dispatch"] = dispatch;
       broadcast_state();
       broadcast_push_result(result);
       return ok(result);
@@ -1056,11 +2040,242 @@ private:
     }
   }
 
+  void trim_dispatch_records() {
+    while (dispatchRecordOrder.size() > dispatchRecordCapacity) {
+      dispatchRecords.erase(dispatchRecordOrder.front());
+      dispatchRecordOrder.pop_front();
+    }
+  }
+
+  void cache_machine_catalog(const Json& data) {
+    Json::Object catalog;
+    for (const auto& m : data.at("machines").is_array() ? data.at("machines").array() : Json::Array{}) {
+      std::string id = m.at("id").as_string();
+      if (!id.empty()) catalog[id] = m;
+    }
+    std::lock_guard<std::mutex> lock(machineCatalogMutex);
+    machineCatalog = std::move(catalog);
+  }
+
+  Json machine_catalog_snapshot() const {
+    std::lock_guard<std::mutex> lock(machineCatalogMutex);
+    return machineCatalog;
+  }
+
+  Json::Array copy_string_array(const Json& value) const {
+    Json::Array out;
+    if (!value.is_array()) return out;
+    for (const auto& item : value.array()) {
+      if (item.is_string()) out.emplace_back(item.as_string());
+    }
+    return out;
+  }
+
+  std::string first_agent_action(const Json& metadata) const {
+    const Json& actions = metadata.at("agentActions");
+    if (!actions.is_array() || actions.array().empty()) return "";
+    return actions.array().front().as_string();
+  }
+
+  std::string asserted_label(const Json& values) const {
+    if (!values.is_array()) return "";
+    std::vector<std::string> labels;
+    for (size_t i = 0; i < values.array().size(); ++i) {
+      if (values.array()[i].as_number() != 0.0) labels.push_back("cell_" + std::to_string(i));
+    }
+    if (labels.empty()) return "none";
+    std::ostringstream out;
+    for (size_t i = 0; i < labels.size(); ++i) {
+      if (i) out << "+";
+      out << labels[i];
+    }
+    return out.str();
+  }
+
+  Json build_trigger_envelope(const Json& op, const Json& machine, const std::string& envelopeId, const std::string& correlationId) const {
+    const Json& md = machine.at("metadata");
+    const Json& governance = op.at("governance");
+    Json::Array semantics;
+    const Json& values = op.at("values");
+    if (values.is_array()) {
+      for (size_t i = 0; i < values.array().size(); ++i) {
+        semantics.push_back(Json::Object{
+          {"index", static_cast<double>(i)},
+          {"label", "cell_" + std::to_string(i)}
+        });
+      }
+    }
+
+    Json::Object outputMapping;
+    outputMapping["output"] = op.at("region");
+    Json::Object dispatch{
+      {"agent", md.at("dispatchableAgent").as_string()},
+      {"action", first_agent_action(md)},
+      {"agentActionsCatalog", copy_string_array(md.at("agentActions"))},
+      {"trigger", md.at("aiTrigger").as_string()},
+      {"endpoint", Json::Object{
+        {"kind", triggerDispatchMode},
+        {"url", triggerDispatchMode == "graphql" ? triggerGraphQLEndpoint : ""},
+        {"mutation", triggerDispatchMode == "graphql" ? "updateProcessState" : ""},
+        {"schemaRef", triggerDispatchMode == "graphql" ? "localAIStack/services/api/routers/graphql_endpoint.py" : ""}
+      }}
+    };
+
+    return Json::Object{
+      {"schemaVersion", "1.0.0"},
+      {"envelopeType", "ces.terminal.event"},
+      {"envelopeId", envelopeId},
+      {"correlationId", correlationId},
+      {"emittedAtMs", static_cast<double>(now_ms())},
+      {"source", Json::Object{
+        {"engine", "PE"},
+        {"observedEngine", "RE"},
+        {"endpoint", realityEngineUrl}
+      }},
+      {"ces", Json::Object{
+        {"machineId", op.at("machineId").as_string()},
+        {"machineName", machine.at("name").as_string(op.at("machineId").as_string())},
+        {"machineCode", md.at("machineCode").as_string()},
+        {"sequenceId", op.at("sequenceId").as_string()},
+        {"sequenceName", op.at("sequenceId").as_string()},
+        {"outputIndex", op.at("outputIndex").is_number() ? op.at("outputIndex") : Json(0)},
+        {"stepNumber", 0},
+        {"perceptualMapping", outputMapping},
+        {"provenance", op.at("provenance").is_array() ? op.at("provenance") : Json::Array{}},
+        {"deprecation", op.at("deprecation").is_null() ? Json(nullptr) : op.at("deprecation")}
+      }},
+      {"outputVector", Json::Object{
+        {"values", values.is_array() ? values : Json::Array{}},
+        {"encoding", "vector"},
+        {"semantics", semantics},
+        {"assertedLabel", asserted_label(values)}
+      }},
+      {"projection", Json(nullptr)},
+      {"governance", governance.is_object() ? governance : Json(nullptr)},
+      {"dispatch", dispatch}
+    };
+  }
+
+  TriggerDispatchSummary dispatch_triggers(const Json& step) {
+    TriggerDispatchSummary summary;
+    if (!triggerDispatchEnabled) return summary;
+    const Json& mergeBatch = step.at("mergeBatch");
+    if (!mergeBatch.is_array()) return summary;
+
+    Json machines = machine_catalog_snapshot();
+    for (const auto& op : mergeBatch.array()) {
+      ++summary.mergeOps;
+      if (!op.at("governance").is_object()) {
+        ++summary.droppedNoGovernance;
+        continue;
+      }
+      std::string machineId = op.at("machineId").as_string();
+      const Json& machine = machines.at(machineId);
+      const Json& md = machine.at("metadata");
+      std::string agent = md.at("dispatchableAgent").as_string();
+      std::string trigger = md.at("aiTrigger").as_string();
+      if (!machine.is_object() || agent.empty() || trigger.empty()) {
+        ++summary.droppedNoDispatch;
+        continue;
+      }
+
+      const std::string envelopeId = make_id("trigger-envelope");
+      const std::string correlationId = make_id("trigger-correlation");
+      Json envelope = build_trigger_envelope(op, machine, envelopeId, correlationId);
+      DispatchRecord record;
+      record.id = make_id("dispatch");
+      record.envelopeId = envelopeId;
+      record.correlationId = correlationId;
+      record.mode = triggerDispatchMode;
+      // Dispatch is intentionally fire-and-record at this layer; external
+      // provider completion returns later as ordinary PE source updates.
+      record.status = "recorded";
+      record.target = agent;
+      record.machineId = machineId;
+      record.sequenceId = op.at("sequenceId").as_string();
+      record.ragStatusCode = op.at("governance").at("ragStatusCode").as_string();
+      record.processStatus = op.at("governance").at("processStatus").as_string();
+      record.createdAt = now_ms();
+      record.updatedAt = record.createdAt;
+      record.attempts = 0;
+      record.envelope = envelope;
+
+      {
+        std::lock_guard<std::mutex> lock(dispatchMutex);
+        dispatchRecords[record.id] = record;
+        dispatchRecordOrder.push_back(record.id);
+        ++triggerEnvelopesCreated;
+        trim_dispatch_records();
+      }
+      ++summary.envelopesCreated;
+      ++summary.dispatchRecordsCreated;
+
+      if (wsHub) {
+        wsHub->broadcast(json::stringify(Json::Object{
+          {"type", "trigger.envelope.created"},
+          {"envelopeId", envelopeId},
+          {"correlationId", correlationId},
+          {"dispatchId", record.id},
+          {"target", agent},
+          {"mode", triggerDispatchMode}
+        }));
+      }
+    }
+    return summary;
+  }
+
+  Json dispatch_triggers_from_step(const Json& step) {
+    TriggerDispatchSummary s;
+    try {
+      s = dispatch_triggers(step);
+    } catch (const std::exception& e) {
+      ++s.errors;
+      std::cerr << "trigger dispatch failed: " << e.what() << "\n";
+    }
+    {
+      std::lock_guard<std::mutex> lock(dispatchMutex);
+      triggerDroppedNoGovernance += static_cast<size_t>(s.droppedNoGovernance);
+      triggerDroppedNoDispatch += static_cast<size_t>(s.droppedNoDispatch);
+      triggerDispatchErrors += static_cast<size_t>(s.errors);
+    }
+    return Json::Object{
+      {"enabled", triggerDispatchEnabled},
+      {"mode", triggerDispatchMode},
+      {"mergeOps", static_cast<double>(s.mergeOps)},
+      {"envelopesCreated", static_cast<double>(s.envelopesCreated)},
+      {"dispatchRecordsCreated", static_cast<double>(s.dispatchRecordsCreated)},
+      {"droppedNoGovernance", static_cast<double>(s.droppedNoGovernance)},
+      {"droppedNoDispatch", static_cast<double>(s.droppedNoDispatch)},
+      {"errors", static_cast<double>(s.errors)}
+    };
+  }
+
   std::string realityEngineUrl;
   std::string localAIBaseUrl;
   std::string localAIMachinesDirectory;
   PerceptionEngine engine;
   mutable std::mutex stateMutex;
+  mutable std::mutex machineCatalogMutex;
+  Json machineCatalog = Json::Object{};
+  mutable std::mutex integrationMutex;
+  bool integrationRegistryLoaded = false;
+  std::string integrationConfigPath;
+  std::string integrationRegistryError;
+  Json integrationConfig = Json::Object{};
+  std::map<std::string, Json> sourceMappingRegistry;
+  std::string ollamaBaseUrl = "http://localhost:11434";
+  std::string ollamaModel = "gpt-oss:20b";
+  std::string ollamaCompletionSourceMappingId = "agent-completion-risk";
+  std::string openaiBaseUrl = "https://api.openai.com/v1";
+  std::string openaiModel = "gpt-5";
+  std::string openaiCompletionSourceMappingId = "agent-completion-risk";
+  std::string openaiApiKey;
+  std::string healthKitBridgeId = "healthkit-ios-bridge";
+  std::string healthKitDefaultSourceMappingId = "healthkit-activity";
+  std::string healthKitBridgeToken;
+  std::string careKitBridgeId = "carekit-ios-bridge";
+  std::string careKitDefaultSourceMappingId = "carekit-task";
+  std::string careKitBridgeToken;
   std::atomic_bool pushInFlight{false};
   std::mutex pushQueueMutex;
   std::condition_variable pushQueueCondition;
@@ -1080,6 +2295,17 @@ private:
   bool autoRunning = false;
   long autoIntervalMs = 1000;
   std::optional<long long> lastPush;
+  bool triggerDispatchEnabled = false;
+  std::string triggerDispatchMode = "dry-run";
+  std::string triggerGraphQLEndpoint;
+  mutable std::mutex dispatchMutex;
+  std::map<std::string, DispatchRecord> dispatchRecords;
+  std::deque<std::string> dispatchRecordOrder;
+  static constexpr size_t dispatchRecordCapacity = 256;
+  size_t triggerEnvelopesCreated = 0;
+  size_t triggerDroppedNoGovernance = 0;
+  size_t triggerDroppedNoDispatch = 0;
+  size_t triggerDispatchErrors = 0;
   // MQTT bridge — optional; null when MQTT_BROKER_HOST is unset.  Owned by
   // PerceptionService so its lifetime is bounded by the service's.
   std::unique_ptr<mqtt::MqttBridge> mqttBridge;

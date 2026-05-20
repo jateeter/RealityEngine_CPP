@@ -328,7 +328,7 @@ void test_match_all_fan_out() {
   EXPECT(reg.match_all("nothing").empty(), "match_all returns empty for no match");
 
   // Drive the bridge with a single payload; both x-rules should ingest.
-  auto registryPtr = std::make_unique<mq::MappingRegistry>(reg);
+  auto registryPtr = std::make_unique<mq::MappingRegistry>(std::move(reg));
   int ingestCount = 0;
   std::vector<std::string> sensors;
   mq::ClientConfig cfg; cfg.brokerHost = "127.0.0.1"; cfg.brokerPort = 1;

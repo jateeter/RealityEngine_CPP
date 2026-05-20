@@ -9,6 +9,7 @@ This is the maintained documentation set for RealityEngine_CPP.
 | [../README.md](../README.md) | Project overview, build, run, and scope. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Visual native architecture overview. |
 | [API_EQUIVALENCE.md](API_EQUIVALENCE.md) | API parity against RealityEngine_AI. |
+| [INTEGRATION_ARCHITECTURE.md](INTEGRATION_ARCHITECTURE.md) | Provider-neutral PE integration, trigger dispatch, source mapping, and MCP architecture. |
 | [VECTOR_MANAGEMENT.md](VECTOR_MANAGEMENT.md) | Dynamic perceptual-vector strategy. |
 | [ACRONYMS.md](ACRONYMS.md) | Acronym definitions. |
 | [BIBLIOGRAPHY.md](BIBLIOGRAPHY.md) | External and project references. |

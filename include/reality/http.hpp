@@ -71,6 +71,8 @@ private:
 
 Response json_response(const std::string& body, int status = 200);
 Response error_response(const std::string& message, int status = 400);
+std::string request_json(const std::string& method, const std::string& url, const std::string& body = "");
+std::string request_json(const std::string& method, const std::string& url, const std::string& body, const std::map<std::string, std::string>& headers);
 std::string post_json(const std::string& url, const std::string& body);
 std::string get(const std::string& url);
 void close_persistent_connections();

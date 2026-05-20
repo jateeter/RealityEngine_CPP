@@ -103,6 +103,11 @@ struct WalkSummary {
   int envelopesResolved = 0;
 };
 
+constexpr int kExpectedMachinesWithTriggers = 895;
+constexpr int kExpectedInputSequencesRun = 4480;
+constexpr int kExpectedOutputsProduced = 3586;
+constexpr int kExpectedEnvelopesResolved = 3586;
+
 // Walk a single machine file.  Skips files whose machine doesn't declare
 // triggerConfig + dispatchableAgent — those aren't AI-routed and have
 // nothing to assert at this layer.
@@ -321,6 +326,23 @@ int main(int argc, char** argv) {
 
   test_agx051_envelope_pins(machinesDir);
   test_agx055_envelope_pins(machinesDir);
+
+  EXPECT(sum.machinesWithTriggers == kExpectedMachinesWithTriggers,
+         "trigger corpus parity drift: machinesWithTriggers expected " +
+         std::to_string(kExpectedMachinesWithTriggers) + ", got " +
+         std::to_string(sum.machinesWithTriggers));
+  EXPECT(sum.inputSequencesRun == kExpectedInputSequencesRun,
+         "trigger corpus parity drift: inputSequencesRun expected " +
+         std::to_string(kExpectedInputSequencesRun) + ", got " +
+         std::to_string(sum.inputSequencesRun));
+  EXPECT(sum.outputsProduced == kExpectedOutputsProduced,
+         "trigger corpus parity drift: outputsProduced expected " +
+         std::to_string(kExpectedOutputsProduced) + ", got " +
+         std::to_string(sum.outputsProduced));
+  EXPECT(sum.envelopesResolved == kExpectedEnvelopesResolved,
+         "trigger corpus parity drift: envelopesResolved expected " +
+         std::to_string(kExpectedEnvelopesResolved) + ", got " +
+         std::to_string(sum.envelopesResolved));
 
   std::cout << "E2E AI trigger dispatch summary\n"
             << "  machines with triggerConfig+dispatchableAgent: " << sum.machinesWithTriggers << "\n"

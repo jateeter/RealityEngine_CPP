@@ -108,9 +108,16 @@ root = pathlib.Path(sys.argv[1])
 count = 0
 for path in root.glob("*.json"):
     data = json.loads(path.read_text())
-    seqs = data.get("machine", {}).get("inputSequences", [])
-    if isinstance(seqs, list):
-        count += len(seqs)
+    machine = data.get("machine", {})
+    mapping = machine.get("perceptualMapping", {})
+    seqs = machine.get("inputSequences", [])
+    if (
+        isinstance(mapping, dict)
+        and isinstance(mapping.get("input"), dict)
+        and isinstance(seqs, list)
+        and any(isinstance(seq.get("vectors"), list) and seq.get("vectors") for seq in seqs)
+    ):
+        count += 1
 print(count)
 ' "$MACHINES_DIR"
 }
@@ -130,14 +137,115 @@ missing = []
 for source in test_sources:
     if not source.get("inputs"):
         missing.append(f"{source.get('id')}:inputs")
-    if not isinstance(source.get("metadata"), dict):
+    metadata = source.get("metadata")
+    if not isinstance(metadata, dict):
         missing.append(f"{source.get('id')}:metadata")
-    sequence = source.get("sequence")
-    if not isinstance(sequence, dict) or not isinstance(sequence.get("vectors"), list):
-        missing.append(f"{source.get('id')}:sequence")
+    elif not isinstance(metadata.get("segments"), list) or not metadata.get("segments"):
+        missing.append(f"{source.get('id')}:metadata.segments")
 if missing:
     raise SystemExit("test sources missing full representation: " + ", ".join(missing[:20]))
 ' "$expected"
+}
+
+assert_completion_success() {
+  local payload="$1"
+  python3 -c '
+import json, sys
+data = json.loads(sys.argv[1])
+if data.get("success") is not True:
+    raise SystemExit(f"completion did not report success: {data!r}")
+completion = data.get("completion", {})
+if completion.get("provider") != "e2e" or completion.get("agent") != "e2e":
+    raise SystemExit(f"unexpected completion metadata: {completion!r}")
+if completion.get("sourceMappingId") != "agent-completion-risk":
+    raise SystemExit(f"completion did not resolve configured source mapping: {completion!r}")
+source = data.get("signal", {}).get("source", {})
+if source.get("sensorId") != "agent.e2e.completion":
+    raise SystemExit(f"completion did not commit to expected sensor source: {source!r}")
+if source.get("lastValue") != [1, 0, 0.75, 0]:
+    raise SystemExit(f"completion source lastValue mismatch: {source!r}")
+' "$payload"
+}
+
+assert_healthkit_ingest_success() {
+  local payload="$1"
+  python3 -c '
+import json, sys
+data = json.loads(sys.argv[1])
+if data.get("success") is not True:
+    raise SystemExit(f"HealthKit ingest failed: {data!r}")
+results = data.get("results", [])
+if len(results) != 1 or results[0].get("success") is not True:
+    raise SystemExit(f"HealthKit result mismatch: {data!r}")
+if results[0].get("sourceMappingId") != "healthkit-activity":
+    raise SystemExit(f"HealthKit source mapping mismatch: {results[0]!r}")
+if results[0].get("sensorId") != "healthkit.step-count":
+    raise SystemExit(f"HealthKit sensor id mismatch: {results[0]!r}")
+source = results[0].get("result", {}).get("source", {})
+if source.get("lastValue") != [1, 0, 0.9, 0]:
+    raise SystemExit(f"HealthKit lastValue mismatch: {source!r}")
+' "$payload"
+}
+
+assert_carekit_ingest_success() {
+  python3 - "$1" <<'PY'
+import json, sys
+data = json.loads(sys.argv[1])
+if not data.get("success"):
+    raise SystemExit(f"CareKit ingest failed: {data!r}")
+results = data.get("results", [])
+if len(results) != 1:
+    raise SystemExit(f"CareKit result mismatch: {data!r}")
+if results[0].get("sourceMappingId") != "carekit-task":
+    raise SystemExit(f"CareKit source mapping mismatch: {results[0]!r}")
+if results[0].get("sensorId") != "carekit.task-adherence":
+    raise SystemExit(f"CareKit sensor id mismatch: {results[0]!r}")
+source = results[0].get("result", {}).get("source", {})
+if source.get("lastValue") != [1, 0, 0.8, 0.95]:
+    raise SystemExit(f"CareKit lastValue mismatch: {source!r}")
+PY
+}
+
+assert_integration_registry_loaded() {
+  local payload="$1"
+  python3 -c '
+import json, sys
+data = json.loads(sys.argv[1])
+if data.get("loaded") is not True:
+    raise SystemExit(f"integration registry did not load: {data!r}")
+ids = {m.get("id") for m in data.get("sourceMappings", [])}
+if "agent-completion-risk" not in ids:
+    raise SystemExit(f"expected agent-completion-risk source mapping: {data!r}")
+' "$payload"
+}
+
+first_dispatch_record_id() {
+  python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+records = data.get("records", [])
+if not records:
+    raise SystemExit(f"expected at least one dispatch record: {data!r}")
+print(records[0]["id"])
+'
+}
+
+assert_dispatch_update_success() {
+  local payload="$1"
+  python3 -c '
+import json, sys
+data = json.loads(sys.argv[1])
+if data.get("success") is not True:
+    raise SystemExit(f"dispatch update failed: {data!r}")
+record = data.get("record", {})
+if record.get("status") != "delivered":
+    raise SystemExit(f"dispatch status was not updated: {record!r}")
+if record.get("attempts") != 1:
+    raise SystemExit(f"dispatch attempts was not incremented: {record!r}")
+receipt = record.get("providerReceipt", {})
+if receipt.get("adapter") != "e2e" or receipt.get("externalRunId") != "run-e2e":
+    raise SystemExit(f"dispatch provider receipt mismatch: {receipt!r}")
+' "$payload"
 }
 
 post_machine() {
@@ -149,6 +257,7 @@ post_machine() {
 
 [ -x bin/reality_engine_server ] || { echo "bin/reality_engine_server missing; run make first" >&2; exit 1; }
 [ -x bin/perception_engine_server ] || { echo "bin/perception_engine_server missing; run make first" >&2; exit 1; }
+[ -x bin/reality_engine_cli ] || { echo "bin/reality_engine_cli missing; run make first" >&2; exit 1; }
 [ -d "$MACHINES_DIR" ] || { echo "Machine directory not found: $MACHINES_DIR" >&2; exit 1; }
 
 echo "E2E service boundary test"
@@ -178,7 +287,10 @@ curl -sf -X POST "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/perceive" \
   -H "Content-Type: application/json" \
   -d "$perceive_payload" >/dev/null
 
-bin/perception_engine_server "$PERCEPTION_ENGINE_E2E_PORT" "http://localhost:${REALITY_ENGINE_E2E_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" >/tmp/perception_engine_e2e.log 2>&1 &
+INTEGRATIONS_CONFIG="config/integrations.example.json" \
+  TRIGGERS_ENABLED=true \
+  OPENAI_API_KEY="" \
+  bin/perception_engine_server "$PERCEPTION_ENGINE_E2E_PORT" "http://localhost:${REALITY_ENGINE_E2E_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" >/tmp/perception_engine_e2e.log 2>&1 &
 PERCEPTION_PID="$!"
 wait_for_http "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/health" "Perception Engine"
 
@@ -186,8 +298,38 @@ expected_test_sources="$(expected_machine_test_source_count)"
 startup_sources="$(curl -sf "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/sources")"
 assert_machine_test_sources "$startup_sources" "$expected_test_sources"
 
+PE_URL="http://localhost:${PERCEPTION_ENGINE_E2E_PORT}"
+integration_status="$(bin/reality_engine_cli pe integrations-status --pe-url "$PE_URL")"
+assert_integration_registry_loaded "$integration_status"
+bin/reality_engine_cli pe ollama-status --pe-url "$PE_URL" >/dev/null
+bin/reality_engine_cli pe openai-status --pe-url "$PE_URL" >/dev/null
+bin/reality_engine_cli pe healthkit-status --pe-url "$PE_URL" >/dev/null
+bin/reality_engine_cli pe carekit-status --pe-url "$PE_URL" >/dev/null
+
+healthkit_payload="$(bin/reality_engine_cli pe healthkit-ingest --pe-url "$PE_URL" --sample-type step-count --source-mapping-id healthkit-activity --unit count --values 1,0,0.9,0)"
+assert_healthkit_ingest_success "$healthkit_payload"
+carekit_payload="$(bin/reality_engine_cli pe carekit-ingest --pe-url "$PE_URL" --sample-type task-adherence --source-mapping-id carekit-task --task-id morning-medication --care-plan-id care-plan-a --values 1,0,0.8,0.95)"
+assert_carekit_ingest_success "$carekit_payload"
+
+curl -sf -X POST "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/sources" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"e2e-dispatch-source","type":"test","name":"E2E Dispatch Source","active":true,"region":{"offset":492,"length":4},"inputs":[[0,1,0,1]],"loop":false}' >/dev/null
+
 push_payload="$(curl -sf -X POST "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/push" -H "Content-Type: application/json" -d '{"compact":true}')"
 assert_push_success "$push_payload"
+dispatch_id="$(bin/reality_engine_cli pe dispatch-ledger --pe-url "$PE_URL" | first_dispatch_record_id)"
+bin/reality_engine_cli pe dispatch-read "$dispatch_id" --pe-url "$PE_URL" >/dev/null
+dispatch_update="$(bin/reality_engine_cli pe dispatch-update "$dispatch_id" --pe-url "$PE_URL" --status delivered --adapter e2e --external-run-id run-e2e --increment-attempts)"
+assert_dispatch_update_success "$dispatch_update"
+
+completion_downstream='{"version":"1.0.0","machine":{"name":"E2E Async Completion Consumer","description":"Consumes async agent completion source after dispatch record delivery","arbiterRule":"PASSTHROUGH","perceptualMapping":{"input":{"offset":4200,"length":4},"output":{"offset":4710,"length":2}},"sequences":[{"id":"e2e-async-completion-seq","name":"completion source drives downstream transition","vectors":[{"id":"e2e-async-completion-ready","elements":[{"value":1,"comparatorType":"equals"},{"value":0,"comparatorType":"equals"},{"value":0.75,"comparatorType":"equals"},{"value":0,"comparatorType":"equals"}],"isInitial":true,"outputVectors":[{"id":"e2e-async-completion-out","vector":[1,0],"metadata":{"boundary":"agent completion consumed"}}]}]}]}}'
+post_machine "$completion_downstream"
+
+completion_payload="$(bin/reality_engine_cli pe completion --pe-url "$PE_URL" --provider e2e --agent e2e --source-mapping-id agent-completion-risk --correlation-id e2e-correlation --values 1,0,0.75,0)"
+assert_completion_success "$completion_payload"
+completion_step="$(curl -sf -X POST "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/push" -H "Content-Type: application/json" -d '{"compact":true}')"
+assert_merge_region "$completion_step" 4710 2
+echo "RealityEngine_CPP async completion e2e tests passed"
 
 chain_a='{"version":"1.0.0","machine":{"name":"E2E Chain A","description":"First machine in PE-to-RE stream propagation test","arbiterRule":"PASSTHROUGH","perceptualMapping":{"input":{"offset":4600,"length":2},"output":{"offset":4602,"length":2}},"sequences":[{"id":"e2e-chain-a-seq","name":"A input stream emits B input","vectors":[{"id":"e2e-chain-a-start","elements":[{"value":1,"threshold":0.5},{"value":0,"threshold":0.5}],"isInitial":true,"nextVectorIds":["e2e-chain-a-output"]},{"id":"e2e-chain-a-output","elements":[{"value":0,"threshold":0.5},{"value":1,"threshold":0.5}],"isInitial":false,"outputVectors":[{"id":"e2e-chain-a-out","vector":[1,0],"metadata":{"boundary":"A->B"}}]}]}]}}'
 chain_b='{"version":"1.0.0","machine":{"name":"E2E Chain B","description":"Second machine in PE-to-RE stream propagation test","arbiterRule":"PASSTHROUGH","perceptualMapping":{"input":{"offset":4602,"length":2},"output":{"offset":4604,"length":2}},"sequences":[{"id":"e2e-chain-b-seq","name":"B consumes A output and emits C input","vectors":[{"id":"e2e-chain-b-output","elements":[{"value":1,"threshold":0.5},{"value":0,"threshold":0.5}],"isInitial":true,"outputVectors":[{"id":"e2e-chain-b-out","vector":[1,0],"metadata":{"boundary":"B->C"}}]}]}]}}'

@@ -1,15 +1,18 @@
 CXX ?= g++
 BOOST_PREFIX ?= $(shell brew --prefix boost 2>/dev/null)
+OPENSSL_PREFIX ?= $(shell brew --prefix openssl@3 2>/dev/null)
 BOOST_CPPFLAGS ?= $(if $(BOOST_PREFIX),-I$(BOOST_PREFIX)/include,)
-CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -pedantic -Iinclude $(BOOST_CPPFLAGS)
-LDFLAGS ?= -pthread
+OPENSSL_CPPFLAGS ?= $(if $(OPENSSL_PREFIX),-I$(OPENSSL_PREFIX)/include,)
+OPENSSL_LDFLAGS ?= $(if $(OPENSSL_PREFIX),-L$(OPENSSL_PREFIX)/lib,)
+CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -pedantic -Iinclude $(BOOST_CPPFLAGS) $(OPENSSL_CPPFLAGS)
+LDFLAGS ?= -pthread $(OPENSSL_LDFLAGS) -lssl -lcrypto
 
 BIN_DIR := bin
 SRC := src/reality.cpp src/http.cpp src/sta_checker.cpp src/mqtt_client.cpp src/mqtt_mapping.cpp src/mqtt_bridge.cpp
 
 .PHONY: all clean test e2e e2e-corpus e2e-services
 
-all: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/sta_checker_tests $(BIN_DIR)/mqtt_client_tests $(BIN_DIR)/mqtt_mapping_tests $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_index_compile $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity $(BIN_DIR)/cesgen_deprecation
+all: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_cli $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/sta_checker_tests $(BIN_DIR)/mqtt_client_tests $(BIN_DIR)/mqtt_mapping_tests $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_index_compile $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity $(BIN_DIR)/cesgen_deprecation
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -19,6 +22,9 @@ $(BIN_DIR)/reality_engine_server: $(SRC) src/reality_engine_server.cpp | $(BIN_D
 
 $(BIN_DIR)/perception_engine_server: $(SRC) src/perception_engine_server.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $(SRC) src/perception_engine_server.cpp -o $@ $(LDFLAGS)
+
+$(BIN_DIR)/reality_engine_cli: src/http.cpp tools/reality_engine_cli.cpp | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) src/http.cpp tools/reality_engine_cli.cpp -o $@ $(LDFLAGS)
 
 $(BIN_DIR)/reality_engine_tests: $(SRC) tests/reality_engine_tests.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $(SRC) tests/reality_engine_tests.cpp -o $@ $(LDFLAGS)
@@ -87,7 +93,7 @@ e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BI
 	$(BIN_DIR)/cesgen_contracts_parity ../RealityEngine_AI/examples/contracts.json ../RealityEngine_AI/examples/machines
 	$(BIN_DIR)/cesgen_deprecation ../RealityEngine_AI/examples/machines
 
-e2e-services: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server
+e2e-services: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_cli
 	tests/e2e_services.sh
 
 e2e: e2e-corpus e2e-services

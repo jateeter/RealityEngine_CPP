@@ -74,6 +74,27 @@ Qdrant is shared, not owned, by this repo.  The scripts verify the unified
 localAIStack Qdrant endpoint at `http://localhost:4333` and preserve the
 common data repository at `../localAIStack/volumes/qdrant`.
 
+Adapter-facing CLI:
+
+```bash
+make bin/reality_engine_cli
+bin/reality_engine_cli pe integrations-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe dispatch-ledger --pe-url http://localhost:3300
+bin/reality_engine_cli pe ollama-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe ollama-dispatch <dispatchId> --source-mapping-id agent-completion-risk
+bin/reality_engine_cli pe openai-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe openai-dispatch <dispatchId> --source-mapping-id agent-completion-risk
+bin/reality_engine_cli pe healthkit-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe healthkit-ingest --sample-type step-count --source-mapping-id healthkit-activity --values 1,0,0.9,0
+bin/reality_engine_cli pe carekit-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe carekit-ingest --sample-type task-adherence --source-mapping-id carekit-task --values 1,0,0.8,0.95
+bin/reality_engine_cli pe completion --source-mapping-id agent-completion-risk --agent cli --values 1,0,0.75,0
+```
+
+The CLI is a thin wrapper over the PE HTTPS API. It is intended for scripts and
+MCP adapters that need the same status, ledger, dispatch annotation, and
+completion-ingest contract without embedding HTTP details.
+
 ## MQTT Integration
 
 The PE includes a hand-rolled MQTT v3.1.1 client and a mapping registry
@@ -133,6 +154,20 @@ flags):
 | `LOCAL_AI_API_URL` | `http://localhost:4000` | localAIStack integration target |
 | `LOCAL_AI_BOOTSTRAP` | `false` | Auto-register localAIStack sensors + machines |
 | `RE_STRICT_STA` | unset | When `1`, enforce Single Transition Assumption on life-safety machines |
+| `INTEGRATIONS_CONFIG` | `config/integrations.json` when present | Provider-neutral startup registry for integration source mappings |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama adapter base URL |
+| `OLLAMA_MODEL` | `gpt-oss:20b` | Default Ollama model for PE-controlled dispatch |
+| `OLLAMA_COMPLETION_SOURCE_MAPPING_ID` | `agent-completion-risk` | Default source mapping for Ollama completion commits |
+| `OPENAI_API_KEY` | unset | API key for caller-driven OpenAI Responses dispatch |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible Responses API base URL |
+| `OPENAI_MODEL` | `gpt-5` | Default OpenAI model for PE-controlled dispatch |
+| `OPENAI_COMPLETION_SOURCE_MAPPING_ID` | `agent-completion-risk` | Default source mapping for OpenAI completion commits |
+| `HEALTHKIT_BRIDGE_ID` | `healthkit-ios-bridge` | Expected Apple-platform HealthKit bridge identity |
+| `HEALTHKIT_DEFAULT_SOURCE_MAPPING_ID` | `healthkit-activity` | Default source mapping for HealthKit bridge ingest |
+| `HEALTHKIT_BRIDGE_TOKEN` | unset | Optional shared token required in HealthKit bridge ingest payloads |
+| `CAREKIT_BRIDGE_ID` | `carekit-ios-bridge` | Expected Apple-platform CareKit bridge identity |
+| `CAREKIT_DEFAULT_SOURCE_MAPPING_ID` | `carekit-task` | Default source mapping for CareKit bridge ingest |
+| `CAREKIT_BRIDGE_TOKEN` | unset | Optional shared token required in CareKit bridge ingest payloads |
 | `MQTT_BROKER_HOST` | unset | Set to enable the MQTT bridge |
 | `MQTT_BROKER_PORT` | `1883` | Broker port |
 | `MQTT_CLIENT_ID` | `reality-engine-pe` | Client identifier |
@@ -141,12 +176,16 @@ flags):
 | `MQTT_MAPPINGS_FILE` | unset | Path to the registry JSON |
 | `MQTT_MAPPINGS_JSON` | unset | Inline registry JSON (alternative to file) |
 | `MQTT_ALLOW_REGION_OVERLAP` | `0` | Suppress overlap warnings when `1` |
+| `TRIGGERS_ENABLED` | `false` | Enable PE trigger envelope recording from RE `mergeBatch` results |
+| `TRIGGER_DISPATCH_MODE` | `dry-run` | Label for trigger dispatch target (`dry-run`, `graphql`, `openai`, `ollama`, `mcp`) |
+| `TRIGGER_GRAPHQL_URL` | `${LOCAL_AI_API_URL}/graphql` | localAIStack GraphQL target metadata for trigger envelopes |
 
 ## Documentation
 
 - [Documentation Index](docs/README.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [API Equivalence](docs/API_EQUIVALENCE.md)
+- [Integration Architecture](docs/INTEGRATION_ARCHITECTURE.md)
 - [Reality Engine OpenAPI](docs/openapi/reality-engine.yaml)
 - [Perception Engine OpenAPI](docs/openapi/perception-engine.yaml)
 - [MQTT Yuma Demonstration](docs/MQTT_YUMA_DEMONSTRATION.md)

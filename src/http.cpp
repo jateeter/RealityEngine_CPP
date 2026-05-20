@@ -2,9 +2,12 @@
 #include "reality/json.hpp"
 
 #include <boost/asio.hpp>
+#include <boost/asio/ssl.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
+#include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
+#include <openssl/err.h>
 
 #include <atomic>
 #include <cctype>
@@ -28,6 +31,7 @@ namespace asio = boost::asio;
 namespace beast = boost::beast;
 namespace beast_http = boost::beast::http;
 namespace beast_websocket = boost::beast::websocket;
+namespace ssl = boost::asio::ssl;
 using tcp = asio::ip::tcp;
 using namespace std::chrono_literals;
 
@@ -383,21 +387,37 @@ Response error_response(const std::string& message, int status) {
   return json_response(json::stringify(json::Value::Object{{"error", message}}), status);
 }
 
-static std::tuple<std::string, std::string, std::string> parse_url(const std::string& url) {
+struct ParsedUrl {
+  std::string scheme = "http";
+  std::string host;
+  std::string port = "80";
+  std::string path = "/";
+};
+
+static ParsedUrl parse_url(const std::string& url) {
   std::string u = url;
-  const std::string prefix = "http://";
-  if (u.rfind(prefix, 0) == 0) u = u.substr(prefix.size());
+  ParsedUrl parsed;
+  const std::string httpPrefix = "http://";
+  const std::string httpsPrefix = "https://";
+  if (u.rfind(httpPrefix, 0) == 0) {
+    parsed.scheme = "http";
+    parsed.port = "80";
+    u = u.substr(httpPrefix.size());
+  } else if (u.rfind(httpsPrefix, 0) == 0) {
+    parsed.scheme = "https";
+    parsed.port = "443";
+    u = u.substr(httpsPrefix.size());
+  }
   auto slash = u.find('/');
   std::string hostPort = slash == std::string::npos ? u : u.substr(0, slash);
-  std::string path = slash == std::string::npos ? "/" : u.substr(slash);
-  std::string port = "80";
+  parsed.path = slash == std::string::npos ? "/" : u.substr(slash);
   auto colon = hostPort.find(':');
-  std::string host = hostPort;
+  parsed.host = hostPort;
   if (colon != std::string::npos) {
-    host = hostPort.substr(0, colon);
-    port = hostPort.substr(colon + 1);
+    parsed.host = hostPort.substr(0, colon);
+    parsed.port = hostPort.substr(colon + 1);
   }
-  return {host, port, path};
+  return parsed;
 }
 
 class PersistentConnection {
@@ -405,14 +425,19 @@ public:
   PersistentConnection(std::string host, std::string port)
       : host(std::move(host)), port(std::move(port)), stream(std::make_unique<beast::tcp_stream>(ioc)) {}
 
-  std::string request(const std::string& method, const std::string& target, const std::string& body, int timeoutMs, const std::string& idempotencyKey) {
+  std::string request(const std::string& method,
+                      const std::string& target,
+                      const std::string& body,
+                      int timeoutMs,
+                      const std::string& idempotencyKey,
+                      const std::map<std::string, std::string>& headers) {
     std::lock_guard<std::mutex> lock(mutex);
     try {
-      return request_once(method, target, body, timeoutMs, idempotencyKey);
+      return request_once(method, target, body, timeoutMs, idempotencyKey, headers);
     } catch (...) {
-      if (method == "POST" && idempotencyKey.empty()) throw;
+      if ((method == "POST" || method == "PATCH") && idempotencyKey.empty()) throw;
       reconnect();
-      return request_once(method, target, body, timeoutMs, idempotencyKey);
+      return request_once(method, target, body, timeoutMs, idempotencyKey, headers);
     }
   }
 
@@ -422,17 +447,27 @@ public:
   }
 
 private:
-  std::string request_once(const std::string& method, const std::string& target, const std::string& body, int timeoutMs, const std::string& idempotencyKey) {
+  std::string request_once(const std::string& method,
+                           const std::string& target,
+                           const std::string& body,
+                           int timeoutMs,
+                           const std::string& idempotencyKey,
+                           const std::map<std::string, std::string>& headers) {
     connect_if_needed(timeoutMs);
 
     beast_http::request<beast_http::string_body> req;
     req.version(11);
-    req.method(method == "POST" ? beast_http::verb::post : beast_http::verb::get);
+    if (method == "POST") req.method(beast_http::verb::post);
+    else if (method == "PATCH") req.method(beast_http::verb::patch);
+    else if (method == "PUT") req.method(beast_http::verb::put);
+    else if (method == "DELETE") req.method(beast_http::verb::delete_);
+    else req.method(beast_http::verb::get);
     req.target(target);
     req.set(beast_http::field::host, host);
     req.set(beast_http::field::user_agent, "RealityEngine_CPP");
+    for (const auto& [key, value] : headers) req.set(key, value);
     req.keep_alive(true);
-    if (method == "POST") {
+    if (method == "POST" || method == "PATCH" || method == "PUT") {
       req.set(beast_http::field::content_type, "application/json");
       if (!idempotencyKey.empty()) req.set("Idempotency-Key", idempotencyKey);
       req.body() = body;
@@ -483,28 +518,98 @@ static std::mutex clientMutex;
 static std::map<std::string, std::vector<std::unique_ptr<PersistentConnection>>> clients;
 static std::map<std::string, size_t> clientCursor;
 
-static std::string request_body(const std::string& method, const std::string& url, const std::string& body) {
-  auto [host, port, target] = parse_url(url);
-  std::string key = host + ":" + port;
+static void set_method(beast_http::request<beast_http::string_body>& req, const std::string& method) {
+  if (method == "POST") req.method(beast_http::verb::post);
+  else if (method == "PATCH") req.method(beast_http::verb::patch);
+  else if (method == "PUT") req.method(beast_http::verb::put);
+  else if (method == "DELETE") req.method(beast_http::verb::delete_);
+  else req.method(beast_http::verb::get);
+}
+
+static std::string request_body_https(const std::string& method,
+                                      const ParsedUrl& url,
+                                      const std::string& body,
+                                      int timeoutMs,
+                                      const std::string& idempotencyKey,
+                                      const std::map<std::string, std::string>& headers) {
+  asio::io_context ioc;
+  ssl::context ctx{ssl::context::tls_client};
+  ctx.set_default_verify_paths();
+  beast::ssl_stream<beast::tcp_stream> stream{ioc, ctx};
+  if (!SSL_set_tlsext_host_name(stream.native_handle(), url.host.c_str())) {
+    throw beast::system_error(static_cast<int>(::ERR_get_error()), asio::error::get_ssl_category());
+  }
+  stream.set_verify_mode(ssl::verify_peer);
+  stream.set_verify_callback(ssl::host_name_verification(url.host));
+
+  tcp::resolver resolver{ioc};
+  auto const results = resolver.resolve(url.host, url.port);
+  beast::get_lowest_layer(stream).expires_after(std::chrono::milliseconds(timeoutMs));
+  beast::get_lowest_layer(stream).connect(results);
+  beast::get_lowest_layer(stream).expires_after(std::chrono::milliseconds(timeoutMs));
+  stream.handshake(ssl::stream_base::client);
+
+  beast_http::request<beast_http::string_body> req;
+  req.version(11);
+  set_method(req, method);
+  req.target(url.path);
+  req.set(beast_http::field::host, url.host);
+  req.set(beast_http::field::user_agent, "RealityEngine_CPP");
+  for (const auto& [key, value] : headers) req.set(key, value);
+  req.keep_alive(false);
+  if (method == "POST" || method == "PATCH" || method == "PUT") {
+    req.set(beast_http::field::content_type, "application/json");
+    if (!idempotencyKey.empty()) req.set("Idempotency-Key", idempotencyKey);
+    req.body() = body;
+  }
+  req.prepare_payload();
+  beast_http::write(stream, req);
+
+  beast::flat_buffer buffer;
+  beast_http::response<beast_http::string_body> res;
+  beast_http::read(stream, buffer, res);
+  beast::error_code ec;
+  stream.shutdown(ec);
+  if (ec == asio::error::eof) ec = {};
+  if (ec) throw beast::system_error{ec};
+  return res.body();
+}
+
+static std::string request_body(const std::string& method,
+                                const std::string& url,
+                                const std::string& body,
+                                const std::map<std::string, std::string>& headers = {}) {
+  ParsedUrl parsed = parse_url(url);
   size_t poolSize = static_cast<size_t>(env_int("HTTP_CLIENT_POOL_SIZE", 4));
   int timeoutMs = env_int("HTTP_CLIENT_TIMEOUT_MS", 5000, 100);
   std::string idempotencyKey;
-  if (method == "POST") {
+  if (method == "POST" || method == "PATCH") {
     idempotencyKey = make_idempotency_key();
   }
+  if (parsed.scheme == "https") return request_body_https(method, parsed, body, timeoutMs, idempotencyKey, headers);
+
+  std::string key = parsed.host + ":" + parsed.port;
   PersistentConnection* client = nullptr;
   {
     std::lock_guard<std::mutex> lock(clientMutex);
     auto& pool = clients[key];
     if (pool.empty()) {
       pool.reserve(poolSize);
-      for (size_t i = 0; i < poolSize; ++i) pool.push_back(std::make_unique<PersistentConnection>(host, port));
+      for (size_t i = 0; i < poolSize; ++i) pool.push_back(std::make_unique<PersistentConnection>(parsed.host, parsed.port));
       clientCursor[key] = 0;
     }
     size_t index = clientCursor[key]++ % pool.size();
     client = pool[index].get();
   }
-  return client->request(method, target, body, timeoutMs, idempotencyKey);
+  return client->request(method, parsed.path, body, timeoutMs, idempotencyKey, headers);
+}
+
+std::string request_json(const std::string& method, const std::string& url, const std::string& body) {
+  return request_body(method, url, body);
+}
+
+std::string request_json(const std::string& method, const std::string& url, const std::string& body, const std::map<std::string, std::string>& headers) {
+  return request_body(method, url, body, headers);
 }
 
 std::string post_json(const std::string& url, const std::string& body) {

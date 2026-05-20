@@ -1,0 +1,116 @@
+{
+  "_comment": "Provider-neutral integration registry. Existing MQTT_* and LOCAL_AI_* env vars remain supported; this file documents the normalized target shape for new integrations.",
+  "version": "1.0",
+  "defaults": {
+    "pushMode": "debounced",
+    "debounceMs": 250,
+    "ttlMs": 300000,
+    "completionEndpoint": "/api/integrations/completions"
+  },
+  "integrations": [
+    {
+      "id": "yuma-mqtt",
+      "kind": "mqtt",
+      "enabled": false,
+      "mappingsFile": "config/mqtt-mappings.yuma-agriculture.json"
+    },
+    {
+      "id": "localai-graphql",
+      "kind": "localai",
+      "enabled": false,
+      "baseUrl": "http://localhost:4000",
+      "triggerDispatch": {
+        "mode": "graphql",
+        "url": "http://localhost:4000/graphql",
+        "mutation": "updateProcessState"
+      }
+    },
+    {
+      "id": "openai-agents",
+      "kind": "openai",
+      "enabled": false,
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "gpt-5",
+      "completionSourceMappingId": "agent-completion-risk",
+      "triggerRulesFile": "config/agent-triggers.example.json",
+      "mcp": {
+        "serverUrl": "https://example.org/mcp",
+        "allowedTools": ["re.read_state", "pe.list_sources"]
+      },
+      "completionMode": "https-callback"
+    },
+    {
+      "id": "ollama-local",
+      "kind": "ollama",
+      "enabled": false,
+      "baseUrl": "http://localhost:11434",
+      "model": "gpt-oss:20b",
+      "apiMode": "native",
+      "completionSourceMappingId": "agent-completion-risk",
+      "mcp": {
+        "execution": "local",
+        "allowedTools": ["re.read_state", "pe.list_sources"]
+      },
+      "completionMode": "local-adapter"
+    },
+    {
+      "id": "healthkit-ios-bridge",
+      "kind": "healthkit",
+      "enabled": false,
+      "bridgeId": "healthkit-ios-bridge",
+      "defaultSourceMappingId": "healthkit-activity",
+      "transport": "https",
+      "sourceMappingsFile": "config/healthkit-mappings.example.json"
+    },
+    {
+      "id": "carekit-ios-bridge",
+      "kind": "carekit",
+      "enabled": false,
+      "bridgeId": "carekit-ios-bridge",
+      "defaultSourceMappingId": "carekit-task",
+      "transport": "https",
+      "sourceMappingsFile": "config/carekit-mappings.example.json"
+    }
+  ],
+  "sourceMappings": [
+    {
+      "id": "agent-completion-risk",
+      "sensorIdTemplate": "agent.{agent}.completion",
+      "region": { "offset": 4200, "length": 4 },
+      "extract": {
+        "type": "json",
+        "pointers": ["/completed", "/failed", "/confidence", "/actionClass"]
+      },
+      "normalize": { "mode": "passthrough", "clamp": true },
+      "ttlMs": 300000,
+      "pushMode": "debounced",
+      "debounceMs": 250
+    },
+    {
+      "id": "healthkit-activity",
+      "sensorIdTemplate": "healthkit.{sampleType}",
+      "region": { "offset": 4300, "length": 4 },
+      "extract": {
+        "type": "json",
+        "pointers": ["/normalizedValue", "/trend", "/confidence", "/sourceClass"]
+      },
+      "normalize": { "mode": "passthrough", "clamp": true },
+      "ttlMs": 900000,
+      "pushMode": "debounced",
+      "debounceMs": 250
+    },
+    {
+      "id": "carekit-task",
+      "sensorIdTemplate": "carekit.{sampleType}",
+      "region": { "offset": 4310, "length": 4 },
+      "extract": {
+        "type": "json",
+        "pointers": ["/completed", "/missed", "/adherence", "/confidence"]
+      },
+      "normalize": { "mode": "passthrough", "clamp": true },
+      "ttlMs": 900000,
+      "pushMode": "debounced",
+      "debounceMs": 250
+    }
+  ]
+}
