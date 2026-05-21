@@ -216,7 +216,7 @@ mergeBatch alone:
        agx005-do-watch     extract /data/wDO       band[3,5]    → 0.0 → cell 86
        agx005-temp-watch   extract /data/wDOTemp   band[85,95]  → 0.0 → cell 87
 [4]  PE sources: 4 sensor sources updated with ageMs / ttlMs / stale
-[5]  PE push:    POST /api/perceive  (universal vector of 768 cells)
+[5]  PE push:    POST /api/perceive  (vector sized to VECTOR_DIMENSION; 768 in this demo)
 [6]  RE input:   AGX005 reads region [84,88)  =  [1, 0, 0, 1]
                   (note: the read above was [1,1,0,0] in a different ingest
                    window — output values vary as live readings change)
