@@ -25,6 +25,8 @@ struct Response {
   std::string contentType = "application/json";
 };
 
+class SseSession;
+
 class Server {
 public:
   using Handler = std::function<Response(const Request&)>;
@@ -44,11 +46,23 @@ public:
   };
   using WebSocketOpenHandler = std::function<void(std::shared_ptr<WebSocketConnection>)>;
 
+  class SseHub {
+  public:
+    void broadcast(const std::string& text);
+  private:
+    friend class ::reality::http::SseSession;
+    void add(std::weak_ptr<SseSession> session);
+    std::vector<std::weak_ptr<SseSession>> sessions;
+    std::mutex mutex;
+  };
+
   void route(std::string method, std::string pattern, Handler handler);
   void websocket(std::string pattern, std::shared_ptr<WebSocketHub> hub, WebSocketOpenHandler on_open);
+  void sse(std::string pattern, std::shared_ptr<SseHub> hub);
   void listen(int port);
   Response handle(Request req) const;
   bool match_websocket(Request& req, std::shared_ptr<WebSocketHub>& hub, WebSocketOpenHandler& on_open) const;
+  bool match_sse(Request& req, std::shared_ptr<SseHub>& hub) const;
 
 private:
   struct Route {
@@ -65,8 +79,15 @@ private:
     std::shared_ptr<WebSocketHub> hub;
     WebSocketOpenHandler on_open;
   };
+  struct SseRoute {
+    std::string pattern;
+    std::regex regex;
+    std::vector<std::string> params;
+    std::shared_ptr<SseHub> hub;
+  };
   std::vector<Route> routes;
   std::vector<WebSocketRoute> websocketRoutes;
+  std::vector<SseRoute> sseRoutes;
 };
 
 Response json_response(const std::string& body, int status = 200);

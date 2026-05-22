@@ -239,6 +239,7 @@ public:
     server.websocket("/ws", wsHub, [this](std::shared_ptr<http::Server::WebSocketConnection> connection) {
       connection->send(state_update_message());
     });
+    server.sse("/api/events", sseHub);
     server.route("GET", "/api/health", [](const http::Request&) {
       return ok(Json::Object{{"status", "healthy"}, {"timestamp", static_cast<double>(now_ms())}});
     });
@@ -380,13 +381,11 @@ public:
         },
         [this]() { do_push(false, true); });
       mqttBridge->start();
-      if (wsHub) {
-        wsHub->broadcast(json::stringify(Json::Object{
-          {"type", "mqtt-mappings-reloaded"},
-          {"mappings", static_cast<double>(mqttBridge->registry().size())},
-          {"timestamp", static_cast<double>(now_ms())},
-        }));
-      }
+      hub_broadcast(json::stringify(Json::Object{
+        {"type", "mqtt-mappings-reloaded"},
+        {"mappings", static_cast<double>(mqttBridge->registry().size())},
+        {"timestamp", static_cast<double>(now_ms())},
+      }));
       Json::Array warnArr;
       for (const auto& w : warnings) warnArr.push_back(w);
       return ok(Json::Object{
@@ -471,6 +470,25 @@ public:
       }
       broadcast_state();
       return ok(Json::Object{{"success", true}});
+    });
+    server.route("POST", "/api/sources/bootstrap-from-machines", [this](const http::Request&) {
+      // Fetch /api/machines from RE and materialise one consolidated test source
+      // per machine not already registered.  Delegates to the existing private
+      // helper which holds stateMutex only for the duration of each individual
+      // engine.add_source() call, so the HTTP fetch runs without the lock.
+      size_t added = sync_test_sources_from_reality();
+      broadcast_state();
+      Json::Array sources;
+      {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        for (const auto& s : engine.get_sources())
+          if (s.kind == "test") sources.push_back(to_json(s));
+      }
+      return ok(Json::Object{
+        {"success", true},
+        {"created", static_cast<double>(added)},
+        {"sources", Json(sources)}
+      });
     });
     server.route("POST", "/api/sensors/:sensorId", [this](const http::Request& req) {
       auto values = json::to_numbers(parse_body(req).at("values"));
@@ -1158,16 +1176,14 @@ private:
       updated = record;
     }
 
-    if (wsHub) {
-      wsHub->broadcast(json::stringify(Json::Object{
-        {"type", "dispatch.record.updated"},
-        {"dispatchId", updated.id},
-        {"status", updated.status},
-        {"target", updated.target},
-        {"attempts", static_cast<double>(updated.attempts)},
-        {"timestamp", static_cast<double>(updated.updatedAt)}
-      }));
-    }
+    hub_broadcast(json::stringify(Json::Object{
+      {"type", "dispatch.record.updated"},
+      {"dispatchId", updated.id},
+      {"status", updated.status},
+      {"target", updated.target},
+      {"attempts", static_cast<double>(updated.attempts)},
+      {"timestamp", static_cast<double>(updated.updatedAt)}
+    }));
 
     return ok(Json::Object{
       {"success", true},
@@ -1642,16 +1658,14 @@ private:
         source = engine.add_source(source);
       }
     }
-    if (wsHub) {
-      wsHub->broadcast(json::stringify(Json::Object{
-        {"type", "mqtt-ingest"},
-        {"topic", topic},
-        {"mappingId", mappingId},
-        {"sensorId", sensorId},
-        {"source", to_json(source)},
-        {"timestamp", static_cast<double>(now_ms())},
-      }));
-    }
+    hub_broadcast(json::stringify(Json::Object{
+      {"type", "mqtt-ingest"},
+      {"topic", topic},
+      {"mappingId", mappingId},
+      {"sensorId", sensorId},
+      {"source", to_json(source)},
+      {"timestamp", static_cast<double>(now_ms())},
+    }));
   }
 
   http::Response ingest_signal(const Json& body) {
@@ -1761,18 +1775,16 @@ private:
     };
     if (body.at("metadata").is_object()) completion["metadata"] = body.at("metadata");
 
-    if (wsHub) {
-      wsHub->broadcast(json::stringify(Json::Object{
-        {"type", "agent.completion.received"},
-        {"provider", provider},
-        {"agent", agent},
-        {"sensorId", sensorId},
-        {"sourceMappingId", sourceMappingId},
-        {"correlationId", body.at("correlationId").as_string()},
-        {"envelopeId", body.at("envelopeId").as_string()},
-        {"timestamp", static_cast<double>(now_ms())},
-      }));
-    }
+    hub_broadcast(json::stringify(Json::Object{
+      {"type", "agent.completion.received"},
+      {"provider", provider},
+      {"agent", agent},
+      {"sensorId", sensorId},
+      {"sourceMappingId", sourceMappingId},
+      {"correlationId", body.at("correlationId").as_string()},
+      {"envelopeId", body.at("envelopeId").as_string()},
+      {"timestamp", static_cast<double>(now_ms())},
+    }));
 
     return ok(Json::Object{
       {"success", true},
@@ -1940,16 +1952,14 @@ private:
 
     const bool allResolved = unmapped.empty();
     const int  status      = allResolved ? 200 : (resolved.empty() ? 400 : 207);
-    if (wsHub) {
-      wsHub->broadcast(json::stringify(Json::Object{
-        {"type",     "healthkit.ingest"},
-        {"bridgeId", body.at("bridgeId").as_string(healthKitBridgeId)},
-        {"samples",  static_cast<double>(resolved.size() + unmapped.size())},
-        {"resolved", static_cast<double>(resolved.size())},
-        {"unmapped", static_cast<double>(unmapped.size())},
-        {"timestamp", static_cast<double>(now_ms())},
-      }));
-    }
+    hub_broadcast(json::stringify(Json::Object{
+      {"type",     "healthkit.ingest"},
+      {"bridgeId", body.at("bridgeId").as_string(healthKitBridgeId)},
+      {"samples",  static_cast<double>(resolved.size() + unmapped.size())},
+      {"resolved", static_cast<double>(resolved.size())},
+      {"unmapped", static_cast<double>(unmapped.size())},
+      {"timestamp", static_cast<double>(now_ms())},
+    }));
     return http::json_response(json::stringify(Json::Object{
       {"success",  allResolved},
       {"bridgeId", body.at("bridgeId").as_string(healthKitBridgeId)},
@@ -2035,15 +2045,13 @@ private:
       return http::error_response(e.what(), 400);
     }
 
-    if (wsHub) {
-      wsHub->broadcast(json::stringify(Json::Object{
-        {"type", "carekit.ingest"},
-        {"bridgeId", body.at("bridgeId").as_string(careKitBridgeId)},
-        {"samples", static_cast<double>(results.size())},
-        {"success", allOk},
-        {"timestamp", static_cast<double>(now_ms())}
-      }));
-    }
+    hub_broadcast(json::stringify(Json::Object{
+      {"type", "carekit.ingest"},
+      {"bridgeId", body.at("bridgeId").as_string(careKitBridgeId)},
+      {"samples", static_cast<double>(results.size())},
+      {"success", allOk},
+      {"timestamp", static_cast<double>(now_ms())}
+    }));
 
     return http::json_response(json::stringify(Json::Object{
       {"success", allOk},
@@ -2256,8 +2264,13 @@ private:
     return json::stringify(Json::Object{{"type", "state-update"}, {"state", current_state_json()}});
   }
 
+  void hub_broadcast(const std::string& text) const {
+    wsHub->broadcast(text);
+    if (sseHub) sseHub->broadcast(text);
+  }
+
   void broadcast_state() const {
-    wsHub->broadcast(state_update_message());
+    hub_broadcast(state_update_message());
   }
 
   void broadcast_push_result(const Json& result) const {
@@ -2265,7 +2278,7 @@ private:
     if (result.is_object()) {
       for (const auto& [key, value] : result.object()) message[key] = value;
     }
-    wsHub->broadcast(json::stringify(message));
+    hub_broadcast(json::stringify(message));
   }
 
   void trim_push_records() {
@@ -2445,16 +2458,14 @@ private:
       ++summary.envelopesCreated;
       ++summary.dispatchRecordsCreated;
 
-      if (wsHub) {
-        wsHub->broadcast(json::stringify(Json::Object{
-          {"type", "trigger.envelope.created"},
-          {"envelopeId", envelopeId},
-          {"correlationId", correlationId},
-          {"dispatchId", record.id},
-          {"target", agent},
-          {"mode", triggerDispatchMode}
-        }));
-      }
+      hub_broadcast(json::stringify(Json::Object{
+        {"type", "trigger.envelope.created"},
+        {"envelopeId", envelopeId},
+        {"correlationId", correlationId},
+        {"dispatchId", record.id},
+        {"target", agent},
+        {"mode", triggerDispatchMode}
+      }));
     }
     return summary;
   }
@@ -2526,6 +2537,7 @@ private:
   std::map<std::string, PushRecord> pushRecords;
   std::deque<std::string> pushRecordOrder;
   std::shared_ptr<http::Server::WebSocketHub> wsHub = std::make_shared<http::Server::WebSocketHub>();
+  std::shared_ptr<http::Server::SseHub> sseHub = std::make_shared<http::Server::SseHub>();
   std::thread pushWorker;
   std::thread autoWorker;
   std::mutex autoMutex;

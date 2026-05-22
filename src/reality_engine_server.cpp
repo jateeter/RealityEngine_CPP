@@ -21,6 +21,7 @@ public:
   }
 
   void mount(http::Server& server) {
+    server.sse("/api/engine/stream", sseHub);
     server.route("GET", "/", [](const http::Request&) {
       return ok(Json::Object{{"name", "Reality Engine"}, {"version", "1.0.0-cpp"}, {"status", "running"}});
     });
@@ -488,7 +489,7 @@ public:
       buffer.clear();
       return ok(Json::Object{{"success", true}});
     });
-    server.route("POST", "/api/preception/diagnostic", [this](const http::Request& req) {
+    server.route("POST", "/api/perception/diagnostic", [this](const http::Request& req) {
       std::shared_lock<std::shared_mutex> lock(registryMutex);
       PreceptionEngine resolver(dimension);
       return ok(resolver.diagnostic_mapping(json::to_numbers(parse_body(req).at("universalInputSpace")), machines));
@@ -560,6 +561,7 @@ public:
       auto compactQuery = req.queryParams.find("compact");
       if (compactQuery != req.queryParams.end()) compact = compactQuery->second == "true" || compactQuery->second == "1";
       if (compact) add_packed_merge_values(out);
+      if (sseHub) sseHub->broadcast(json::stringify(out));
       return ok(out);
     });
   }
@@ -822,6 +824,7 @@ private:
   long samplerIntervalMs = 0;
   long long samplerSampleCount = 0;
   std::string samplerStrategy = "MANUAL";
+  std::shared_ptr<http::Server::SseHub> sseHub = std::make_shared<http::Server::SseHub>();
 };
 
 } // namespace

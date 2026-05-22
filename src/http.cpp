@@ -90,6 +90,23 @@ void Server::websocket(std::string pattern, std::shared_ptr<WebSocketHub> hub, W
   websocketRoutes.push_back({std::move(pattern), std::move(rx), std::move(params), std::move(hub), std::move(on_open)});
 }
 
+void Server::sse(std::string pattern, std::shared_ptr<SseHub> hub) {
+  auto [rx, params] = compile_pattern(pattern);
+  sseRoutes.push_back({std::move(pattern), std::move(rx), std::move(params), std::move(hub)});
+}
+
+bool Server::match_sse(Request& req, std::shared_ptr<SseHub>& hub) const {
+  for (const auto& r : sseRoutes) {
+    std::smatch m;
+    if (std::regex_match(req.path, m, r.regex)) {
+      for (size_t i = 0; i < r.params.size(); ++i) req.pathParams[r.params[i]] = m[i + 1].str();
+      hub = r.hub;
+      return true;
+    }
+  }
+  return false;
+}
+
 static Request to_request(const beast_http::request<beast_http::string_body>& in) {
   Request req;
   req.method = std::string(in.method_string());
@@ -270,6 +287,90 @@ private:
   bool writing = false;
 };
 
+class SseSession : public std::enable_shared_from_this<SseSession> {
+public:
+  SseSession(beast::tcp_stream stream, std::shared_ptr<Server::SseHub> hub)
+      : stream(std::move(stream)), hub(std::move(hub)),
+        heartbeatTimer(this->stream.get_executor()) {}
+
+  void run(beast_http::request<beast_http::string_body> req) {
+    beast_http::response<beast_http::empty_body> res;
+    res.version(req.version());
+    res.result(beast_http::status::ok);
+    res.set(beast_http::field::content_type, "text/event-stream");
+    res.set(beast_http::field::cache_control, "no-cache");
+    res.set("Access-Control-Allow-Origin", "*");
+    res.set("X-Accel-Buffering", "no");
+    res.chunked(true);
+    auto sr = std::make_shared<beast_http::response_serializer<beast_http::empty_body>>(res);
+    beast_http::async_write_header(stream, *sr,
+      [self = shared_from_this(), sr](beast::error_code ec, std::size_t) {
+        if (ec) return;
+        if (self->hub) self->hub->add(self);
+        self->send(": connected\r\n\r\n");
+        self->schedule_heartbeat();
+      });
+  }
+
+  void send(std::string text) {
+    asio::post(stream.get_executor(),
+      [self = shared_from_this(), text = std::move(text)]() mutable {
+        self->outbox.push_back(std::move(text));
+        if (!self->writing) self->write_next();
+      });
+  }
+
+private:
+  void write_next() {
+    if (outbox.empty()) { writing = false; return; }
+    writing = true;
+    const std::string& data = outbox.front();
+    std::ostringstream oss;
+    oss << std::hex << data.size() << "\r\n" << data << "\r\n";
+    auto chunk = std::make_shared<std::string>(oss.str());
+    asio::async_write(stream, asio::buffer(*chunk),
+      [self = shared_from_this(), chunk](beast::error_code ec, std::size_t) {
+        self->outbox.pop_front();
+        if (ec) { self->writing = false; return; }
+        self->write_next();
+      });
+  }
+
+  void schedule_heartbeat() {
+    heartbeatTimer.expires_after(std::chrono::seconds(15));
+    heartbeatTimer.async_wait([self = shared_from_this()](beast::error_code ec) {
+      if (ec) return;
+      self->send(": keepalive\r\n\r\n");
+      self->schedule_heartbeat();
+    });
+  }
+
+  beast::tcp_stream stream;
+  std::shared_ptr<Server::SseHub> hub;
+  asio::steady_timer heartbeatTimer;
+  std::deque<std::string> outbox;
+  bool writing = false;
+};
+
+void Server::SseHub::add(std::weak_ptr<SseSession> session) {
+  std::lock_guard<std::mutex> lock(mutex);
+  sessions.push_back(std::move(session));
+}
+
+void Server::SseHub::broadcast(const std::string& text) {
+  const std::string event = "data: " + text + "\n\n";
+  std::lock_guard<std::mutex> lock(mutex);
+  auto it = sessions.begin();
+  while (it != sessions.end()) {
+    if (auto session = it->lock()) {
+      session->send(event);
+      ++it;
+    } else {
+      it = sessions.erase(it);
+    }
+  }
+}
+
 class HttpSession : public std::enable_shared_from_this<HttpSession> {
 public:
   HttpSession(tcp::socket socket, const Server& server, int timeoutMs, int maxRequests)
@@ -296,6 +397,21 @@ private:
       Server::WebSocketOpenHandler on_open;
       if (server.match_websocket(req, hub, on_open)) {
         std::make_shared<WebSocketSession>(std::move(stream), std::move(hub), std::move(on_open))->run(std::move(request));
+        return;
+      }
+    }
+    {
+      Request req = to_request(request);
+      std::shared_ptr<Server::SseHub> sseHub;
+      if (server.match_sse(req, sseHub)) {
+        if (request.method() != beast_http::verb::get) {
+          auto out = std::make_shared<beast_http::response<beast_http::string_body>>(
+            to_beast_response(error_response("Method Not Allowed", 405), false));
+          beast_http::async_write(stream, *out,
+            [self = shared_from_this(), out](beast::error_code, std::size_t) { self->close(); });
+          return;
+        }
+        std::make_shared<SseSession>(std::move(stream), std::move(sseHub))->run(std::move(request));
         return;
       }
     }
