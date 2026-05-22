@@ -64,3 +64,27 @@ Chain B output [4604:4606] -> Chain C output [4606:4608]
 Successive `/api/push` calls assert that the Perception Engine preserves each
 Reality Engine output in the assembled perceptual stream, allowing downstream
 machines to consume it on later pushes.
+
+## HealthKit Spezi Bridge
+
+`make e2e-healthkit-spezi` runs the PE-side contract for a native iOS bridge
+built with Stanford SpeziHealthKit. It starts RE and PE on isolated test ports,
+loads `config/integrations.healthkit-spezi.example.json`, requires a bridge
+token, and posts normalized read-only samples for:
+
+- HealthKit blood pressure correlation
+- HealthKit workout/exercise
+- HealthKit sleep analysis
+
+The test verifies token rejection, registry loading, source mapping resolution,
+sensor source updates, and downstream RE machine output regions:
+
+```text
+Blood pressure source [4320:4324] -> output [4350:4352]
+Exercise source       [4330:4334] -> output [4352:4354]
+Sleep source          [4340:4344] -> output [4354:4356]
+```
+
+The native iOS app remains outside this C++ repo. It owns HealthKit
+entitlements, user authorization, background collection, anchored reads, and
+unit normalization; PE receives only authorized normalized bridge payloads.

@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "integrations": [
+    {
+      "id": "healthkit-ios-bridge",
+      "kind": "healthkit",
+      "enabled": true,
+      "bridgeId": "healthkit-ios-bridge",
+      "transport": "https"
+    }
+  ],
+  "sourceMappings": [
+    {
+      "id": "healthkit:HKCorrelationTypeIdentifierBloodPressure",
+      "sensorIdTemplate": "healthkit.bp",
+      "region": { "offset": 4320, "length": 4 },
+      "ttlMs": 900000
+    },
+    {
+      "id": "healthkit:HKWorkoutTypeIdentifierWorkout",
+      "sensorIdTemplate": "healthkit.exercise",
+      "region": { "offset": 4330, "length": 4 },
+      "ttlMs": 900000
+    },
+    {
+      "id": "healthkit:HKCategoryTypeIdentifierSleepAnalysis",
+      "sensorIdTemplate": "healthkit.sleep",
+      "region": { "offset": 4340, "length": 4 },
+      "ttlMs": 900000
+    }
+  ]
+}

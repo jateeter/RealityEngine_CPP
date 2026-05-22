@@ -10,7 +10,7 @@ LDFLAGS ?= -pthread $(OPENSSL_LDFLAGS) -lssl -lcrypto
 BIN_DIR := bin
 SRC := src/reality.cpp src/http.cpp src/sta_checker.cpp src/mqtt_client.cpp src/mqtt_mapping.cpp src/mqtt_bridge.cpp
 
-.PHONY: all clean test e2e e2e-corpus e2e-services
+.PHONY: all clean test e2e e2e-corpus e2e-services e2e-healthkit-spezi
 
 all: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_cli $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/sta_checker_tests $(BIN_DIR)/mqtt_client_tests $(BIN_DIR)/mqtt_mapping_tests $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_index_compile $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity $(BIN_DIR)/cesgen_deprecation
 
@@ -96,7 +96,10 @@ e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BI
 e2e-services: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_cli
 	tests/e2e_services.sh
 
-e2e: e2e-corpus e2e-services
+e2e-healthkit-spezi: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server
+	tests/e2e_healthkit_spezi.sh
+
+e2e: e2e-corpus e2e-services e2e-healthkit-spezi
 
 clean:
 	rm -rf $(BIN_DIR)

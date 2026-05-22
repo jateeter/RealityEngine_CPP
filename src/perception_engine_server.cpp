@@ -1861,7 +1861,19 @@ private:
       return Json::Object{{"unmapped", true}, {"type", type},
                           {"sourceName", source_name}, {"reason", "sample.value must be a finite number"}};
 
-    Json mapping = lookup_hk_mapping(type, source_name);
+    const std::string sourceMappingId = body.at("sourceMappingId").as_string(body.at("mappingId").as_string());
+    Json mapping = Json::Object{};
+    if (!sourceMappingId.empty()) {
+      mapping = configured_source_mapping(sourceMappingId);
+      if (!mapping.is_object())
+        return Json::Object{{"unmapped", true}, {"type", type}, {"sourceName", source_name},
+                            {"sourceMappingId", sourceMappingId},
+                            {"reason", "unknown sourceMappingId \"" + sourceMappingId + "\""}};
+      mapping.object()["id"] = sourceMappingId;
+    } else {
+      mapping = lookup_hk_mapping(type, source_name);
+    }
+    if (body.at("sourceMapping").is_object()) mapping = merge_objects(mapping, body.at("sourceMapping"));
     if (!mapping.is_object())
       return Json::Object{{"unmapped", true}, {"type", type}, {"sourceName", source_name},
                           {"reason", "no registry mapping (declare healthkit:" + type + "[:<sourceName>])"}};
