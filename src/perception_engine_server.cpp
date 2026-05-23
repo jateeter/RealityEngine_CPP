@@ -1,6 +1,7 @@
 #include "reality/http.hpp"
 #include "reality/mqtt_bridge.hpp"
 #include "reality/reality.hpp"
+#include "reality/vector_aggregator.hpp"
 
 #include <cstdlib>
 #include <atomic>
@@ -984,12 +985,13 @@ private:
   Json healthkit_status() const {
     return Json::Object{
       {"bridgeId", healthKitBridgeId},
+      {"enabled", true},
       {"tokenConfigured", !healthKitBridgeToken.empty()},
       {"nativeAppRequired", true},
       {"nativeWorkOutsideRepo", true},
+      {"registryKey", "healthkit:<typeIdentifier>"},
       {"statusEndpoint", "/api/integrations/healthkit/status"},
       {"ingestEndpoint", "/api/integrations/healthkit/ingest"},
-      {"registryKey", "healthkit:<typeIdentifier>"},
       {"contract", Json::Object{
         {"transport", "https"},
         {"singleSample", Json::Array{"type", "value", "sourceName"}},
@@ -1002,10 +1004,12 @@ private:
   Json carekit_status() const {
     return Json::Object{
       {"bridgeId", careKitBridgeId},
+      {"enabled", true},
       {"defaultSourceMappingId", careKitDefaultSourceMappingId},
       {"tokenConfigured", !careKitBridgeToken.empty()},
       {"nativeAppRequired", true},
       {"nativeWorkOutsideRepo", true},
+      {"registryKey", "carekit:<sampleType>"},
       {"statusEndpoint", "/api/integrations/carekit/status"},
       {"ingestEndpoint", "/api/integrations/carekit/ingest"},
       {"contract", Json::Object{
@@ -1931,7 +1935,8 @@ private:
 
   http::Response ingest_healthkit(const Json& body) {
     if (!body.is_object()) return http::error_response("HealthKit ingest body must be a JSON object", 400);
-    if (!healthKitBridgeToken.empty() && body.at("bridgeToken").as_string() != healthKitBridgeToken)
+    const std::string hkToken = body.at("bridgeToken").as_string(body.at("token").as_string());
+    if (!healthKitBridgeToken.empty() && hkToken != healthKitBridgeToken)
       return http::error_response("HealthKit bridge token rejected", 401);
 
     Json::Array resolved, unmapped;
@@ -2141,6 +2146,7 @@ private:
       {"matchAlgorithm", to_string(matchAlgorithm)},
       {"matchAlgorithmOverride", to_string(matchAlgorithm == MatchAlgorithm::Equals ? ComparatorType::Equals : ComparatorType::Gte)},
       {"includeMachineResults", includeMachineResults},
+      {"includePerceptualSpace", true},
     };
     try {
       std::string raw = http::post_json(realityEngineUrl + "/api/perceive", json::stringify(payload));
@@ -2149,7 +2155,11 @@ private:
       long long step = 0;
       {
         std::lock_guard<std::mutex> lock(stateMutex);
-        if (parsed.at("perceptualSpace").is_array()) engine.update_from_perceptual_space(json::to_numbers(parsed.at("perceptualSpace")));
+        if (parsed.at("perceptualSpace").is_array()) {
+          auto ps = json::to_numbers(parsed.at("perceptualSpace"));
+          ps = aggregator::aggregate_machine_outputs(std::move(ps), parsed.at("machineResults"));
+          engine.update_from_perceptual_space(ps);
+        }
         engine.advance();
         lastPush = ts;
         step = engine.globalStep;
