@@ -189,6 +189,7 @@ flags):
 
 ## Documentation
 
+- [Machine Concept](MACHINE_CONCEPT.md) — DFA theory, JSON schema, perceptual mapping, regex equivalences, STA
 - [Documentation Index](docs/README.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [API Equivalence](docs/API_EQUIVALENCE.md)

@@ -91,6 +91,7 @@ sequenceDiagram
 
 | Need | Document |
 | --- | --- |
+| **Machine concept (DFA theory, JSON schema, regex equivalences)** | **[../MACHINE_CONCEPT.md](../MACHINE_CONCEPT.md)** |
 | Documentation index | [README.md](README.md) |
 | API parity | [API_EQUIVALENCE.md](API_EQUIVALENCE.md) |
 | Vector model | [VECTOR_MANAGEMENT.md](VECTOR_MANAGEMENT.md) |

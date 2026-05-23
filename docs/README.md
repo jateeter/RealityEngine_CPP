@@ -7,6 +7,7 @@ This is the maintained documentation set for RealityEngine_CPP.
 | Document | Purpose |
 | --- | --- |
 | [../README.md](../README.md) | Project overview, build, run, and scope. |
+| [../MACHINE_CONCEPT.md](../MACHINE_CONCEPT.md) | Canonical machine model — DFA theory, JSON schema, perceptual mapping, regex equivalences, STA. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Visual native architecture overview. |
 | [API_EQUIVALENCE.md](API_EQUIVALENCE.md) | API parity against RealityEngine_AI. |
 | [INTEGRATION_ARCHITECTURE.md](INTEGRATION_ARCHITECTURE.md) | Provider-neutral PE integration, trigger dispatch, source mapping, and MCP architecture. |
