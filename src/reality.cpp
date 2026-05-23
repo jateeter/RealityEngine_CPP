@@ -1005,6 +1005,20 @@ Machine load_machine_from_json_string(const std::string& raw,
                                       std::optional<std::string> overrideId,
                                       const LoadOptions& opts) {
   Json root = json::parse(raw);
+  // Version check — same validation Scala MachineLoader enforces.
+  const auto& verField = root.at("version");
+  if (!verField.is_string())
+    throw std::runtime_error("Missing required field: version");
+  {
+    std::string ver = verField.as_string();
+    int major = 0;
+    auto dotPos = ver.find('.');
+    if (dotPos != std::string::npos) {
+      try { major = std::stoi(ver.substr(0, dotPos)); } catch (...) {}
+    }
+    if (major != 1)
+      throw std::runtime_error("Incompatible machine JSON version: " + ver + " (current: 1.0.0)");
+  }
   // STA strict-load gate — mirrors RealityEngine_AI's MachineLoader.loadFromJSON
   // option of the same name.  Runs before any RealityVector is constructed so
   // a violating life-safety machine cannot reach the engine.
