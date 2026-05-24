@@ -23,7 +23,11 @@ fi
 REALITY_ENGINE_PORT="${REALITY_ENGINE_PORT:-3299}"
 PERCEPTION_ENGINE_PORT="${PERCEPTION_ENGINE_PORT:-3300}"
 VECTOR_DIMENSION="${VECTOR_DIMENSION:-768}"
-MACHINES_DIR="${MACHINES_DIR:-../RealityEngine_AI/examples/machines}"
+MACHINES_DIR="${MACHINES_DIR:-../RealityEngine_Machines/machines}"
+# INSTANCE_ID — when set, PID/log files are suffixed so multiple CPP
+# instances can run from the same repo directory simultaneously.
+INSTANCE_ID="${INSTANCE_ID:-}"
+_INST="${INSTANCE_ID:+-${INSTANCE_ID}}"   # "" or "-<id>"
 QDRANT_URL="${QDRANT_URL:-http://localhost:4333}"
 QDRANT_GRPC_URL="${QDRANT_GRPC_URL:-http://localhost:4334}"
 QDRANT_STORAGE_DIR="${QDRANT_STORAGE_DIR:-../localAIStack/volumes/qdrant}"
@@ -48,6 +52,12 @@ MQTT_ALLOW_REGION_OVERLAP="${MQTT_ALLOW_REGION_OVERLAP:-0}"
 RUN_DIR="$ROOT_DIR/run"
 LOG_DIR="$ROOT_DIR/logs"
 mkdir -p "$RUN_DIR" "$LOG_DIR"
+
+# Per-instance PID and log file paths (suffixed when INSTANCE_ID is set)
+RE_PID_FILE="$RUN_DIR/reality_engine${_INST}.pid"
+PE_PID_FILE="$RUN_DIR/perception_engine${_INST}.pid"
+RE_LOG_FILE="$LOG_DIR/reality_engine${_INST}.log"
+PE_LOG_FILE="$LOG_DIR/perception_engine${_INST}.log"
 
 usage() {
   cat <<USAGE
@@ -198,8 +208,8 @@ PY
   rm -f /tmp/re_cpp_qdrant_collections.json
 fi
 
-check_port_free "$REALITY_ENGINE_PORT" "$RUN_DIR/reality_engine.pid"
-check_port_free "$PERCEPTION_ENGINE_PORT" "$RUN_DIR/perception_engine.pid"
+check_port_free "$REALITY_ENGINE_PORT" "$RE_PID_FILE"
+check_port_free "$PERCEPTION_ENGINE_PORT" "$PE_PID_FILE"
 
 export QDRANT_URL QDRANT_GRPC_URL QDRANT_STORAGE_DIR QDRANT_LOCALAI_COLLECTION QDRANT_REALITY_COLLECTION
 export LOCAL_AI_API_URL LOCAL_AI_MACHINES_DIR LOCAL_AI_BOOTSTRAP
@@ -208,20 +218,20 @@ export VECTOR_DIMENSION
 export MQTT_BROKER_HOST MQTT_BROKER_PORT MQTT_CLIENT_ID MQTT_KEEPALIVE
 export MQTT_MAPPINGS_FILE MQTT_ALLOW_REGION_OVERLAP
 
-info "Starting Reality Engine on port $REALITY_ENGINE_PORT..."
+info "Starting Reality Engine on port $REALITY_ENGINE_PORT${INSTANCE_ID:+ [instance: $INSTANCE_ID]}..."
 nohup "$ROOT_DIR/bin/reality_engine_server" "$REALITY_ENGINE_PORT" "$MACHINES_DIR" "$VECTOR_DIMENSION" \
-  > "$LOG_DIR/reality_engine.log" 2>&1 &
-echo $! > "$RUN_DIR/reality_engine.pid"
+  > "$RE_LOG_FILE" 2>&1 &
+echo $! > "$RE_PID_FILE"
 sleep 0.2
-if ! ps -p "$(cat "$RUN_DIR/reality_engine.pid")" >/dev/null 2>&1; then
-  tail -40 "$LOG_DIR/reality_engine.log" || true
-  ./stop.sh >/dev/null 2>&1 || true
+if ! ps -p "$(cat "$RE_PID_FILE")" >/dev/null 2>&1; then
+  tail -40 "$RE_LOG_FILE" || true
+  bash "$ROOT_DIR/stop.sh" "${INSTANCE_ID:+--instance=$INSTANCE_ID}" >/dev/null 2>&1 || true
   die "Reality Engine exited before becoming healthy"
 fi
 
 if ! wait_for_http "http://localhost:${REALITY_ENGINE_PORT}/api/health" "Reality Engine"; then
-  tail -40 "$LOG_DIR/reality_engine.log" || true
-  ./stop.sh >/dev/null 2>&1 || true
+  tail -40 "$RE_LOG_FILE" || true
+  bash "$ROOT_DIR/stop.sh" "${INSTANCE_ID:+--instance=$INSTANCE_ID}" >/dev/null 2>&1 || true
   die "Reality Engine failed to become healthy"
 fi
 
@@ -238,20 +248,20 @@ if [ "${MACHINE_COUNT:-0}" -le 0 ]; then
 fi
 ok "Loaded $MACHINE_COUNT machine(s) from $MACHINES_DIR"
 
-info "Starting Perception Engine on port $PERCEPTION_ENGINE_PORT..."
+info "Starting Perception Engine on port $PERCEPTION_ENGINE_PORT${INSTANCE_ID:+ [instance: $INSTANCE_ID]}..."
 nohup "$ROOT_DIR/bin/perception_engine_server" "$PERCEPTION_ENGINE_PORT" "http://localhost:${REALITY_ENGINE_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" \
-  > "$LOG_DIR/perception_engine.log" 2>&1 &
-echo $! > "$RUN_DIR/perception_engine.pid"
+  > "$PE_LOG_FILE" 2>&1 &
+echo $! > "$PE_PID_FILE"
 sleep 0.2
-if ! ps -p "$(cat "$RUN_DIR/perception_engine.pid")" >/dev/null 2>&1; then
-  tail -40 "$LOG_DIR/perception_engine.log" || true
-  ./stop.sh >/dev/null 2>&1 || true
+if ! ps -p "$(cat "$PE_PID_FILE")" >/dev/null 2>&1; then
+  tail -40 "$PE_LOG_FILE" || true
+  bash "$ROOT_DIR/stop.sh" "${INSTANCE_ID:+--instance=$INSTANCE_ID}" >/dev/null 2>&1 || true
   die "Perception Engine exited before becoming healthy"
 fi
 
 if ! wait_for_http "http://localhost:${PERCEPTION_ENGINE_PORT}/api/health" "Perception Engine"; then
-  tail -40 "$LOG_DIR/perception_engine.log" || true
-  ./stop.sh >/dev/null 2>&1 || true
+  tail -40 "$PE_LOG_FILE" || true
+  bash "$ROOT_DIR/stop.sh" "${INSTANCE_ID:+--instance=$INSTANCE_ID}" >/dev/null 2>&1 || true
   die "Perception Engine failed to become healthy"
 fi
 
@@ -273,7 +283,7 @@ if [ -n "$MQTT_BROKER_HOST" ]; then
 fi
 echo ""
 echo "Logs:"
-echo "  $LOG_DIR/reality_engine.log"
-echo "  $LOG_DIR/perception_engine.log"
+echo "  $RE_LOG_FILE"
+echo "  $PE_LOG_FILE"
 echo ""
 echo "Stop with: ./stop.sh"

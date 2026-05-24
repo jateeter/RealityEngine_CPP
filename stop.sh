@@ -16,6 +16,15 @@ warn() { echo -e "${RED}!${NC} $1"; }
 
 RUN_DIR="$ROOT_DIR/run"
 
+# Accept --instance=<id> to stop a specific named instance
+INSTANCE_ID="${INSTANCE_ID:-}"
+for _arg in "$@"; do
+  case "$_arg" in
+    --instance=*) INSTANCE_ID="${_arg#--instance=}" ;;
+  esac
+done
+_INST="${INSTANCE_ID:+-${INSTANCE_ID}}"
+
 stop_pid_file() {
   local label="$1"
   local pid_file="$2"
@@ -63,8 +72,8 @@ echo "=================================================="
 echo ""
 
 # Stop the pusher first so it cannot send work into a shutting-down Reality Engine.
-stop_pid_file "Perception Engine" "$RUN_DIR/perception_engine.pid"
-stop_pid_file "Reality Engine" "$RUN_DIR/reality_engine.pid"
+stop_pid_file "Perception Engine" "$RUN_DIR/perception_engine${_INST}.pid"
+stop_pid_file "Reality Engine"    "$RUN_DIR/reality_engine${_INST}.pid"
 
 echo ""
 echo "Persistent shared data preserved:"
