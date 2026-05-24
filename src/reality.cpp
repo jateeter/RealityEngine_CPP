@@ -550,28 +550,28 @@ void PerceptualSpace::update_region(int offset, const Vector& regionValues) {
   std::copy(regionValues.begin(), regionValues.end(), values.begin() + offset);
 }
 
-PreceptionEngine::PreceptionEngine(int universalDimension) : dimension(universalDimension), space(universalDimension) {}
-Vector PreceptionEngine::resolve_input_event_vector(const Vector& universalInputSpace, const PerceptualMapping& mapping) {
+PerceptionEngine::PerceptionEngine(int universalDimension) : dimension(universalDimension), space(universalDimension) {}
+Vector PerceptionEngine::resolve_input_event_vector(const Vector& universalInputSpace, const PerceptualMapping& mapping) {
   space.set_vector(universalInputSpace);
   if (space.dimension() > dimension) dimension = space.dimension();
   return space.extract_machine_input(mapping);
 }
-Vector PreceptionEngine::resolve_input_event_vector_for_machine(const Vector& universalInputSpace, const Machine& machine) {
+Vector PerceptionEngine::resolve_input_event_vector_for_machine(const Vector& universalInputSpace, const Machine& machine) {
   if (!machine.perceptualMapping) throw std::invalid_argument("Machine has no perceptual mapping");
   return resolve_input_event_vector(universalInputSpace, *machine.perceptualMapping);
 }
-std::map<std::string, Vector> PreceptionEngine::resolve_inputs_for_machines(const Vector& universalInputSpace, const std::map<std::string, Machine>& machines) {
+std::map<std::string, Vector> PerceptionEngine::resolve_inputs_for_machines(const Vector& universalInputSpace, const std::map<std::string, Machine>& machines) {
   space.set_vector(universalInputSpace);
   if (space.dimension() > dimension) dimension = space.dimension();
   std::map<std::string, Vector> out;
   for (const auto& [id, m] : machines) if (m.perceptualMapping) out[id] = space.extract_machine_input(*m.perceptualMapping);
   return out;
 }
-void PreceptionEngine::merge_output_into_perceptual_space(const Vector& outputVector, const PerceptualMapping& mapping) { space.merge_machine_output(outputVector, mapping); }
-PerceptualSpace& PreceptionEngine::perceptual_space() { return space; }
-const PerceptualSpace& PreceptionEngine::perceptual_space() const { return space; }
-void PreceptionEngine::reset() { space.reset(); }
-Json PreceptionEngine::diagnostic_mapping(const Vector& universalInputSpace, const std::map<std::string, Machine>& machines) {
+void PerceptionEngine::merge_output_into_perceptual_space(const Vector& outputVector, const PerceptualMapping& mapping) { space.merge_machine_output(outputVector, mapping); }
+PerceptualSpace& PerceptionEngine::perceptual_space() { return space; }
+const PerceptualSpace& PerceptionEngine::perceptual_space() const { return space; }
+void PerceptionEngine::reset() { space.reset(); }
+Json PerceptionEngine::diagnostic_mapping(const Vector& universalInputSpace, const std::map<std::string, Machine>& machines) {
   Json::Array nonzero;
   for (size_t i = 0; i < universalInputSpace.size(); ++i) if (universalInputSpace[i] != 0.0) nonzero.push_back(Json::Object{{"index", static_cast<double>(i)}, {"value", universalInputSpace[i]}});
   auto resolved = resolve_inputs_for_machines(universalInputSpace, machines);

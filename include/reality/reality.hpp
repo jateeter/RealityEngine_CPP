@@ -248,9 +248,9 @@ private:
   Vector values;
 };
 
-class PreceptionEngine {
+class PerceptionEngine {
 public:
-  explicit PreceptionEngine(int universalDimension = 256);
+  explicit PerceptionEngine(int universalDimension = 256);
   Vector resolve_input_event_vector(const Vector& universalInputSpace, const PerceptualMapping& mapping);
   Vector resolve_input_event_vector_for_machine(const Vector& universalInputSpace, const Machine& machine);
   std::map<std::string, Vector> resolve_inputs_for_machines(const Vector& universalInputSpace, const std::map<std::string, Machine>& machines);

@@ -16,7 +16,7 @@ namespace {
 class RealityService {
 public:
   RealityService(const std::string& machinesDir, int vectorDimension, const LoadOptions& loadOpts = {})
-      : dimension(vectorDimension), simulator(vectorDimension), preception(vectorDimension), machinesDirectory(machinesDir) {
+      : dimension(vectorDimension), simulator(vectorDimension), perception(vectorDimension), machinesDirectory(machinesDir) {
     for (const auto& m : load_machines_from_directory(machinesDir, loadOpts)) add_machine(m);
   }
 
@@ -126,7 +126,7 @@ public:
       std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
       for (auto& [_, m] : machines) m.reset();
       simulator.reset();
-      preception.reset();
+      perception.reset();
       return ok(Json::Object{{"success", true}});
     });
     server.route("GET", "/api/engine/stats", [this](const http::Request&) {
@@ -336,7 +336,7 @@ public:
       auto it = machines.find(id);
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       auto body = parse_body(req);
-      auto resolved = preception.resolve_input_event_vector_for_machine(json::to_numbers(body.at("universalInputSpace")), it->second);
+      auto resolved = perception.resolve_input_event_vector_for_machine(json::to_numbers(body.at("universalInputSpace")), it->second);
       auto result = it->second.process_input(resolved);
       return ok(to_json(result));
     });
@@ -344,7 +344,7 @@ public:
       auto body = parse_body(req);
       auto universal = json::to_numbers(body.at("universalInputSpace"));
       std::unique_lock<std::shared_mutex> lock(registryMutex);
-      PreceptionEngine resolver(dimension);
+      PerceptionEngine resolver(dimension);
       auto resolved = resolver.resolve_inputs_for_machines(universal, machines);
       Json::Object results;
       for (auto& [id, input] : resolved) results[id] = to_json(machines[id].process_input(input));
@@ -365,7 +365,7 @@ public:
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       Machine copy = it->second;
       lock.unlock();
-      PreceptionEngine resolver(dimension);
+      PerceptionEngine resolver(dimension);
       auto input = resolver.resolve_input_event_vector_for_machine(json::to_numbers(parse_body(req).at("universalInputSpace")), copy);
       return ok(to_json(copy.process_input(input)));
     });
@@ -491,7 +491,7 @@ public:
     });
     server.route("POST", "/api/perception/diagnostic", [this](const http::Request& req) {
       std::shared_lock<std::shared_mutex> lock(registryMutex);
-      PreceptionEngine resolver(dimension);
+      PerceptionEngine resolver(dimension);
       return ok(resolver.diagnostic_mapping(json::to_numbers(parse_body(req).at("universalInputSpace")), machines));
     });
     server.route("GET", "/api/demo/multi-step", [this](const http::Request&) {
@@ -554,7 +554,7 @@ public:
       {
         std::lock_guard<std::mutex> lock(simulatorMutex);
         step = simulator.process_immediate(assembled, overrideType);
-        preception.perceptual_space().set_vector(step.perceptualSpace);
+        perception.perceptual_space().set_vector(step.perceptualSpace);
       }
       Json out = to_json(step, includeMachineResults, includePerceptualSpace);
       bool compact = body.at("compact").as_bool(false);
@@ -812,7 +812,7 @@ private:
   int dimension = 768;
   double matchThreshold = 0.5;
   PerceptualSpaceSimulator simulator;
-  PreceptionEngine preception;
+  PerceptionEngine perception;
   std::string machinesDirectory;
   std::vector<Json> engineHistory;
   std::vector<Vector> buffer;

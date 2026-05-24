@@ -72,7 +72,7 @@ Recommended reality-vector persistence options:
    reservations.
 3. **Derive required dimension.** Compute the logical high-water mark from the
    registry.
-4. **Resize runtime state.** Grow `PerceptualSpace`, `PreceptionEngine`, and
+4. **Resize runtime state.** Grow `PerceptualSpace`, `PerceptionEngine`, and
    `PerceptionEngine::persistentVector` when the high-water mark exceeds the
    current materialized length.
 5. **Reject unsafe shrink by default.** Machine removal should release regions
@@ -95,7 +95,7 @@ Recommended reality-vector persistence options:
     reservations
 - On Reality Engine startup, load machines first, build the registry, and set
   runtime dimension to `max(VECTOR_DIMENSION, registry.requiredDimension())`.
-- On machine import, grow the simulator and preception state if the imported
+- On machine import, grow the simulator and perception state if the imported
   mapping extends the current dimension.
 - On source registration in PE, reserve the source region and grow
   `persistentVector` as needed.

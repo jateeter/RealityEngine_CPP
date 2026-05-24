@@ -32,7 +32,7 @@ flowchart LR
 | `CriticalEventSequence` | `reality::CriticalEventSequence` | Deferred activation over active graph nodes. |
 | `OutputArbiter` | `reality::OutputArbiter` | `AND`, `OR`, and `PASSTHROUGH` output decisions. |
 | `Machine` | `reality::Machine` | Runs CES graphs and emits machine transition results. |
-| `PreceptionEngine` | `reality::PreceptionEngine` | Extracts machine input and merges machine output. |
+| `PerceptionEngine` | `reality::PerceptionEngine` | Extracts machine input and merges machine output. |
 | `PerceptualSpaceSimulator` | `reality::PerceptualSpaceSimulator` | Snapshot -> process -> deterministic merge loop. |
 | Perception Engine | `reality::PerceptionEngine` | Builds persistent vectors from test, simulated, and sensor sources. |
 

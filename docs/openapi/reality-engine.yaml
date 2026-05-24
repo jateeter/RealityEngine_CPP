@@ -19,7 +19,7 @@ tags:
   - name: Engine
   - name: Machines
   - name: Simulation
-  - name: Preception
+  - name: Perception
   - name: Governance
   - name: Metrics
 paths:
@@ -97,7 +97,7 @@ paths:
   /api/engine/reset:
     post:
       tags: [Engine]
-      summary: Reset machine, simulator, and preception state
+      summary: Reset machine, simulator, and perception state
       responses:
         "200":
           description: Reset result
@@ -488,9 +488,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Success"
-  /api/preception/diagnostic:
+  /api/perception/diagnostic:
     post:
-      tags: [Preception]
+      tags: [Perception]
       summary: Diagnose machine input mapping for a universal input space
       requestBody:
         required: true
@@ -622,7 +622,7 @@ paths:
                         shrinkFactor: { type: number }
   /api/perceive:
     post:
-      tags: [Preception]
+      tags: [Perception]
       summary: Process a perceptual-space vector through the simulator
       requestBody:
         required: true

@@ -212,7 +212,7 @@ Implemented in this repo:
 - `RealityVector`, `CriticalEventSequence`, `Machine`, `OutputArbiter`,
   governance / `PagingDecision`, deprecation lifecycle, STA checker,
   Option A1 narrow-cell declaration + pack/unpack helpers.
-- Configurable universal `PreceptionEngine` extraction and output merge.
+- Configurable universal `PerceptionEngine` extraction and output merge.
 - `PerceptualSpaceSimulator` snapshot → parallel process → deterministic
   merge loop.  Merge batch sorted by `(machineId, sequenceId, outputIndex)`
   using byte-wise lex — byte-identical to AI / LSP ordering.

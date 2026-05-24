@@ -45,7 +45,7 @@ OpenAPI: [`docs/openapi/reality-engine.yaml`](openapi/reality-engine.yaml)
 | `POST /perceptual-simulation/configure/commit` | Implemented | Configures simulator from buffer. |
 | `POST /perceptual-simulation/start/stop/step/reset` | Implemented | Manual stepping; no background scheduler in first port. |
 | `GET /perceptual-simulation/state/history` | Implemented | Same top-level shapes. |
-| `POST /preception/diagnostic` | Implemented | Reports nonzero universal values and machine mappings. |
+| `POST /perception/diagnostic` | Implemented | Reports nonzero universal values and machine mappings. |
 | `POST /perceive` | Implemented | Main Perception Engine push target. Accepts both `matchAlgorithmOverride` and legacy PE `matchAlgorithm`. Supports response projection with `compact`, `includeMachineResults`, and `includePerceptualSpace`. Returns observable `mergeBatch`. |
 | `GET/PATCH /runtime/options` | C++ extension | Dynamic history and response projection controls. |
 
