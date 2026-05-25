@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ABC Audio Player</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/abcjs@6.5.2/abcjs-audio.css">
+  <script src="https://cdn.jsdelivr.net/npm/abcjs@6.5.2/dist/abcjs-basic-min.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --text: #20242b;
+      --muted: #5c6573;
+      --line: #d9dee8;
+      --accent: #0f766e;
+      --accent-dark: #0b5f59;
+      --danger: #b42318;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.45;
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .status {
+      min-height: 22px;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: right;
+    }
+
+    .status.error {
+      color: var(--danger);
+    }
+
+    .notice {
+      display: none;
+      margin: 0 0 12px;
+      border: 1px solid #f2c94c;
+      border-radius: 6px;
+      background: #fff8db;
+      color: #5f4700;
+      font-size: 14px;
+      padding: 10px 12px;
+    }
+
+    .notice.show {
+      display: block;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 0.95em;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(320px, 42%) minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .editor,
+    .preview {
+      min-width: 0;
+      min-height: 0;
+      padding: 18px;
+    }
+
+    .editor {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 12px;
+      border-right: 1px solid var(--line);
+      background: #eef2f7;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    button,
+    label.file-button {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 650;
+      padding: 8px 11px;
+      user-select: none;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: white;
+    }
+
+    button.primary:hover {
+      background: var(--accent-dark);
+    }
+
+    button:hover,
+    label.file-button:hover {
+      border-color: #aeb7c6;
+    }
+
+    input[type="file"] {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 460px;
+      resize: none;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 14px;
+      line-height: 1.45;
+      padding: 14px;
+      tab-size: 2;
+    }
+
+    .preview {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 14px;
+      overflow: auto;
+      background: var(--panel);
+    }
+
+    #audio {
+      min-height: 44px;
+    }
+
+    #paper {
+      overflow-x: auto;
+      padding-bottom: 24px;
+    }
+
+    .abcjs-inline-audio {
+      max-width: 720px;
+      border-radius: 6px;
+    }
+
+    .abcjs-cursor {
+      stroke: var(--accent);
+      stroke-width: 2px;
+    }
+
+    @media (max-width: 820px) {
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .status {
+        text-align: left;
+      }
+
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      .editor {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      textarea {
+        min-height: 360px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>ABC Audio Player</h1>
+      <div id="status" class="status" role="status">Ready</div>
+    </header>
+
+    <main>
+      <section class="editor" aria-label="ABC editor">
+        <div class="toolbar">
+          <button id="render" class="primary" type="button">Render</button>
+          <button id="enable-audio" type="button">Enable Audio</button>
+          <button id="load-sample" type="button">Load Slip Jig</button>
+          <label class="file-button" for="abc-file">Open ABC</label>
+          <input id="abc-file" type="file" accept=".abc,.txt,text/plain">
+        </div>
+
+        <textarea id="abc-input" spellcheck="false" aria-label="ABC notation input">X:1
+T:Heather on the Ridge
+C:Original
+M:9/8
+L:1/8
+R:Slip Jig
+K:Dmaj
+
+|: F2A AFA d2A | B2A GFG E2D | F2A AFA dcd | e2d cBA BGE |
+   F2A AFA d2A | B2A GFG E2D | FAA dAF GFE | D3 D2E D3 :|
+
+|: f2a afa gfe | d2f edB A2d | f2a afa gfe | b2a gfe fdc |
+   B2d A2d F2A | G2B E2G c2e | d2A B2G FGE | D3 D2E D3 :|</textarea>
+      </section>
+
+      <section class="preview" aria-label="Rendered notation and audio">
+        <div id="file-warning" class="notice"></div>
+        <div id="audio"></div>
+        <div id="paper"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const sampleAbc = document.getElementById("abc-input").value;
+    const abcInput = document.getElementById("abc-input");
+    const statusEl = document.getElementById("status");
+    const paperEl = document.getElementById("paper");
+    const audioEl = document.getElementById("audio");
+    const audioButton = document.getElementById("enable-audio");
+    const fileWarning = document.getElementById("file-warning");
+    const isFileProtocol = window.location.protocol === "file:";
+
+    let visualObj = null;
+    let synthControl = null;
+    let renderTimer = null;
+    let audioEnabled = false;
+    let audioLoadId = 0;
+
+    const cursorControl = {
+      onStart: function() {
+        const cursors = paperEl.querySelectorAll(".abcjs-cursor");
+        cursors.forEach(function(cursor) {
+          cursor.remove();
+        });
+      },
+      onEvent: function(event) {
+        if (!event || event.left === null || event.top === null) return;
+
+        const cursor = getCursor();
+        cursor.style.left = event.left + "px";
+        cursor.style.top = event.top + "px";
+        cursor.style.height = event.height + "px";
+      },
+      onFinished: function() {
+        const cursor = paperEl.querySelector(".abcjs-cursor");
+        if (cursor) cursor.remove();
+      }
+    };
+
+    function getCursor() {
+      let cursor = paperEl.querySelector(".abcjs-cursor");
+      if (!cursor) {
+        cursor = document.createElement("div");
+        cursor.className = "abcjs-cursor";
+        cursor.style.position = "absolute";
+        cursor.style.width = "2px";
+        cursor.style.background = "var(--accent)";
+        cursor.style.pointerEvents = "none";
+        paperEl.style.position = "relative";
+        paperEl.appendChild(cursor);
+      }
+      return cursor;
+    }
+
+    function setStatus(message, isError) {
+      statusEl.textContent = message;
+      statusEl.classList.toggle("error", Boolean(isError));
+    }
+
+    function showFileWarning() {
+      if (!isFileProtocol) return false;
+
+      const serverUrl = "http://localhost:8765/abc-player.html";
+      fileWarning.innerHTML =
+        "Audio playback is blocked under <code>file://</code>. " +
+        "From the repo root, run <code>python3 -m http.server 8765 --directory tools</code> " +
+        "and open <code>" + serverUrl + "</code>.";
+      fileWarning.classList.add("show");
+      setStatus("Use localhost for audio playback.", true);
+      return true;
+    }
+
+    function renderTune(audioUserAction) {
+      try {
+        audioLoadId += 1;
+        stopAudio();
+        paperEl.innerHTML = "";
+        const rendered = ABCJS.renderAbc("paper", abcInput.value, {
+          add_classes: true,
+          responsive: "resize"
+        });
+
+        visualObj = rendered && rendered[0] ? rendered[0] : null;
+        if (!visualObj) {
+          throw new Error("No tune found. ABC input should include at least X: and K: fields.");
+        }
+
+        setStatus("Rendered");
+        if (audioEnabled) {
+          loadAudio(Boolean(audioUserAction), visualObj);
+        }
+      } catch (error) {
+        visualObj = null;
+        audioEl.innerHTML = "";
+        setStatus(error.message || "Unable to render ABC", true);
+      }
+    }
+
+    function stopAudio() {
+      if (synthControl && typeof synthControl.pause === "function") {
+        try {
+          synthControl.pause();
+        } catch (error) {
+          // A stopped or uninitialized controller can be ignored while replacing it.
+        }
+      }
+    }
+
+    function loadAudio(userAction, tuneToLoad) {
+      if (showFileWarning()) {
+        return;
+      }
+
+      if (!visualObj) {
+        renderTune(userAction);
+      }
+
+      const tune = tuneToLoad || visualObj;
+      if (!tune) return;
+
+      if (!ABCJS.synth.supportsAudio()) {
+        setStatus("Audio is not supported in this browser.", true);
+        return;
+      }
+
+      audioEnabled = true;
+      audioButton.textContent = "Reload Audio";
+      const loadId = audioLoadId + 1;
+      audioLoadId = loadId;
+      stopAudio();
+      audioEl.innerHTML = "";
+      const controller = new ABCJS.synth.SynthController();
+      synthControl = controller;
+      controller.load("#audio", cursorControl, {
+        displayLoop: true,
+        displayRestart: true,
+        displayPlay: true,
+        displayProgress: true,
+        displayWarp: true
+      });
+
+      setStatus("Loading audio...");
+      controller.setTune(tune, Boolean(userAction), {})
+        .then(function() {
+          if (loadId !== audioLoadId || controller !== synthControl) return;
+          setStatus("Audio ready");
+        })
+        .catch(function(error) {
+          if (loadId !== audioLoadId || controller !== synthControl) return;
+          setStatus((error && error.message) || "Unable to load audio", true);
+        });
+    }
+
+    document.getElementById("render").addEventListener("click", function() {
+      renderTune(true);
+    });
+    audioButton.addEventListener("click", function() {
+      loadAudio(true);
+    });
+    document.getElementById("load-sample").addEventListener("click", function() {
+      abcInput.value = sampleAbc;
+      renderTune(true);
+    });
+    document.getElementById("abc-file").addEventListener("change", function(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+
+      file.text()
+        .then(function(text) {
+          abcInput.value = text;
+          renderTune();
+        })
+        .catch(function(error) {
+          setStatus((error && error.message) || "Unable to read file", true);
+        });
+    });
+    abcInput.addEventListener("input", function() {
+      clearTimeout(renderTimer);
+      renderTimer = setTimeout(renderTune, 450);
+    });
+
+    renderTune();
+    showFileWarning();
+  </script>
+</body>
+</html>
