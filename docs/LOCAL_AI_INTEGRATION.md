@@ -6,7 +6,9 @@ vectors through `POST /api/perceive`.
 
 ## Design
 
-The C++ Perception Engine follows the `RealityEngine_AI` localAIStack bridge:
+The C++ Perception Engine follows the active `RealityEngine_Scala`
+localAIStack bridge, replacing the locked historical `RealityEngine_AI`
+reference:
 
 1. External AI systems register or update named sensor sources.
 2. Sensor values are written into configured perceptual-space regions.

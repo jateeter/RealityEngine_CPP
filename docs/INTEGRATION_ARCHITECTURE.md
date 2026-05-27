@@ -1,7 +1,10 @@
 # Integration Architecture
 
-This document defines the provider-neutral integration model shared by
-RealityEngine_AI, RealityEngine_CPP, and RealityEngine_LSP.
+This document defines the provider-neutral integration model for the active
+RealityEngine runtimes. `RealityEngine_AI` is locked and used only as a
+historical reference; `RealityEngine_Scala` replaces it for active runtime
+reference work. `RealityEngine_Machines` owns the active corpus, contracts,
+oracles, and trigger examples.
 
 ## Design Rule
 
@@ -73,7 +76,7 @@ a governance decision produced from machine `metadata.triggerConfig`, PE builds
 a `ces.terminal.event` envelope.
 
 The envelope is based on
-`RealityEngine_AI/examples/triggers/ai_trigger_envelope.template.json` and
+`RealityEngine_Machines/triggers/ai_trigger_envelope.template.json` and
 captures:
 
 - envelope and correlation identifiers

@@ -1,4 +1,4 @@
-// STA checker tests — verifies parity with RealityEngine_AI/StaChecker.ts
+// STA checker tests — verifies parity with the active Scala replacement.
 // and exercises the strictSta load gate on load_machine_from_json_string.
 
 #include "reality/reality.hpp"

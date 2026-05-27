@@ -1,6 +1,6 @@
 // CES versioning + deprecation — C++ parity tests.
 //
-// Mirrors src/__tests__/CesDeprecation.test.ts in the AI repo:
+// Mirrors the active Scala replacement deprecation coverage:
 //   - the loader propagates schemaVersion / deprecatedAt / replacedBy
 //   - the engine stamps mergeBatch with a DeprecationMark when a
 //     deprecated sequence fires
@@ -128,7 +128,7 @@ void test_prom_emits_deprecated_fires(const std::filesystem::path& machinesDir) 
 } // namespace
 
 int main(int argc, char** argv) {
-  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_AI/examples/machines";
+  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
 
   if (!std::filesystem::exists(machinesDir / "RSFlipFlopDeprecatedDemo.json")) {
     std::cerr << "Skipping cesgen_deprecation — RSFlipFlopDeprecatedDemo.json not found in " << machinesDir << "\n";

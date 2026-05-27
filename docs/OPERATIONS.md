@@ -5,8 +5,9 @@ This repo provides native operational scripts:
 - `./start.sh`
 - `./stop.sh`
 
-They are intentionally aligned with the deployment model used by
-`RealityEngine_AI` and `localAIStack`.
+They are intentionally aligned with `localAIStack` and the active runtime
+deployment model. `RealityEngine_Scala` replaces the locked historical
+`RealityEngine_AI` runtime for active reference work.
 
 ## Start
 
@@ -17,7 +18,7 @@ They are intentionally aligned with the deployment model used by
 Startup performs these steps:
 
 1. Builds C++ binaries with `make`.
-2. Verifies the machine repository at `../RealityEngine_AI/examples/machines`.
+2. Verifies the machine repository at `../RealityEngine_Machines/machines`.
 3. Verifies the unified Qdrant endpoint at `http://localhost:4333`.
 4. Verifies the shared Qdrant data repository path
    `../localAIStack/volumes/qdrant`.
@@ -60,7 +61,7 @@ Important variables:
 | `REALITY_ENGINE_PORT` | `3299` |
 | `PERCEPTION_ENGINE_PORT` | `3300` |
 | `VECTOR_DIMENSION` | `768` |
-| `MACHINES_DIR` | `../RealityEngine_AI/examples/machines` |
+| `MACHINES_DIR` | `../RealityEngine_Machines/machines` |
 | `QDRANT_URL` | `http://localhost:4333` |
 | `QDRANT_STORAGE_DIR` | `../localAIStack/volumes/qdrant` |
 | `QDRANT_LOCALAI_COLLECTION` | `localai_docs` |

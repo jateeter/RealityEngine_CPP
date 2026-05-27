@@ -1,6 +1,6 @@
 // CES governance — C++ parity for the paging contract.
 //
-// Mirrors src/__tests__/CesGovernance.test.ts in the AI repo:
+// Mirrors the active Scala replacement governance coverage:
 //   - rule-with-override picks the tier-1 team + 30s SLA for fall-confirmed RED
 //   - rule-only falls back to the machine's sla.warning for the AMBER tiers
 //   - machines without governance metadata resolve to "unrouted"
@@ -87,7 +87,7 @@ void test_no_rule_matches(const std::filesystem::path& machinesDir) {
 void test_no_governance_returns_unrouted(const std::filesystem::path& /*machinesDir*/) {
   // The corpus is now fully backfilled with governance metadata.  To exercise
   // the "rules but no governance" fallback we construct the legacy shape
-  // inline — same approach as src/__tests__/CesGovernance.test.ts in the AI repo.
+  // inline — same approach as the Scala replacement governance coverage.
   const std::string raw = R"({
     "version": "1.0.0",
     "machine": {
@@ -170,7 +170,7 @@ void test_paging_decisions_metric(const std::filesystem::path& machinesDir) {
 } // namespace
 
 int main(int argc, char** argv) {
-  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_AI/examples/machines";
+  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
 
   if (!std::filesystem::exists(machinesDir / "FallDetection.json")) {
     std::cerr << "Skipping cesgen_governance — FallDetection.json not found in " << machinesDir << "\n";

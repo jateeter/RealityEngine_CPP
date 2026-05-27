@@ -235,7 +235,7 @@ if ! wait_for_http "http://localhost:${REALITY_ENGINE_PORT}/api/health" "Reality
   die "Reality Engine failed to become healthy"
 fi
 
-info "Verifying RealityEngine_AI example machines loaded..."
+info "Verifying RealityEngine_Machines corpus loaded..."
 if ! command -v python3 >/dev/null 2>&1; then
   ./stop.sh >/dev/null 2>&1 || true
   die "python3 is required to verify startup machine loading"

@@ -1,9 +1,9 @@
 # API Equivalence
 
-Reference APIs:
+Active reference APIs from `RealityEngine_Scala`:
 
-- `RealityEngine_AI/scala/src/main/scala/com/realityengine/api/Routes.scala`
-- `RealityEngine_AI/scala/perception-engine/src/main/scala/com/realityengine/perception/api/PerceptionRoutes.scala`
+- `RealityEngine_Scala/scala/src/main/scala/com/realityengine/api/Routes.scala`
+- `RealityEngine_Scala/scala/perception-engine/src/main/scala/com/realityengine/perception/api/PerceptionRoutes.scala`
 
 ## Reality Engine API
 
@@ -56,7 +56,7 @@ does the same through the `MACHINES_DIR` argument passed by `start.sh`, defaulti
 to:
 
 ```text
-../RealityEngine_AI/examples/machines
+../RealityEngine_Machines/machines
 ```
 
 Startup is considered failed if `/api/machines` reports zero loaded machines
@@ -131,7 +131,7 @@ handler path. Queue saturation returns `429` with `error: "push queue is full"`.
 `POST /api/perceive` accepts either `matchAlgorithmOverride` or the legacy
 Perception Engine field `matchAlgorithm`; when both are present,
 `matchAlgorithmOverride` wins. `POST /api/push` sends both fields so it remains
-compatible with C++ and RealityEngine_AI receivers.
+compatible with C++ receivers and the active Scala receiver surface.
 
 `POST /api/perceive` and `POST /api/push` accept either:
 
@@ -157,7 +157,7 @@ Compact responses omit `machineResults` while retaining `stepNumber`,
 to omit the merged perceptual-space vector from large responses. The response
 still includes `mergeBatch`, an ordered list of machine output writes with the
 target region, machine id, and output index. Merge application follows the
-machine processing order, matching the RealityEngine_AI simulator semantics
+machine processing order, matching the active Scala simulator semantics
 more closely for overlapping output regions.
 
 Runtime defaults for response projection and bounded history can be inspected

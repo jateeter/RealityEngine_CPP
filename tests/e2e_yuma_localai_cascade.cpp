@@ -320,7 +320,7 @@ void test_cascade_determinism() {
 } // namespace
 
 int main(int argc, char** argv) {
-  AI_MACHINES = argc > 1 ? argv[1] : "../RealityEngine_AI/examples/machines";
+  AI_MACHINES = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
   if (!std::filesystem::exists(AI_MACHINES)) {
     auto alt = std::filesystem::path("..") / AI_MACHINES;
     if (std::filesystem::exists(alt)) AI_MACHINES = alt;

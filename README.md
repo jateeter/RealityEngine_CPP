@@ -1,10 +1,24 @@
 # RealityEngine_CPP
 
 Native C++ implementation of the Reality Engine and Perception Engine
-services.  Black-box equivalent to [`RealityEngine_AI`](../RealityEngine_AI)
-(TypeScript, default) and [`RealityEngine_LSP`](../RealityEngine_LSP)
-(Common Lisp) on the same machine JSON corpus, governance contracts, MQTT
-mapping registry, and Prometheus metrics shape.
+services.  Black-box equivalent to [`RealityEngine_LSP`](../RealityEngine_LSP)
+(Common Lisp) and [`RealityEngine_Scala`](../RealityEngine_Scala) on the same
+machine JSON corpus, governance contracts, MQTT mapping registry, and
+Prometheus metrics shape. [`RealityEngine_AI`](../RealityEngine_AI) is locked
+and replaced by [`RealityEngine_Scala`](../RealityEngine_Scala) for active
+runtime reference work.
+
+Sibling repositories in the local suite:
+
+| Repository | Role |
+| --- | --- |
+| [`RealityEngine_AI`](../RealityEngine_AI) | Locked historical reference; replaced by `RealityEngine_Scala`, and not an active runtime target or corpus source. |
+| [`RealityEngine_CPP`](../RealityEngine_CPP) | Native C++ RE/PE runtime. |
+| [`RealityEngine_LSP`](../RealityEngine_LSP) | Common Lisp RE/PE runtime. |
+| [`RealityEngine_Scala`](../RealityEngine_Scala) | Scala RE/PE runtime surface. |
+| [`RealityEngine_Machines`](../RealityEngine_Machines) | Active machine corpus, contracts, oracles, and trigger examples. |
+| [`RealityEngine_Manager`](../RealityEngine_Manager) | Orchestration and visualization frontend built against the canonical surface. |
+| [`RealityEngine_CI`](../RealityEngine_CI) | Deployment, compatibility, and CI tooling for the suite. |
 
 The native services use Boost.Asio/Beast for HTTP transport while keeping
 the domain layer independent of the server implementation.  No external
@@ -13,12 +27,12 @@ that contract.
 
 ## What This Repo Provides
 
-- Native C++ Reality Engine service on port `3299` by default.
-- Native C++ Perception Engine service on port `3300` by default.
+- Native C++ Reality Engine service on port `5301` by default.
+- Native C++ Perception Engine service on port `5300` by default.
 - Startup loading of all machine JSON files from
-  `../RealityEngine_AI/examples/machines` (1009 example machines across
+  `../RealityEngine_Machines/machines` (1014 example machines across
   11 domains).
-- Shared Qdrant deployment model with `RealityEngine_AI` and `localAIStack`.
+- Shared Qdrant deployment model with `localAIStack` and the active runtimes.
 - Built-in MQTT v3.1.1 client + mapping registry (see [MQTT Integration](#mqtt-integration)).
 - E2E validation against authored `inputSequences` in the machine JSON corpus.
 - Prometheus `/api/metrics` (text exposition) with `runtime="cpp"` label
@@ -31,19 +45,20 @@ that contract.
 brew install boost   # macOS, if Boost is not already installed
 make all
 make test            # unit + STA + MQTT mapping tests
-make e2e             # 1009-machine end-to-end pass
+make e2e             # 1014-machine end-to-end pass
 ```
 
 ## Run
 
-The simplest entry point is the unified orchestrator from `RealityEngine_AI`:
+The simplest entry point is the unified orchestrator retained for historical
+compatibility:
 
 ```bash
 # From either repo — both routes work
 ./startUniverse.sh --re-engine=cpp --pe-engine=cpp   # this repo's startUniverse.sh
                                                       # auto-selects --re-engine=cpp
                                                       # --pe-engine=cpp and delegates
-                                                      # to RealityEngine_AI/startUniverse.sh
+                                                      # to the suite orchestrator
 ./stopUniverse.sh                                    # tears the CPP engines down
 ```
 
@@ -56,14 +71,15 @@ Or run the native binaries directly:
 
 `start.sh` builds the binaries, verifies the shared Qdrant instance, starts
 both native services, and confirms that machines loaded successfully from
-`../RealityEngine_AI/examples/machines` before declaring startup complete.
+`../RealityEngine_Machines/machines` before declaring startup complete.
 When `MQTT_BROKER_HOST` is exported, the PE auto-boots an MQTT bridge using
 the canonical env-var contract (see [Configuration](#configuration)).
 
-The Reality Engine service listens under `/api/...` matching the AI runtime.
+The Reality Engine service listens under `/api/...` matching the canonical
+runtime surface.
 The Perception Engine service listens under `/api/...` and pushes assembled
 reality vectors to `POST /api/perceive` on the Reality Engine.  Deployment
-defaults to `VECTOR_DIMENSION=768` as a legacy compatibility floor; the
+defaults to `VECTOR_DIMENSION=7680` under the cross-runtime contract; the
 intended vector model derives the logical perceptual-space dimension from
 active machine and source mappings — see [Vector Management](docs/VECTOR_MANAGEMENT.md).
 
@@ -78,17 +94,17 @@ Adapter-facing CLI:
 
 ```bash
 make bin/reality_engine_cli
-bin/reality_engine_cli pe integrations-status --pe-url http://localhost:3300
-bin/reality_engine_cli pe dispatch-ledger --pe-url http://localhost:3300
-bin/reality_engine_cli pe ollama-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe integrations-status --pe-url http://localhost:5300
+bin/reality_engine_cli pe dispatch-ledger --pe-url http://localhost:5300
+bin/reality_engine_cli pe ollama-status --pe-url http://localhost:5300
 bin/reality_engine_cli pe ollama-dispatch <dispatchId> --source-mapping-id agent-completion-risk
-bin/reality_engine_cli pe openai-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe openai-status --pe-url http://localhost:5300
 bin/reality_engine_cli pe openai-dispatch <dispatchId> --source-mapping-id agent-completion-risk
-bin/reality_engine_cli pe acp-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe acp-status --pe-url http://localhost:5300
 bin/reality_engine_cli pe acp-dispatch <dispatchId> --source-mapping-id acp-openclaw-completion
-bin/reality_engine_cli pe healthkit-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe healthkit-status --pe-url http://localhost:5300
 bin/reality_engine_cli pe healthkit-ingest --sample-type step-count --source-mapping-id healthkit-activity --values 1,0,0.9,0
-bin/reality_engine_cli pe carekit-status --pe-url http://localhost:3300
+bin/reality_engine_cli pe carekit-status --pe-url http://localhost:5300
 bin/reality_engine_cli pe carekit-ingest --sample-type task-adherence --source-mapping-id carekit-task --values 1,0,0.8,0.95
 bin/reality_engine_cli pe completion --source-mapping-id agent-completion-risk --agent cli --values 1,0,0.75,0
 ```
@@ -148,10 +164,10 @@ flags):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `REALITY_ENGINE_PORT` | `3299` | RE bind port |
-| `PERCEPTION_ENGINE_PORT` | `3300` | PE bind port |
-| `VECTOR_DIMENSION` | `768` | Perceptual-space dimension floor |
-| `MACHINES_DIR` | `../RealityEngine_AI/examples/machines` | Source of startup machines |
+| `REALITY_ENGINE_PORT` | `5301` | RE bind port |
+| `PERCEPTION_ENGINE_PORT` | `5300` | PE bind port |
+| `VECTOR_DIMENSION` | `7680` | Perceptual-space dimension floor |
+| `MACHINES_DIR` | `../RealityEngine_Machines/machines` | Source of startup machines |
 | `QDRANT_URL` | `http://localhost:4333` | Shared Qdrant REST |
 | `LOCAL_AI_API_URL` | `http://localhost:4000` | localAIStack integration target |
 | `LOCAL_AI_BOOTSTRAP` | `false` | Auto-register localAIStack sensors + machines |
@@ -226,7 +242,8 @@ Implemented in this repo:
   worker capacity, and worker-pool metrics.
 - Compact `/api/perceive` and `/api/push` response mode for high-throughput
   integrations that don't need per-machine transition details.
-- Machine JSON loading for the shared `examples/machines/*.json` corpus.
+- Machine JSON loading for the shared `RealityEngine_Machines/machines/*.json`
+  corpus.
 
 See [docs/API_EQUIVALENCE.md](docs/API_EQUIVALENCE.md) for endpoint status
 across AI / CPP / LSP and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for

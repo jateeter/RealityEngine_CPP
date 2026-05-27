@@ -9,11 +9,23 @@ This is the maintained documentation set for RealityEngine_CPP.
 | [../README.md](../README.md) | Project overview, build, run, and scope. |
 | [../MACHINE_CONCEPT.md](../MACHINE_CONCEPT.md) | Canonical machine model — DFA theory, JSON schema, perceptual mapping, regex equivalences, STA. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Visual native architecture overview. |
-| [API_EQUIVALENCE.md](API_EQUIVALENCE.md) | API parity against RealityEngine_AI. |
+| [API_EQUIVALENCE.md](API_EQUIVALENCE.md) | API parity against the active Scala replacement surface and other runtimes. |
 | [INTEGRATION_ARCHITECTURE.md](INTEGRATION_ARCHITECTURE.md) | Provider-neutral PE integration, trigger dispatch, source mapping, and MCP architecture. |
 | [VECTOR_MANAGEMENT.md](VECTOR_MANAGEMENT.md) | Dynamic perceptual-vector strategy. |
 | [ACRONYMS.md](ACRONYMS.md) | Acronym definitions. |
 | [BIBLIOGRAPHY.md](BIBLIOGRAPHY.md) | External and project references. |
+
+## Suite Repositories
+
+| Repository | Role |
+| --- | --- |
+| [RealityEngine_AI](../../RealityEngine_AI) | Locked historical reference; replaced by RealityEngine_Scala and not an active runtime target or corpus source. |
+| [RealityEngine_CPP](..) | Native C++ RE/PE runtime. |
+| [RealityEngine_LSP](../../RealityEngine_LSP) | Common Lisp RE/PE runtime. |
+| [RealityEngine_Scala](../../RealityEngine_Scala) | Scala RE/PE runtime surface. |
+| [RealityEngine_Machines](../../RealityEngine_Machines) | Active machine corpus, contracts, oracles, and trigger examples. |
+| [RealityEngine_Manager](../../RealityEngine_Manager) | Orchestration and visualization frontend built against the canonical HTTP surface. |
+| [RealityEngine_CI](../../RealityEngine_CI) | Deployment, compatibility, and CI tooling for the suite. |
 
 ## Operations
 

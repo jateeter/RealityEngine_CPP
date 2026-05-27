@@ -177,7 +177,7 @@ paths:
                       $ref: "#/components/schemas/Machine"
     post:
       tags: [Machines]
-      summary: Import a machine from RealityEngine_AI machine JSON
+      summary: Import a machine from RealityEngine_Machines machine JSON
       requestBody:
         required: true
         content:
@@ -577,7 +577,7 @@ paths:
         Returns the current vector dimension, the required dimension
         (max offset+length across all registered machine mappings), the
         encoding identifier, and a monotonic mapping version that
-        increments on every add/remove machine.  Mirrors the AI runtime's
+        increments on every add/remove machine.  Mirrors the active Scala runtime's
         endpoint of the same name.
       responses:
         "200":
@@ -775,7 +775,7 @@ components:
           type: number
     Machine:
       type: object
-      description: RealityEngine_AI-compatible machine JSON. Unknown properties are preserved by schema clients.
+      description: RealityEngine machine JSON. Unknown properties are preserved by schema clients.
       additionalProperties: true
       properties:
         id:

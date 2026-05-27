@@ -300,7 +300,7 @@ void test_agx055_envelope_pins(const std::filesystem::path& machinesDir) {
 } // namespace
 
 int main(int argc, char** argv) {
-  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_AI/examples/machines";
+  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
   if (!std::filesystem::exists(machinesDir)) {
     auto alt = std::filesystem::path("..") / machinesDir;
     if (std::filesystem::exists(alt)) machinesDir = alt;

@@ -1,7 +1,8 @@
 # RealityEngine_CPP Architecture
 
 RealityEngine_CPP is the native C++ implementation of the Reality Engine and
-Perception Engine services. It follows the behavior of `RealityEngine_AI` while
+Perception Engine services. It tracks the active `RealityEngine_Scala`
+replacement surface while preserving historical compatibility where needed,
 using Boost.Asio/Beast for HTTP transport.
 
 ## Service Map
@@ -11,7 +12,7 @@ flowchart LR
   Client[Client / test runner]
   PE[perception_engine_server<br/>port 3300]
   RE[reality_engine_server<br/>port 3299]
-  Corpus[RealityEngine_AI<br/>examples/machines]
+  Corpus[RealityEngine_Machines<br/>machines]
   Q[(Qdrant<br/>localAIStack)]
   AI[localAIStack API<br/>optional]
 
@@ -26,7 +27,7 @@ flowchart LR
 
 ## Core Class Mapping
 
-| RealityEngine_AI concept | C++ class | Responsibility |
+| Runtime concept | C++ class | Responsibility |
 | --- | --- | --- |
 | `RealityVector` | `reality::RealityVector` | Comparator matching and output assertions. |
 | `CriticalEventSequence` | `reality::CriticalEventSequence` | Deferred activation over active graph nodes. |
@@ -60,7 +61,7 @@ sequenceDiagram
 | Area | Current rule |
 | --- | --- |
 | Perceptual dimension | `VECTOR_DIMENSION` is a dense compatibility floor; runtime logic should derive required size from active mappings. |
-| Machine loading | `start.sh` loads JSON machines from `../RealityEngine_AI/examples/machines`. |
+| Machine loading | `start.sh` loads JSON machines from `../RealityEngine_Machines/machines`. |
 | RE process cycle | Input-atomic snapshot, parallel machine processing, deterministic merge. |
 | PE push cycle | Single-flight push; concurrent push attempts return `409` or queue saturation `429`. |
 | HTTP transport | Boost.Asio/Beast server and client with keep-alive, timeouts, and bounded workers. |
@@ -84,7 +85,7 @@ sequenceDiagram
 | Command | Validates |
 | --- | --- |
 | `make test` | Core C++ behavior. |
-| `make e2e-corpus` | All authored machine `inputSequences` from the AI repo corpus. |
+| `make e2e-corpus` | All authored machine `inputSequences` from the `RealityEngine_Machines` corpus. |
 | `make e2e` | Corpus tests plus PE -> RE service-boundary stream propagation. |
 
 ## Related Docs

@@ -7,7 +7,11 @@
 | C++ standard library documentation | Threading, futures, synchronization, containers, and filesystem APIs. |
 | OpenAPI Specification | Native service API contracts in `docs/openapi/`. |
 | Qdrant documentation | Shared vector database verification and integration boundary. |
-| RealityEngine_AI repository | Behavioral reference implementation and machine corpus. |
+| RealityEngine_AI repository | Locked historical reference, replaced by RealityEngine_Scala for active runtime reference work. |
+| RealityEngine_Scala repository | Active Scala replacement for the historical AI runtime/reference surface. |
+| RealityEngine_Machines repository | Active machine corpus, contracts, oracles, and trigger examples. |
+| RealityEngine_Manager repository | Orchestration and visualization consumer of the canonical API surface. |
+| RealityEngine_CI repository | Deployment, compatibility, and CI tooling for the RealityEngine suite. |
 | localAIStack repository | Shared Qdrant/Ollama/RAG/agent integration surface. |
 | Mermaid documentation | Diagrams embedded in Markdown docs. |
 

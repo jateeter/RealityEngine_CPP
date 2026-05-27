@@ -1,6 +1,6 @@
 // CES composition / meta-CES — C++ side of step 5.
 //
-// Mirrors src/__tests__/CesgenComposition.test.ts in the AI repo: same
+// Mirrors the active Scala replacement composition coverage: same
 // fixture (CommunityCommandAgent.json), same producer triggers, same
 // expected event-bus writes and same terminal mergeBatch entry.
 //
@@ -167,7 +167,7 @@ void test_event_bus_sort_order(const std::filesystem::path& machinesDir) {
 } // namespace
 
 int main(int argc, char** argv) {
-  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_AI/examples/machines";
+  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
 
   if (!std::filesystem::exists(machinesDir / "CommunityCommandAgent.json")) {
     std::cerr << "Skipping cesgen_composition — CommunityCommandAgent.json not found in "

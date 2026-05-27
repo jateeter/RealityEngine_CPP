@@ -203,7 +203,7 @@ CaseResult run_domain_case(const DomainCase& dc, int caseIndex) {
 } // namespace
 
 int main(int argc, char** argv) {
-  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_AI/examples/machines";
+  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
   if (!std::filesystem::exists(machinesDir)) {
     std::cerr << "Machine directory not found: " << machinesDir << "\n";
     return 2;

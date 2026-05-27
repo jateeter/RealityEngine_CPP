@@ -2,7 +2,7 @@
 // `include/reality/generated/` is syntactically valid C++ and that the
 // aggregate `index.hpp` resolves without error.  This is the C++ side of
 // the cesgen drift gate — paired with src/__tests__/CesgenVerification.test.ts
-// in the AI repo.
+// in the active Scala replacement and shared machine corpus.
 //
 // We include the index, then sample a constexpr value from each of the
 // well-known machines so the compiler instantiates and resolves each

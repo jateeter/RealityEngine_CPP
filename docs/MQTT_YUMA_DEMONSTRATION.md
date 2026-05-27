@@ -81,8 +81,8 @@ description)`.
 ## Production end-to-end (boot the real binaries)
 
 ```bash
-# Reality Engine on :3299 with the 1009-machine corpus
-./bin/reality_engine_server 3299 ../RealityEngine_AI/examples/machines &
+# Reality Engine on :3299 with the 1014-machine corpus
+./bin/reality_engine_server 3299 ../RealityEngine_Machines/machines &
 
 # Perception Engine on :3300, wired to MQTT
 MQTT_BROKER_HOST=yuma.lateraledge.cloud \
@@ -249,7 +249,7 @@ make all
 ./bin/mqtt_demo_agriculture <host> <port> <mappings.json> <ag-machines-dir> [seconds=30]
 
 # Production: real PE + RE binaries
-./bin/reality_engine_server 3299 ../RealityEngine_AI/examples/machines &
+./bin/reality_engine_server 3299 ../RealityEngine_Machines/machines &
 MQTT_BROKER_HOST=<host> MQTT_BROKER_PORT=1883 \
   MQTT_MAPPINGS_FILE=$PWD/config/mqtt-mappings.yuma-agriculture.json \
   ./bin/perception_engine_server 3300 http://localhost:3299 ../localAIStack/data/machines 768 &

@@ -1,7 +1,7 @@
 # E2E Testing
 
 The end-to-end suite uses the authored machine examples from
-`../RealityEngine_AI/examples/machines/*.json`.
+`../RealityEngine_Machines/machines/*.json`.
 
 Run:
 

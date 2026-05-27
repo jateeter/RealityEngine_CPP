@@ -1,6 +1,6 @@
 // Domain-aware end-to-end tests for the C++ runtime.
 //
-// Mirrors src/__tests__/DomainE2E.test.ts in the AI repo: same machine JSONs,
+// Mirrors the active Scala replacement domain E2E coverage: same machine JSONs,
 // same triggers, same expected outputs.  These tests exist so a regression in
 // either runtime is caught against the identical scenario in the other.
 //
@@ -32,7 +32,7 @@ using namespace reality;
 
 namespace {
 
-// Resolved at main() from argv[1] or the default "../RealityEngine_AI/examples/machines"
+// Resolved at main() from argv[1] or the default "../RealityEngine_Machines/machines"
 // so the test works whether it's run from the repo root, from bin/, or invoked
 // directly by the Makefile target.
 std::filesystem::path AI_MACHINES;
@@ -241,8 +241,8 @@ void test_polymorphic_assembly() {
 } // namespace
 
 int main(int argc, char** argv) {
-  // Allow override via argv[1]; otherwise look in the sibling AI repo.
-  AI_MACHINES = argc > 1 ? argv[1] : "../RealityEngine_AI/examples/machines";
+  // Allow override via argv[1]; otherwise look in the sibling machine corpus repo.
+  AI_MACHINES = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
   if (!std::filesystem::exists(AI_MACHINES)) {
     // Try the sibling layout from a deeper CWD (e.g. bin/).
     auto alt = std::filesystem::path("..") / AI_MACHINES;

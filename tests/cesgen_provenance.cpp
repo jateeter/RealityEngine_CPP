@@ -1,6 +1,6 @@
 // CES provenance trail — C++ side of the life-safety audit-loop test.
 //
-// Pairs with src/__tests__/CesgenProvenance.test.ts in the AI repo: drives
+// Pairs with the Scala replacement/runtime provenance tests: drives
 // the same multi-step chains through the C++ PerceptualSpaceSimulator and
 // asserts every emitted mergeBatch entry carries the canonical chain of
 // vector IDs.  Same machines, same inputs, same expected provenance.
@@ -146,7 +146,7 @@ void test_provenance_non_empty_property(const std::filesystem::path& machinesDir
 } // namespace
 
 int main(int argc, char** argv) {
-  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_AI/examples/machines";
+  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
 
   if (!std::filesystem::exists(machinesDir / "FallDetection.json")) {
     std::cerr << "Skipping cesgen_provenance — FallDetection.json not found in " << machinesDir << "\n";
