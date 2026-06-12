@@ -5,13 +5,13 @@ info:
   description: |
     OpenAPI contract for the native C++ Reality Engine service.
 
-    The service defaults to `http://localhost:3299`.  Wire-compatible
+    The service defaults to `http://localhost:5301`.  Wire-compatible
     with the AI (TypeScript / Node.js) and LSP (Common Lisp) runtimes —
     the same JSON corpus runs unchanged across all three, produces
     byte-identical mergeBatch ordering, and emits the same Prometheus
     metrics shape (only the `runtime` label differs).
 servers:
-  - url: http://localhost:3299
+  - url: http://localhost:5301
     description: Local Reality Engine default
 tags:
   - name: System

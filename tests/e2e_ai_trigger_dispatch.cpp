@@ -6,8 +6,7 @@
 // load time, same as all current sources).  For machines that ALSO declare:
 //
 //     metadata.triggerConfig.rules[]    — RAG-coded output→action mapping
-//     metadata.dispatchableAgent        — localAIStack agent id
-//     metadata.aiTrigger                — agent-side trigger hook name
+//     metadata.agentBinding             — localAIStack dispatch binding
 //
 // this test walks each input sequence, replays its vectors through the
 // machine, and asserts that the (sequenceId, outputVector) the machine
@@ -55,16 +54,33 @@ std::string read_file(const std::filesystem::path& p) {
 }
 
 // Pull a top-level metadata block off the raw JSON — the loaded Machine
-// strips a few fields (e.g. mqttIntegration, agentActions) into its
-// metadata map, but for the envelope-shape assertions we want to read the
-// authoring intent straight from the file.
+// preserves metadata in its map, but for the envelope-shape assertions we want
+// to read the authoring intent straight from the file.
 const Json& machine_metadata(const Json& root) {
   return root.at("machine").at("metadata");
 }
 
+const Json& agent_binding(const Json& machineMd) {
+  return machineMd.at("agentBinding");
+}
+
+std::string dispatch_agent(const Json& machineMd) {
+  const Json& binding = agent_binding(machineMd);
+  if (binding.is_object()) return binding.at("agent").as_string(machineMd.at("dispatchableAgent").as_string());
+  return machineMd.at("dispatchableAgent").as_string();
+}
+
+std::string dispatch_trigger(const Json& machineMd) {
+  const Json& binding = agent_binding(machineMd);
+  if (binding.is_object()) return binding.at("trigger").as_string(machineMd.at("aiTrigger").as_string());
+  return machineMd.at("aiTrigger").as_string();
+}
+
 struct EnvelopeFields {
-  std::string dispatchableAgent;
-  std::string aiTrigger;
+  std::string agent;
+  std::string trigger;
+  std::string autonomyMode;
+  std::string writeBackType;
   std::string ragStatusCode;
   std::string processStatus;
   std::string ownerTeam;
@@ -85,8 +101,11 @@ std::optional<EnvelopeFields> envelope_for(const Machine& machine,
   if (!decision) return std::nullopt;
 
   EnvelopeFields env;
-  env.dispatchableAgent = machineMd.at("dispatchableAgent").as_string();
-  env.aiTrigger         = machineMd.at("aiTrigger").as_string();
+  const Json& binding   = agent_binding(machineMd);
+  env.agent             = dispatch_agent(machineMd);
+  env.trigger           = dispatch_trigger(machineMd);
+  env.autonomyMode      = binding.at("mode").as_string();
+  env.writeBackType     = binding.at("writeBack").at("type").as_string();
   env.ragStatusCode     = decision->ragStatusCode;
   env.processStatus     = decision->processStatus;
   env.ownerTeam         = decision->ownerTeam;
@@ -109,7 +128,7 @@ constexpr int kExpectedOutputsProduced = 3586;
 constexpr int kExpectedEnvelopesResolved = 3586;
 
 // Walk a single machine file.  Skips files whose machine doesn't declare
-// triggerConfig + dispatchableAgent — those aren't AI-routed and have
+// triggerConfig + agentBinding — those aren't AI-routed and have
 // nothing to assert at this layer.
 void walk_machine(const std::filesystem::path& file, WalkSummary& sum) {
   std::string raw = read_file(file);
@@ -123,10 +142,8 @@ void walk_machine(const std::filesystem::path& file, WalkSummary& sum) {
   const Json& md = machine_metadata(root);
   if (!md.at("triggerConfig").at("rules").is_array() ||
       md.at("triggerConfig").at("rules").array().empty()) return;
-  if (!md.at("dispatchableAgent").is_string() ||
-       md.at("dispatchableAgent").as_string().empty()) return;
-  if (!md.at("aiTrigger").is_string() ||
-       md.at("aiTrigger").as_string().empty()) return;
+  if (!md.at("agentBinding").is_object()) return;
+  if (dispatch_agent(md).empty() || dispatch_trigger(md).empty()) return;
 
   ++sum.machinesWithTriggers;
   Machine machine = load_machine_from_json_string(raw, "trigger-" + file.stem().string());
@@ -198,10 +215,16 @@ void walk_machine(const std::filesystem::path& file, WalkSummary& sum) {
         // load-bearing fields the dispatcher writes into the GraphQL
         // updateProcessState mutation.  Empty values would route to
         // "unrouted" on the localAIStack side.
-        EXPECT(!env->dispatchableAgent.empty(),
-               file.filename().string() + " / " + seqName + " / " + scenario + ": dispatchableAgent empty");
-        EXPECT(!env->aiTrigger.empty(),
-               file.filename().string() + " / " + seqName + " / " + scenario + ": aiTrigger empty");
+        EXPECT(!env->agent.empty(),
+               file.filename().string() + " / " + seqName + " / " + scenario + ": agentBinding.agent empty");
+        EXPECT(!env->trigger.empty(),
+               file.filename().string() + " / " + seqName + " / " + scenario + ": agentBinding.trigger empty");
+        EXPECT(env->autonomyMode == "observe" || env->autonomyMode == "advise" ||
+               env->autonomyMode == "supervised-act" || env->autonomyMode == "automated-act",
+               file.filename().string() + " / " + seqName + " / " + scenario +
+               ": autonomyMode='" + env->autonomyMode + "' not in supported modes");
+        EXPECT(!env->writeBackType.empty(),
+               file.filename().string() + " / " + seqName + " / " + scenario + ": agentBinding.writeBack.type empty");
         EXPECT(env->ragStatusCode == "RED" || env->ragStatusCode == "AMBER" || env->ragStatusCode == "GREEN",
                file.filename().string() + " / " + seqName + " / " + scenario +
                ": ragStatusCode='" + env->ragStatusCode + "' not in {RED,AMBER,GREEN}");
@@ -242,9 +265,11 @@ void test_agx051_envelope_pins(const std::filesystem::path& machinesDir) {
   auto env = envelope_for(m, machine_metadata(root), "agx-051-urgent-maint", Vector{1, 0, 0, 0});
   EXPECT(env.has_value(),                                                       "AGX051 urgent_maint: no envelope resolved");
   if (!env) return;
-  EXPECT(env->dispatchableAgent == "aquaculture_predictive_maintenance_agent",  "AGX051 urgent_maint: dispatch agent != aquaculture_predictive_maintenance_agent");
-  EXPECT(env->aiTrigger         == "agriculture-yuma-aqua-maintenance-forecaster-maintenance",
+  EXPECT(env->agent             == "aquaculture_predictive_maintenance_agent",  "AGX051 urgent_maint: dispatch agent != aquaculture_predictive_maintenance_agent");
+  EXPECT(env->trigger           == "agriculture-yuma-aqua-maintenance-forecaster-maintenance",
                                                                                 "AGX051 urgent_maint: aiTrigger mismatch");
+  EXPECT(env->autonomyMode      == "advise",                                    "AGX051 urgent_maint: autonomyMode != advise");
+  EXPECT(env->writeBackType     == "pe-sensor",                                 "AGX051 urgent_maint: writeBack.type != pe-sensor");
   EXPECT(env->ragStatusCode     == "RED",                                       "AGX051 urgent_maint: ragStatusCode != RED");
   EXPECT(env->processStatus     == "error",                                     "AGX051 urgent_maint: processStatus != error");
   EXPECT(env->ownerTeam         == "agriculture-operations",                    "AGX051 urgent_maint: ownerTeam mismatch");
@@ -275,9 +300,11 @@ void test_agx055_envelope_pins(const std::filesystem::path& machinesDir) {
     auto env = envelope_for(m, machine_metadata(root), c.seqId, c.out);
     EXPECT(env.has_value(),                                                     "AGX055 " + c.seqId + ": envelope unresolved");
     if (!env) continue;
-    EXPECT(env->dispatchableAgent == "agriculture_yield_optimization_ai",       "AGX055 " + c.seqId + ": dispatch agent != agriculture_yield_optimization_ai");
-    EXPECT(env->aiTrigger         == "ag-yield-optimization-ai-yuma-facility-bridge",
+    EXPECT(env->agent             == "agriculture_yield_optimization_ai",       "AGX055 " + c.seqId + ": dispatch agent != agriculture_yield_optimization_ai");
+    EXPECT(env->trigger           == "ag-yield-optimization-ai-yuma-facility-bridge",
                                                                                 "AGX055 " + c.seqId + ": aiTrigger mismatch");
+    EXPECT(env->autonomyMode      == "advise",                                  "AGX055 " + c.seqId + ": autonomyMode != advise");
+    EXPECT(env->writeBackType     == "pe-sensor",                               "AGX055 " + c.seqId + ": writeBack.type != pe-sensor");
     EXPECT(env->ragStatusCode     == c.ragExpected,                             "AGX055 " + c.seqId + ": ragStatusCode != " + c.ragExpected);
     EXPECT(env->ownerTeam         == "agriculture-operations",                  "AGX055 " + c.seqId + ": ownerTeam mismatch");
   }
@@ -345,7 +372,7 @@ int main(int argc, char** argv) {
          std::to_string(sum.envelopesResolved));
 
   std::cout << "E2E AI trigger dispatch summary\n"
-            << "  machines with triggerConfig+dispatchableAgent: " << sum.machinesWithTriggers << "\n"
+            << "  machines with triggerConfig+agentBinding:      " << sum.machinesWithTriggers << "\n"
             << "  input sequences walked:                        " << sum.inputSequencesRun   << "\n"
             << "  outputs produced:                              " << sum.outputsProduced     << "\n"
             << "  envelopes resolved (PagingDecision matched):   " << sum.envelopesResolved   << "\n"

@@ -552,6 +552,14 @@ private:
     int droppedNoDispatch = 0;
     int errors = 0;
   };
+  struct DispatchBinding {
+    std::string agent;
+    std::string trigger;
+    std::string action;
+    std::string autonomyMode;
+    Json::Array actions;
+    Json writeBack = nullptr;
+  };
 
   bool sensor_exists(const std::string& sensorId) const {
     for (const auto& s : engine.get_sources()) {
@@ -2329,10 +2337,35 @@ private:
     return out;
   }
 
-  std::string first_agent_action(const Json& metadata) const {
-    const Json& actions = metadata.at("agentActions");
-    if (!actions.is_array() || actions.array().empty()) return "";
-    return actions.array().front().as_string();
+  std::string select_agent_action(const Json::Array& actions, const Json& values) const {
+    if (actions.empty()) return "";
+    if (values.is_array()) {
+      for (size_t i = 0; i < values.array().size(); ++i) {
+        if (values.array()[i].as_number() != 0.0 && i < actions.size()) {
+          return actions[i].as_string();
+        }
+      }
+    }
+    return actions.front().as_string();
+  }
+
+  DispatchBinding dispatch_binding_from_metadata(const Json& metadata, const Json& values = nullptr) const {
+    DispatchBinding binding;
+    const Json& agentBinding = metadata.at("agentBinding");
+    if (agentBinding.is_object()) {
+      binding.agent = agentBinding.at("agent").as_string(metadata.at("dispatchableAgent").as_string());
+      binding.trigger = agentBinding.at("trigger").as_string(metadata.at("aiTrigger").as_string());
+      binding.autonomyMode = agentBinding.at("mode").as_string();
+      binding.actions = copy_string_array(agentBinding.at("allowedActions"));
+      if (binding.actions.empty()) binding.actions = copy_string_array(metadata.at("agentActions"));
+      binding.writeBack = agentBinding.at("writeBack").is_null() ? Json(nullptr) : agentBinding.at("writeBack");
+    } else {
+      binding.agent = metadata.at("dispatchableAgent").as_string();
+      binding.trigger = metadata.at("aiTrigger").as_string();
+      binding.actions = copy_string_array(metadata.at("agentActions"));
+    }
+    binding.action = select_agent_action(binding.actions, values);
+    return binding;
   }
 
   std::string asserted_label(const Json& values) const {
@@ -2353,6 +2386,9 @@ private:
   Json build_trigger_envelope(const Json& op, const Json& machine, const std::string& envelopeId, const std::string& correlationId) const {
     const Json& md = machine.at("metadata");
     const Json& governance = op.at("governance");
+    const Json& triggerConfig = md.at("triggerConfig");
+    const Json& triggerDispatch = triggerConfig.at("dispatch");
+    DispatchBinding binding = dispatch_binding_from_metadata(md, op.at("values"));
     Json::Array semantics;
     const Json& values = op.at("values");
     if (values.is_array()) {
@@ -2367,15 +2403,25 @@ private:
     Json::Object outputMapping;
     outputMapping["output"] = op.at("region");
     Json::Object dispatch{
-      {"agent", md.at("dispatchableAgent").as_string()},
-      {"action", first_agent_action(md)},
-      {"agentActionsCatalog", copy_string_array(md.at("agentActions"))},
-      {"trigger", md.at("aiTrigger").as_string()},
+      {"processId", triggerConfig.at("processId").as_string()},
+      {"processName", triggerConfig.at("processName").as_string()},
+      {"agent", binding.agent},
+      {"action", binding.action},
+      {"agentActionsCatalog", binding.actions},
+      {"trigger", binding.trigger},
+      {"autonomyMode", binding.autonomyMode},
+      {"writeBack", binding.writeBack},
       {"endpoint", Json::Object{
         {"kind", triggerDispatchMode},
-        {"url", triggerDispatchMode == "graphql" ? triggerGraphQLEndpoint : ""},
-        {"mutation", triggerDispatchMode == "graphql" ? "updateProcessState" : ""},
-        {"schemaRef", triggerDispatchMode == "graphql" ? "localAIStack/services/api/routers/graphql_endpoint.py" : ""}
+        {"url", triggerDispatchMode == "graphql"
+          ? triggerConfig.at("endpoint").as_string(triggerGraphQLEndpoint)
+          : ""},
+        {"mutation", triggerDispatchMode == "graphql"
+          ? triggerDispatch.at("mutation").as_string("updateProcessState")
+          : ""},
+        {"schemaRef", triggerDispatchMode == "graphql"
+          ? triggerDispatch.at("schemaRef").as_string("localAIStack/services/api/routers/graphql_endpoint.py")
+          : ""}
       }}
     };
 
@@ -2429,10 +2475,13 @@ private:
       }
       std::string machineId = op.at("machineId").as_string();
       const Json& machine = machines.at(machineId);
+      if (!machine.is_object()) {
+        ++summary.droppedNoDispatch;
+        continue;
+      }
       const Json& md = machine.at("metadata");
-      std::string agent = md.at("dispatchableAgent").as_string();
-      std::string trigger = md.at("aiTrigger").as_string();
-      if (!machine.is_object() || agent.empty() || trigger.empty()) {
+      DispatchBinding binding = dispatch_binding_from_metadata(md, op.at("values"));
+      if (binding.agent.empty() || binding.trigger.empty()) {
         ++summary.droppedNoDispatch;
         continue;
       }
@@ -2448,7 +2497,7 @@ private:
       // Dispatch is intentionally fire-and-record at this layer; external
       // provider completion returns later as ordinary PE source updates.
       record.status = "recorded";
-      record.target = agent;
+      record.target = binding.agent;
       record.machineId = machineId;
       record.sequenceId = op.at("sequenceId").as_string();
       record.ragStatusCode = op.at("governance").at("ragStatusCode").as_string();

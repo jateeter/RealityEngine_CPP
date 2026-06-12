@@ -20,9 +20,9 @@ if [ -f .env ]; then
   source .env
 fi
 
-REALITY_ENGINE_PORT="${REALITY_ENGINE_PORT:-3299}"
-PERCEPTION_ENGINE_PORT="${PERCEPTION_ENGINE_PORT:-3300}"
-VECTOR_DIMENSION="${VECTOR_DIMENSION:-768}"
+REALITY_ENGINE_PORT="${REALITY_ENGINE_PORT:-5301}"
+PERCEPTION_ENGINE_PORT="${PERCEPTION_ENGINE_PORT:-5300}"
+VECTOR_DIMENSION="${VECTOR_DIMENSION:-7680}"
 MACHINES_DIR="${MACHINES_DIR:-../RealityEngine_Machines/machines}"
 # INSTANCE_ID — when set, PID/log files are suffixed so multiple CPP
 # instances can run from the same repo directory simultaneously.

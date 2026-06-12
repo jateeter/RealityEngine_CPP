@@ -5,14 +5,14 @@ info:
   description: |
     OpenAPI contract for the native C++ Perception Engine service.
 
-    The service defaults to `http://localhost:3300` and pushes assembled
-    vectors into the Reality Engine at `http://localhost:3299/api/perceive`.
+    The service defaults to `http://localhost:5300` and pushes assembled
+    vectors into the Reality Engine at `http://localhost:5301/api/perceive`.
     The MQTT bridge, when enabled, subscribes to a broker (default
     `mqtt://yuma.lateraledge.cloud:1883`) and projects sensor messages
     into perceptual-space regions via the mapping registry — same
     contract across AI / CPP / LSP runtimes.
 servers:
-  - url: http://localhost:3300
+  - url: http://localhost:5300
     description: Local Perception Engine default
 tags:
   - name: System
