@@ -20,6 +20,14 @@ Sibling repositories in the local suite:
 | [`RealityEngine_Manager`](../RealityEngine_Manager) | Orchestration and visualization frontend built against the canonical surface. |
 | [`RealityEngine_CI`](../RealityEngine_CI) | Deployment, compatibility, and CI tooling for the suite. |
 
+## Integrated Specification
+
+Cross-repository deployment rules are owned by
+[`RealityEngine_CI/DEPLOYMENT_CONTRACT.md`](../RealityEngine_CI/DEPLOYMENT_CONTRACT.md)
+and [`RealityEngine_CI/INTEGRATED_SPECIFICATION.md`](../RealityEngine_CI/INTEGRATED_SPECIFICATION.md).
+The active machine and RE/PE operations contract is described in
+[`RealityEngine_Machines/docs/REALITY_PERCEPTION_OPERATIONS.md`](../RealityEngine_Machines/docs/REALITY_PERCEPTION_OPERATIONS.md).
+
 The native services use Boost.Asio/Beast for HTTP transport while keeping
 the domain layer independent of the server implementation.  No external
 runtime deps beyond Boost — the MQTT client is hand-rolled to preserve
