@@ -2628,11 +2628,11 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-  int port = argc > 1 ? std::stoi(argv[1]) : 3300;
-  std::string realityUrl = argc > 2 ? argv[2] : "http://localhost:3299";
+  int port = argc > 1 ? std::stoi(argv[1]) : 5300;
+  std::string realityUrl = argc > 2 ? argv[2] : "http://localhost:5301";
   std::string localAIUrl = argc > 3 ? argv[3] : (std::getenv("LOCAL_AI_API_URL") ? std::getenv("LOCAL_AI_API_URL") : "http://localhost:4000");
   std::string localAIMachinesDir = argc > 4 ? argv[4] : (std::getenv("LOCAL_AI_MACHINES_DIR") ? std::getenv("LOCAL_AI_MACHINES_DIR") : "../localAIStack/data/machines");
-  int vectorDimension = argc > 5 ? std::stoi(argv[5]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 768);
+  int vectorDimension = argc > 5 ? std::stoi(argv[5]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 7680);
   bool bootstrapLocalAI = truthy_env(std::getenv("LOCAL_AI_BOOTSTRAP"));
   http::Server server;
   PerceptionService service(realityUrl, localAIUrl, localAIMachinesDir, vectorDimension, bootstrapLocalAI);

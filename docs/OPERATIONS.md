@@ -58,9 +58,9 @@ Important variables:
 
 | Variable | Default |
 | --- | --- |
-| `REALITY_ENGINE_PORT` | `3299` |
-| `PERCEPTION_ENGINE_PORT` | `3300` |
-| `VECTOR_DIMENSION` | `768` |
+| `REALITY_ENGINE_PORT` | `5301` |
+| `PERCEPTION_ENGINE_PORT` | `5300` |
+| `VECTOR_DIMENSION` | `7680` |
 | `MACHINES_DIR` | `../RealityEngine_Machines/machines` |
 | `QDRANT_URL` | `http://localhost:4333` |
 | `QDRANT_STORAGE_DIR` | `../localAIStack/volumes/qdrant` |

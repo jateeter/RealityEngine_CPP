@@ -830,9 +830,9 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-  int port = argc > 1 ? std::stoi(argv[1]) : 3299;
-  std::string machinesDir = argc > 2 ? argv[2] : "examples/machines";
-  int vectorDimension = argc > 3 ? std::stoi(argv[3]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 768);
+  int port = argc > 1 ? std::stoi(argv[1]) : 5301;
+  std::string machinesDir = argc > 2 ? argv[2] : "../RealityEngine_Machines/machines";
+  int vectorDimension = argc > 3 ? std::stoi(argv[3]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 7680);
   // RE_STRICT_STA=1 opts the corpus into life-safety STA enforcement at load.
   // Off by default to match the AI runtime's permissive production behaviour.
   LoadOptions loadOpts;

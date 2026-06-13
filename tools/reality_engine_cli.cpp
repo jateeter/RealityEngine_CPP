@@ -56,7 +56,8 @@ Value::Array parse_values(const std::string& csv) {
 }
 
 std::string pe_url(int argc, char** argv) {
-  std::string url = arg_value(argc, argv, "--pe-url", env_or("PE_URL", "http://localhost:3300"));
+  std::string defaultUrl = "http://localhost:" + env_or("PERCEPTION_ENGINE_PORT", "5300");
+  std::string url = arg_value(argc, argv, "--pe-url", env_or("PE_URL", defaultUrl));
   while (!url.empty() && url.back() == '/') url.pop_back();
   return url;
 }
