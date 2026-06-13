@@ -28,6 +28,7 @@ int failures = 0;
 // when the second vector flips both bits; sequence "clean" → 0 violations.
 std::string life_safety_with_violation_json() {
   return R"({
+    "version": "1.0.0",
     "machine": {
       "id": "machine-test-life-safety",
       "name": "TestLifeSafety",
@@ -53,6 +54,7 @@ std::string life_safety_with_violation_json() {
 // Clean life-safety machine — every intra transition flips at most one bit.
 std::string life_safety_clean_json() {
   return R"({
+    "version": "1.0.0",
     "machine": {
       "id": "machine-test-life-safety-clean",
       "name": "TestLifeSafetyClean",
@@ -80,6 +82,7 @@ std::string life_safety_clean_json() {
 // must NOT throw because the gate is severity-scoped.
 std::string non_life_safety_with_violation_json() {
   return R"({
+    "version": "1.0.0",
     "machine": {
       "id": "machine-test-permissive",
       "name": "TestPermissive",

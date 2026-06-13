@@ -2522,7 +2522,7 @@ private:
         {"envelopeId", envelopeId},
         {"correlationId", correlationId},
         {"dispatchId", record.id},
-        {"target", agent},
+        {"target", binding.agent},
         {"mode", triggerDispatchMode}
       }));
     }
