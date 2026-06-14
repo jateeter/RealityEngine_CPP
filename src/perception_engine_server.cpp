@@ -396,6 +396,78 @@ public:
         {"warnings", warnArr},
       });
     });
+    // POST /api/mqtt/enable — accept brokerUrl + mappings registry, start bridge.
+    // POST /api/mqtt/disable — stop bridge and clear it.
+    server.route("POST", "/api/mqtt/enable", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      // Parse mqtt://host:port or host:port
+      std::string brokerUrl = body.at("brokerUrl").as_string("");
+      if (brokerUrl.empty())
+        return http::error_response("brokerUrl is required", 400);
+      std::string addr = brokerUrl;
+      auto schemeEnd = addr.find("://");
+      if (schemeEnd != std::string::npos) addr = addr.substr(schemeEnd + 3);
+      std::string brokerHost = addr;
+      int brokerPort = 1883;
+      auto colonPos = addr.rfind(':');
+      if (colonPos != std::string::npos) {
+        brokerHost = addr.substr(0, colonPos);
+        try { brokerPort = std::stoi(addr.substr(colonPos + 1)); } catch (...) {}
+      }
+      // Parse mapping registry
+      auto mappingsVal = body.at("mappings");
+      std::unique_ptr<mqtt::MappingRegistry> newRegistry;
+      try {
+        newRegistry = std::make_unique<mqtt::MappingRegistry>(mqtt::MappingRegistry::from_json(mappingsVal));
+      } catch (const std::exception& e) {
+        return http::error_response(std::string("schema: ") + e.what(), 400);
+      }
+      if (newRegistry->size() == 0)
+        return http::error_response("mappings array is empty — at least one rule is required", 400);
+      const char* overlapEnv = std::getenv("MQTT_ALLOW_REGION_OVERLAP");
+      bool allowOverlap = overlapEnv &&
+        (std::string(overlapEnv) == "1" || std::string(overlapEnv) == "true");
+      auto warnings = newRegistry->validate_overlaps(allowOverlap);
+      // Preserve clientId from existing bridge if present
+      std::string clientId = mqttBridge ? mqttBridge->config().clientId : "reality-engine-pe";
+      if (mqttBridge) { mqttBridge->stop(); mqttBridge.reset(); }
+      mqtt::ClientConfig cfg;
+      cfg.brokerHost = brokerHost;
+      cfg.brokerPort = brokerPort;
+      cfg.clientId   = clientId;
+      try {
+        mqttBridge = std::make_unique<mqtt::MqttBridge>(
+          cfg, std::move(newRegistry),
+          [this](const std::string& sId, int off, int len, const Vector& vals, long ttl,
+                 const std::string& topic, const std::string& mId) {
+            feed_mqtt_signal(sId, off, len, vals, ttl, topic, mId);
+          },
+          [this]() { do_push(false, true); });
+        mqttBridge->start();
+        std::cerr << "MQTT bridge enabled via API — broker=" << brokerHost
+                  << ":" << brokerPort << "\n";
+      } catch (const std::exception& e) {
+        mqttBridge.reset();
+        return http::error_response(std::string("MQTT bridge failed to start: ") + e.what(), 500);
+      }
+      Json::Array warnArr;
+      for (const auto& w : warnings) warnArr.push_back(w);
+      return ok(Json::Object{
+        {"success", true},
+        {"enabled", true},
+        {"mappings", static_cast<double>(mqttBridge->registry().size())},
+        {"warnings", warnArr},
+      });
+    });
+    server.route("POST", "/api/mqtt/disable", [this](const http::Request&) {
+      if (mqttBridge) {
+        mqttBridge->stop();
+        mqttBridge.reset();
+        std::cerr << "MQTT bridge disabled via API\n";
+      }
+      return ok(Json::Object{{"success", true}, {"enabled", false}});
+    });
+
     server.route("POST", "/api/push", [this](const http::Request& req) {
       auto body = parse_body(req);
       bool includeMachineResults = body.at("includeMachineResults").as_bool(!body.at("compact").as_bool(false));
