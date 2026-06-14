@@ -24,6 +24,7 @@ REALITY_ENGINE_PORT="${REALITY_ENGINE_PORT:-5301}"
 PERCEPTION_ENGINE_PORT="${PERCEPTION_ENGINE_PORT:-5300}"
 VECTOR_DIMENSION="${VECTOR_DIMENSION:-7680}"
 MACHINES_DIR="${MACHINES_DIR:-../RealityEngine_Machines/machines}"
+RE_LOAD_MACHINES="${RE_LOAD_MACHINES:-1}"
 # INSTANCE_ID — when set, PID/log files are suffixed so multiple CPP
 # instances can run from the same repo directory simultaneously.
 INSTANCE_ID="${INSTANCE_ID:-}"
@@ -148,8 +149,17 @@ else
   [ -x bin/perception_engine_server ] || die "bin/perception_engine_server missing. Run make or omit --no-build."
 fi
 
-[ -d "$MACHINES_DIR" ] || die "Machine directory not found: $MACHINES_DIR"
-ok "Machine repository: $MACHINES_DIR"
+# When RE_LOAD_MACHINES=0 the RE starts with no corpus (CI will seed separately).
+# Use a temp empty directory so the binary still receives a valid path argument.
+if [ "${RE_LOAD_MACHINES}" = "0" ]; then
+    _machines_load_dir=$(mktemp -d)
+    trap 'rm -rf "$_machines_load_dir"' EXIT
+    ok "Machine load disabled (RE_LOAD_MACHINES=0) — RE will start empty"
+else
+    [ -d "$MACHINES_DIR" ] || die "Machine directory not found: $MACHINES_DIR"
+    _machines_load_dir="$MACHINES_DIR"
+    ok "Machine repository: $MACHINES_DIR"
+fi
 
 info "Checking unified Qdrant at $QDRANT_URL..."
 if curl -sf "$QDRANT_URL/collections" >/dev/null 2>&1 || curl -sf "$QDRANT_URL/healthz" >/dev/null 2>&1; then
@@ -219,7 +229,7 @@ export MQTT_BROKER_HOST MQTT_BROKER_PORT MQTT_CLIENT_ID MQTT_KEEPALIVE
 export MQTT_MAPPINGS_FILE MQTT_ALLOW_REGION_OVERLAP
 
 info "Starting Reality Engine on port $REALITY_ENGINE_PORT${INSTANCE_ID:+ [instance: $INSTANCE_ID]}..."
-nohup "$ROOT_DIR/bin/reality_engine_server" "$REALITY_ENGINE_PORT" "$MACHINES_DIR" "$VECTOR_DIMENSION" \
+nohup "$ROOT_DIR/bin/reality_engine_server" "$REALITY_ENGINE_PORT" "$_machines_load_dir" "$VECTOR_DIMENSION" \
   > "$RE_LOG_FILE" 2>&1 &
 echo $! > "$RE_PID_FILE"
 sleep 0.2
@@ -235,18 +245,22 @@ if ! wait_for_http "http://localhost:${REALITY_ENGINE_PORT}/api/health" "Reality
   die "Reality Engine failed to become healthy"
 fi
 
-info "Verifying RealityEngine_Machines corpus loaded..."
-if ! command -v python3 >/dev/null 2>&1; then
-  ./stop.sh >/dev/null 2>&1 || true
-  die "python3 is required to verify startup machine loading"
+if [ "${RE_LOAD_MACHINES}" != "0" ]; then
+  info "Verifying RealityEngine_Machines corpus loaded..."
+  if ! command -v python3 >/dev/null 2>&1; then
+    ./stop.sh >/dev/null 2>&1 || true
+    die "python3 is required to verify startup machine loading"
+  fi
+  MACHINE_COUNT="$(machine_count_from_api "http://localhost:${REALITY_ENGINE_PORT}")"
+  if [ "${MACHINE_COUNT:-0}" -le 0 ]; then
+    tail -60 "$LOG_DIR/reality_engine.log" || true
+    ./stop.sh >/dev/null 2>&1 || true
+    die "Reality Engine started but loaded 0 machines from $MACHINES_DIR"
+  fi
+  ok "Loaded $MACHINE_COUNT machine(s) from $MACHINES_DIR"
+else
+  ok "RE started empty (RE_LOAD_MACHINES=0) — corpus will be seeded by CI"
 fi
-MACHINE_COUNT="$(machine_count_from_api "http://localhost:${REALITY_ENGINE_PORT}")"
-if [ "${MACHINE_COUNT:-0}" -le 0 ]; then
-  tail -60 "$LOG_DIR/reality_engine.log" || true
-  ./stop.sh >/dev/null 2>&1 || true
-  die "Reality Engine started but loaded 0 machines from $MACHINES_DIR"
-fi
-ok "Loaded $MACHINE_COUNT machine(s) from $MACHINES_DIR"
 
 info "Starting Perception Engine on port $PERCEPTION_ENGINE_PORT${INSTANCE_ID:+ [instance: $INSTANCE_ID]}..."
 nohup "$ROOT_DIR/bin/perception_engine_server" "$PERCEPTION_ENGINE_PORT" "http://localhost:${REALITY_ENGINE_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" \
