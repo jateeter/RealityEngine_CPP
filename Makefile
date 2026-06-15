@@ -4,7 +4,19 @@ OPENSSL_PREFIX ?= $(shell brew --prefix openssl@3 2>/dev/null)
 BOOST_CPPFLAGS ?= $(if $(BOOST_PREFIX),-I$(BOOST_PREFIX)/include,)
 OPENSSL_CPPFLAGS ?= $(if $(OPENSSL_PREFIX),-I$(OPENSSL_PREFIX)/include,)
 OPENSSL_LDFLAGS ?= $(if $(OPENSSL_PREFIX),-L$(OPENSSL_PREFIX)/lib,)
-CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -pedantic -Iinclude $(BOOST_CPPFLAGS) $(OPENSSL_CPPFLAGS)
+
+# macOS: the Command Line Tools' bundled libc++ headers can be incomplete or
+# stale, leaving the toolchain's /usr/include/c++/v1 missing umbrella headers
+# such as <atomic> and <cctype> (the search order puts that incomplete dir ahead
+# of the SDK's complete copy). Anchor the build to the active SDK and add its
+# libc++ include path so standard headers resolve reliably. No effect off macOS.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  SDKROOT ?= $(shell xcrun --show-sdk-path 2>/dev/null)
+  MACOS_CXXFLAGS := $(if $(SDKROOT),-isysroot $(SDKROOT) -isystem $(SDKROOT)/usr/include/c++/v1,)
+endif
+
+CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -pedantic -Iinclude $(BOOST_CPPFLAGS) $(OPENSSL_CPPFLAGS) $(MACOS_CXXFLAGS)
 LDFLAGS ?= -pthread $(OPENSSL_LDFLAGS) -lssl -lcrypto
 
 BIN_DIR := bin
