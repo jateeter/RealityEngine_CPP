@@ -33,8 +33,8 @@ Copy `.env.example` to `.env` and edit as needed.
 Common overrides:
 
 ```bash
-REALITY_ENGINE_PORT=3299
-PERCEPTION_ENGINE_PORT=3300
+REALITY_ENGINE_PORT=5301
+PERCEPTION_ENGINE_PORT=5300
 VECTOR_DIMENSION=768
 MACHINES_DIR=../RealityEngine_AI/examples/machines
 QDRANT_URL=http://localhost:4333

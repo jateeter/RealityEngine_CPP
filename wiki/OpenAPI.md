@@ -8,8 +8,8 @@ The repository includes OpenAPI 3.0 contracts for both native services:
 Default service URLs:
 
 ```text
-Reality Engine    http://localhost:3299
-Perception Engine http://localhost:3300
+Reality Engine    http://localhost:5301
+Perception Engine http://localhost:5300
 ```
 
 The specs cover the currently mounted C++ route surface, including runtime

@@ -41,7 +41,7 @@ The runner asserts explicit metadata when present:
 test ports, checks both health endpoints, confirms machine loading through
 `/api/machines`, and posts through Perception Engine `/api/push` to verify the
 PE-to-RE HTTP path. Override `REALITY_ENGINE_E2E_PORT` and
-`PERCEPTION_ENGINE_E2E_PORT` when the default `3299`/`3301` ports are in use.
+`PERCEPTION_ENGINE_E2E_PORT` when the default `5401`/`5400` ports are in use.
 
 The service test imports a deterministic three-machine chain:
 

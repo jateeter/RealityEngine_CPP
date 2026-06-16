@@ -50,7 +50,7 @@ and Perception Engine binaries on test ports, validates both health endpoints,
 confirms the Reality Engine loaded machines through `/api/machines`, and posts
 through Perception Engine `/api/push` to verify the PE-to-RE HTTP process
 boundary. Override `REALITY_ENGINE_E2E_PORT` and
-`PERCEPTION_ENGINE_E2E_PORT` when the default `3299`/`3301` ports are in use.
+`PERCEPTION_ENGINE_E2E_PORT` when the default `5401`/`5400` ports are in use.
 
 The service test also imports a deterministic three-machine chain on unused
 high-dimensional regions:

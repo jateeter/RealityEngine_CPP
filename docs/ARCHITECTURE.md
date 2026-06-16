@@ -10,8 +10,8 @@ using Boost.Asio/Beast for HTTP transport.
 ```mermaid
 flowchart LR
   Client[Client / test runner]
-  PE[perception_engine_server<br/>port 3300]
-  RE[reality_engine_server<br/>port 3299]
+  PE[perception_engine_server<br/>port 5300]
+  RE[reality_engine_server<br/>port 5301]
   Corpus[RealityEngine_Machines<br/>machines]
   Q[(Qdrant<br/>localAIStack)]
   AI[localAIStack API<br/>optional]

@@ -81,21 +81,21 @@ description)`.
 ## Production end-to-end (boot the real binaries)
 
 ```bash
-# Reality Engine on :3299 with the 1014-machine corpus
-./bin/reality_engine_server 3299 ../RealityEngine_Machines/machines &
+# Reality Engine on :5301 with the 1014-machine corpus
+./bin/reality_engine_server 5301 ../RealityEngine_Machines/machines &
 
-# Perception Engine on :3300, wired to MQTT
+# Perception Engine on :5300, wired to MQTT
 MQTT_BROKER_HOST=yuma.lateraledge.cloud \
 MQTT_BROKER_PORT=1883 \
 MQTT_MAPPINGS_FILE=$PWD/config/mqtt-mappings.yuma-agriculture.json \
 MQTT_CLIENT_ID=re-pe-demo-prod \
-./bin/perception_engine_server 3300 http://localhost:3299 ../localAIStack/data/machines 768 &
+./bin/perception_engine_server 5300 http://localhost:5301 ../localAIStack/data/machines 768 &
 ```
 
 Boot log:
 ```
 MQTT bridge enabled — broker=yuma.lateraledge.cloud:1883 mappings=16
-listening on 3300
+listening on 5300
 ```
 
 ### `GET /api/mqtt/status` (after 15 s of sustained ingest)
@@ -249,14 +249,14 @@ make all
 ./bin/mqtt_demo_agriculture <host> <port> <mappings.json> <ag-machines-dir> [seconds=30]
 
 # Production: real PE + RE binaries
-./bin/reality_engine_server 3299 ../RealityEngine_Machines/machines &
+./bin/reality_engine_server 5301 ../RealityEngine_Machines/machines &
 MQTT_BROKER_HOST=<host> MQTT_BROKER_PORT=1883 \
   MQTT_MAPPINGS_FILE=$PWD/config/mqtt-mappings.yuma-agriculture.json \
-  ./bin/perception_engine_server 3300 http://localhost:3299 ../localAIStack/data/machines 768 &
-curl http://localhost:3300/api/mqtt/status
-curl http://localhost:3300/api/mqtt/mappings
-curl http://localhost:3300/api/sources
-curl http://localhost:3299/api/metrics | grep ces_paging_decisions
+  ./bin/perception_engine_server 5300 http://localhost:5301 ../localAIStack/data/machines 768 &
+curl http://localhost:5300/api/mqtt/status
+curl http://localhost:5300/api/mqtt/mappings
+curl http://localhost:5300/api/sources
+curl http://localhost:5301/api/metrics | grep ces_paging_decisions
 ```
 
 ## Cross-runtime parity
