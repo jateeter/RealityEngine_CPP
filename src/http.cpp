@@ -593,9 +593,11 @@ private:
     beast_http::write(*stream, req);
 
     beast::flat_buffer buffer;
-    beast_http::response<beast_http::string_body> res;
+    beast_http::response_parser<beast_http::string_body> parser;
+    parser.body_limit((std::numeric_limits<std::uint64_t>::max)());
     stream->expires_after(std::chrono::milliseconds(timeoutMs));
-    beast_http::read(*stream, buffer, res);
+    beast_http::read(*stream, buffer, parser);
+    auto& res = parser.get();
     if (!res.keep_alive()) connected = false;
     return res.body();
   }
@@ -682,8 +684,10 @@ static std::string request_body_https(const std::string& method,
   beast_http::write(stream, req);
 
   beast::flat_buffer buffer;
-  beast_http::response<beast_http::string_body> res;
-  beast_http::read(stream, buffer, res);
+  beast_http::response_parser<beast_http::string_body> parser;
+  parser.body_limit((std::numeric_limits<std::uint64_t>::max)());
+  beast_http::read(stream, buffer, parser);
+  auto& res = parser.get();
   beast::error_code ec;
   stream.shutdown(ec);
   if (ec == asio::error::eof) ec = {};
