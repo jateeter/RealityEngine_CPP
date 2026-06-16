@@ -1,171 +1,577 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
-  title: RealityEngine CPP - Reality Engine API
+  title: RealityEngine CPP — Reality Engine API
   version: 1.1.0-cpp
-  description: |
-    OpenAPI contract for the native C++ Reality Engine service.
+  description: 'OpenAPI contract for the C++ (Boost.Beast / Asio) Reality Engine runtime.
 
-    The service defaults to `http://localhost:5301`.  Wire-compatible
-    with the AI (TypeScript / Node.js) and LSP (Common Lisp) runtimes —
-    the same JSON corpus runs unchanged across all three, produces
-    byte-identical mergeBatch ordering, and emits the same Prometheus
-    metrics shape (only the `runtime` label differs).
+
+    Default native port: **5301** (PE on 5301 − 1 = 5300).
+
+    Additional CPP instances add +100 per pair (cpp-2: 5401/5400, cpp-3: 5501/5500).
+
+    In Docker/CI deployments the TLS proxy exposes the RE at `https://localhost:3000`.
+
+
+    Wire-compatible with the LSP (Common Lisp) and Scala runtimes.
+
+    Every metric line carries `runtime="cpp"`.
+
+    '
+  x-generated-from: /Users/johnt/workspace/GitHub/RealityEngine_CPP/SURFACE_SPEC.md
 servers:
-  - url: http://localhost:5301
-    description: Local Reality Engine default
+- url: http://localhost:5301
+  description: Local CPP Reality Engine (native, instance cpp-1)
+- url: https://localhost:3000
+  description: Docker TLS proxy (CI deployment)
 tags:
-  - name: System
-  - name: Runtime
-  - name: Engine
-  - name: Machines
-  - name: Simulation
-  - name: Perception
-  - name: Governance
-  - name: Metrics
+- name: Configuration
+- name: Demos
+- name: Engine
+- name: Governance
+- name: Info & Health
+- name: Machine Graph
+- name: Machines
+- name: Perception
+- name: Perceptual Simulation
+- name: Runtime Introspection
+- name: Sampler
+- name: Sequences
+- name: Streaming
+- name: Vectors
 paths:
   /:
     get:
-      tags: [System]
+      tags:
+      - Info & Health
       summary: Service root
       responses:
-        "200":
-          description: Service identity
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_
+  /api:
+    get:
+      tags:
+      - Info & Health
+      summary: API index
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api
   /api/health:
     get:
-      tags: [System]
+      tags:
+      - Info & Health
       summary: Health check
       responses:
-        "200":
-          description: Healthy service
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Health"
+                $ref: '#/components/schemas/Health'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_health
+  /api/metrics:
+    get:
+      tags:
+      - Info & Health
+      summary: Prometheus text-format metrics
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_metrics
   /api/config:
     get:
-      tags: [System]
+      tags:
+      - Configuration
       summary: Runtime configuration snapshot
       responses:
-        "200":
-          description: Configuration
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RealityConfig"
-  /api/runtime/metrics:
-    get:
-      tags: [Runtime]
-      summary: Engine and worker pool metrics
-      responses:
-        "200":
-          description: Runtime metrics
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/runtime/options:
-    get:
-      tags: [Runtime]
-      summary: Response projection and history options
-      responses:
-        "200":
-          description: Current runtime options
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RuntimeOptions"
-    patch:
-      tags: [Runtime]
-      summary: Update response projection and history options
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RuntimeOptionsPatch"
-      responses:
-        "200":
-          description: Updated runtime options
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RuntimeOptions"
-  /api/engine/reset:
-    post:
-      tags: [Engine]
-      summary: Reset machine, simulator, and perception state
-      responses:
-        "200":
-          description: Reset result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Success"
-  /api/engine/stats:
-    get:
-      tags: [Engine]
-      summary: Engine statistics
-      responses:
-        "200":
-          description: Engine stats
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/engine/active:
-    get:
-      tags: [Engine]
-      summary: Active vector compatibility endpoint
-      responses:
-        "200":
-          description: Active vectors
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/engine/history:
-    get:
-      tags: [Engine]
-      summary: Engine history compatibility endpoint
-      responses:
-        "200":
-          description: Engine history
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/engine/process:
-    post:
-      tags: [Engine]
-      summary: Process an input vector across loaded machines
+                $ref: '#/components/schemas/RealityConfig'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_config
+  /api/config/dimension:
+    put:
+      tags:
+      - Configuration
+      summary: Set vector dimension
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [vector]
-              properties:
-                vector:
-                  $ref: "#/components/schemas/Vector"
+              additionalProperties: true
       responses:
-        "200":
-          description: Output vectors asserted by machines
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: put_api_config_dimension
+  /api/config/threshold:
+    put:
+      tags:
+      - Configuration
+      summary: Set match threshold
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: put_api_config_threshold
+  /api/runtime/metrics:
+    get:
+      tags:
+      - Runtime Introspection
+      summary: Engine and worker-pool metrics
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_runtime_metrics
+  /api/runtime/vector-space:
+    get:
+      tags:
+      - Runtime Introspection
+      summary: Perceptual-space shape and mapping version
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_runtime_vector_space
+  /api/runtime/storage-footprint:
+    get:
+      tags:
+      - Runtime Introspection
+      summary: Per-machine cell-storage footprint
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_runtime_storage_footprint
+  /api/runtime/options:
+    get:
+      tags:
+      - Runtime Introspection
+      summary: Response-projection options
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeOptions'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_runtime_options
+    patch:
+      tags:
+      - Runtime Introspection
+      summary: Update response-projection options
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuntimeOptionsPatch'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeOptions'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: patch_api_runtime_options
+  /api/vectors/search:
+    post:
+      tags:
+      - Vectors
+      summary: Search vectors by cosine similarity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_vectors_search
+  /api/vectors:
+    post:
+      tags:
+      - Vectors
+      summary: Store a vector
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_vectors
+  /api/vectors/{id}:
+    get:
+      tags:
+      - Vectors
+      summary: Read a vector
+      parameters:
+      - &id001
+        name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: get_api_vectors_id
+    delete:
+      tags:
+      - Vectors
+      summary: Delete a vector
+      parameters:
+      - *id001
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: delete_api_vectors_id
+  /api/sequences:
+    get:
+      tags:
+      - Sequences
+      summary: List sequences
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_sequences
+    post:
+      tags:
+      - Sequences
+      summary: Create sequence
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_sequences
+  /api/sequences/{id}:
+    get:
+      tags:
+      - Sequences
+      summary: Read a sequence
+      parameters:
+      - *id001
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: get_api_sequences_id
+    delete:
+      tags:
+      - Sequences
+      summary: Delete a sequence
+      parameters:
+      - *id001
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: delete_api_sequences_id
+  /api/sequences/{id}/reset:
+    post:
+      tags:
+      - Sequences
+      summary: Reset sequence state
+      parameters:
+      - *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: post_api_sequences_id_reset
+  /api/sequences/{id}/vectors:
+    post:
+      tags:
+      - Sequences
+      summary: Append vectors to sequence
+      parameters:
+      - *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: post_api_sequences_id_vectors
+  /api/sequences/persist:
+    post:
+      tags:
+      - Sequences
+      summary: Persist sequences to Qdrant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_sequences_persist
+  /api/engine/stats:
+    get:
+      tags:
+      - Engine
+      summary: Engine statistics
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_engine_stats
+  /api/engine/active:
+    get:
+      tags:
+      - Engine
+      summary: Active-vector compatibility endpoint
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_engine_active
+  /api/engine/history:
+    get:
+      tags:
+      - Engine
+      summary: Engine history compatibility endpoint
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_engine_history
+  /api/engine/process:
+    post:
+      tags:
+      - Engine
+      summary: Process input vector across all machines
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - vector
+              properties:
+                vector:
+                  $ref: '#/components/schemas/Vector'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_engine_process
+  /api/engine/reset:
+    post:
+      tags:
+      - Engine
+      summary: Reset machine, simulator, and perception state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_engine_reset
   /api/machines:
     get:
-      tags: [Machines]
+      tags:
+      - Machines
       summary: List loaded machines
       responses:
-        "200":
-          description: Machine list
+        '200':
+          description: Success
           content:
             application/json:
               schema:
@@ -174,469 +580,858 @@ paths:
                   machines:
                     type: array
                     items:
-                      $ref: "#/components/schemas/Machine"
+                      $ref: '#/components/schemas/Machine'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_machines
     post:
-      tags: [Machines]
-      summary: Import a machine from RealityEngine_Machines machine JSON
+      tags:
+      - Machines
+      summary: Import a machine
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Machine"
+              $ref: '#/components/schemas/Machine'
       responses:
-        "200":
-          description: Imported machine
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MachineMutationResponse"
+                $ref: '#/components/schemas/MachineMutationResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_machines
   /api/machines/{id}:
-    parameters:
-      - $ref: "#/components/parameters/MachineId"
     get:
-      tags: [Machines]
-      summary: Read a loaded machine
+      tags:
+      - Machines
+      summary: Read a machine
+      parameters:
+      - *id001
       responses:
-        "200":
-          description: Machine
+        '200':
+          description: Success
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   machine:
-                    $ref: "#/components/schemas/Machine"
-        "404":
-          $ref: "#/components/responses/NotFound"
+                    $ref: '#/components/schemas/Machine'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: get_api_machines_id
     put:
-      tags: [Machines]
+      tags:
+      - Machines
       summary: Replace a machine
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/Machine"
-      responses:
-        "200":
-          description: Replaced machine
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MachineMutationResponse"
-    delete:
-      tags: [Machines]
-      summary: Remove a machine
-      responses:
-        "200":
-          description: Removal result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Success"
-  /api/machines/{id}/process:
-    post:
-      tags: [Machines]
-      summary: Process a machine-local input vector
       parameters:
-        - $ref: "#/components/parameters/MachineId"
+      - *id001
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [inputVector]
-              properties:
-                inputVector:
-                  $ref: "#/components/schemas/Vector"
+              $ref: '#/components/schemas/Machine'
       responses:
-        "200":
-          description: Machine transition result
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MachineTransitionResult"
-  /api/machines/{id}/process-universal:
-    post:
-      tags: [Machines]
-      summary: Resolve universal input space for one machine and process it
+                $ref: '#/components/schemas/MachineMutationResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: put_api_machines_id
+    patch:
+      tags:
+      - Machines
+      summary: Patch machine metadata
       parameters:
-        - $ref: "#/components/parameters/MachineId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [universalInputSpace]
-              properties:
-                universalInputSpace:
-                  $ref: "#/components/schemas/Vector"
-      responses:
-        "200":
-          description: Machine transition result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MachineTransitionResult"
-  /api/machines/process-universal/all:
-    post:
-      tags: [Machines]
-      summary: Resolve universal input space and process all machines
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [universalInputSpace]
-              properties:
-                universalInputSpace:
-                  $ref: "#/components/schemas/Vector"
-      responses:
-        "200":
-          description: Results keyed by machine id
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/machines/{id}/whatif:
-    post:
-      tags: [Machines]
-      summary: Process a copied machine with a local input vector
-      parameters:
-        - $ref: "#/components/parameters/MachineId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [inputVector]
-              properties:
-                inputVector:
-                  $ref: "#/components/schemas/Vector"
-      responses:
-        "200":
-          description: What-if transition result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MachineTransitionResult"
-  /api/machines/{id}/whatif-universal:
-    post:
-      tags: [Machines]
-      summary: Process a copied machine with universal input space
-      parameters:
-        - $ref: "#/components/parameters/MachineId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [universalInputSpace]
-              properties:
-                universalInputSpace:
-                  $ref: "#/components/schemas/Vector"
-      responses:
-        "200":
-          description: What-if transition result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MachineTransitionResult"
-  /api/machines/json/list:
-    get:
-      tags: [Machines]
-      summary: List machine JSON files from the configured machine directory
-      responses:
-        "200":
-          description: Available machine JSON files
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/machines/json/{name}:
-    get:
-      tags: [Machines]
-      summary: Load a machine JSON file by name
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Loaded machine
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MachineMutationResponse"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/machine-graph:
-    get:
-      tags: [Machines]
-      summary: Machine graph nodes and overlap edges
-      responses:
-        "200":
-          description: Machine graph
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/perceptual-simulation/step:
-    post:
-      tags: [Simulation]
-      summary: Advance the configured perceptual simulation by one step
-      responses:
-        "200":
-          description: Simulation step or done marker
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/perceptual-simulation/reset:
-    post:
-      tags: [Simulation]
-      summary: Reset perceptual simulation state
-      responses:
-        "200":
-          description: Reset result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Success"
-  /api/perceptual-simulation/start:
-    post:
-      tags: [Simulation]
-      summary: Mark perceptual simulation running
-      responses:
-        "200":
-          description: Start result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Success"
-  /api/perceptual-simulation/stop:
-    post:
-      tags: [Simulation]
-      summary: Stop perceptual simulation
-      responses:
-        "200":
-          description: Stop result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Success"
-  /api/perceptual-simulation/state:
-    get:
-      tags: [Simulation]
-      summary: Current perceptual simulation state
-      responses:
-        "200":
-          description: Simulator state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/perceptual-simulation/history:
-    get:
-      tags: [Simulation]
-      summary: Bounded simulation history
-      responses:
-        "200":
-          description: Simulation history
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  history:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/SimulationStep"
-  /api/perceptual-simulation/configure/chunk:
-    post:
-      tags: [Simulation]
-      summary: Append vectors and simulation configuration to the staging buffer
+      - *id001
       requestBody:
         required: false
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SimulationConfigureChunk"
+              type: object
+              additionalProperties: true
       responses:
-        "200":
-          description: Buffer status
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
-  /api/perceptual-simulation/configure/commit:
-    post:
-      tags: [Simulation]
-      summary: Commit staged simulation vectors and configuration
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: patch_api_machines_id
+    delete:
+      tags:
+      - Machines
+      summary: Remove a machine
+      parameters:
+      - *id001
       responses:
-        "200":
-          description: Commit result
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Success"
-  /api/perception/diagnostic:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: delete_api_machines_id
+  /api/machines/{id}/process:
     post:
-      tags: [Perception]
-      summary: Diagnose machine input mapping for a universal input space
+      tags:
+      - Machines
+      summary: Process machine-local input vector
+      parameters:
+      - *id001
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [universalInputSpace]
+              required:
+              - inputVector
               properties:
-                universalInputSpace:
-                  $ref: "#/components/schemas/Vector"
+                inputVector:
+                  $ref: '#/components/schemas/Vector'
       responses:
-        "200":
-          description: Mapping diagnostic
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
-  /api/metrics:
-    get:
-      tags: [Metrics]
-      summary: Prometheus text-format exposition
-      description: |
-        CES coverage telemetry + runtime gauges in the standard Prometheus
-        text exposition format.  Every metric line carries a `runtime`
-        label (`runtime="cpp"` here) so a single scrape config can drive
-        a cross-runtime Grafana dashboard.
-
-        Metric families emitted: ces_machines_total, ces_sequences_total,
-        ces_vectors_total, ces_vector_matched_total, ces_vector_activated_total,
-        ces_sequence_outputs_total, ces_machine_steps_total,
-        ces_paging_decisions_total (governance routing), ces_deprecated_fires_total,
-        ces_unfired_sequences, ces_unfired_vectors, ces_machine_sequence_count,
-        ces_machine_vector_count, ces_registry_uptime_seconds, plus
-        re_runtime_dimension / re_runtime_required_dimension /
-        re_runtime_mapping_version.
-      responses:
-        "200":
-          description: Prometheus text-format metrics (Content-Type text/plain)
-          content:
-            text/plain:
-              schema:
-                type: string
-  /api/governance/route:
-    get:
-      tags: [Governance]
-      summary: Resolve a paging decision for one fired output
-      description: |
-        Walks the named machine's `metadata.triggerConfig.rules` looking
-        for a (sequenceId, outputMatches) match, then merges in
-        `metadata.governance` defaults — owner team, SLA, runbook,
-        escalation policy, contact roster.  Same precedence rule across
-        AI / CPP / LSP: `rule.governance.<field>` → `machine.metadata.governance.<field>` → null.
-      parameters:
-        - name: machineId
-          in: query
-          required: true
-          schema: { type: string }
-        - name: sequenceId
-          in: query
-          required: true
-          schema: { type: string }
-        - name: values
-          in: query
-          required: true
-          description: Comma-separated numeric values matching `outputMatches` on a rule.
-          schema: { type: string }
-      responses:
-        "200":
-          description: Resolved paging decision
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PagingDecision"
-        "400":
-          description: Missing or malformed query parameters
-        "404":
-          description: Machine not found or no triggerConfig rule matched
-  /api/runtime/vector-space:
-    get:
-      tags: [Runtime]
-      summary: Current perceptual-space shape
-      description: |
-        Returns the current vector dimension, the required dimension
-        (max offset+length across all registered machine mappings), the
-        encoding identifier, and a monotonic mapping version that
-        increments on every add/remove machine.  Mirrors the active Scala runtime's
-        endpoint of the same name.
-      responses:
-        "200":
-          description: Vector-space snapshot
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  dimension: { type: integer }
-                  requiredDimension: { type: integer }
-                  encoding: { type: string, example: "dense-float64-clamped-0-1" }
-                  mappingVersion: { type: integer }
-  /api/runtime/storage-footprint:
-    get:
-      tags: [Runtime]
-      summary: Option A1 per-machine storage footprint
-      description: |
-        Per-machine cell-storage footprint under the Option A1 narrow-cell
-        declaration (`perceptualMapping.bitsPerElement`).  Reports the
-        Float64 baseline + the equivalent packed bytes assuming every
-        machine emits at its declared bit width.
-      responses:
-        "200":
-          description: Per-machine storage footprint
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  machines:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        machineId: { type: string }
-                        machineName: { type: string }
-                        bitsPerElement: { type: integer, enum: [1, 2, 4, 8] }
-                        cells: { type: integer }
-                        float64Bytes: { type: integer }
-                        packedBytes: { type: integer }
-                        shrinkFactor: { type: number }
-  /api/perceive:
+                $ref: '#/components/schemas/MachineTransitionResult'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: post_api_machines_id_process
+  /api/machines/{id}/process-universal:
     post:
-      tags: [Perception]
-      summary: Process a perceptual-space vector through the simulator
+      tags:
+      - Machines
+      summary: Resolve universal input and process one machine
+      parameters:
+      - *id001
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PerceiveRequest"
+              type: object
+              required:
+              - universalInputSpace
+              properties:
+                universalInputSpace:
+                  $ref: '#/components/schemas/Vector'
       responses:
-        "200":
-          description: Simulation step
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SimulationStep"
+                $ref: '#/components/schemas/MachineTransitionResult'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: post_api_machines_id_process_universal
+  /api/machines/{id}/whatif:
+    post:
+      tags:
+      - Machines
+      summary: What-if with machine-local input vector
+      parameters:
+      - *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - inputVector
+              properties:
+                inputVector:
+                  $ref: '#/components/schemas/Vector'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineTransitionResult'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: post_api_machines_id_whatif
+  /api/machines/{id}/whatif-universal:
+    post:
+      tags:
+      - Machines
+      summary: What-if with universal input space
+      parameters:
+      - *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - universalInputSpace
+              properties:
+                universalInputSpace:
+                  $ref: '#/components/schemas/Vector'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineTransitionResult'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: post_api_machines_id_whatif_universal
+  /api/machines/process-universal/all:
+    post:
+      tags:
+      - Machines
+      summary: Resolve universal input and process all machines
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - universalInputSpace
+              properties:
+                universalInputSpace:
+                  $ref: '#/components/schemas/Vector'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_machines_process_universal_all
+  /api/machines/json/list:
+    get:
+      tags:
+      - Machines
+      summary: List machine JSON files on disk
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_machines_json_list
+  /api/machines/json/{name}:
+    get:
+      tags:
+      - Machines
+      summary: Load machine JSON file by filename
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: get_api_machines_json_name
+  /api/machines/json/import:
+    post:
+      tags:
+      - Machines
+      summary: Import machine JSON file by filename
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_machines_json_import
+  /api/machines/{id}/export:
+    get:
+      tags:
+      - Machines
+      summary: Export machine to JSON
+      parameters:
+      - *id001
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineMutationResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: get_api_machines_id_export
+  /api/machines/{id}/checkpoints:
+    get:
+      tags:
+      - Machines
+      summary: List machine checkpoints
+      parameters:
+      - *id001
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: get_api_machines_id_checkpoints
+    post:
+      tags:
+      - Machines
+      summary: Create machine checkpoint
+      parameters:
+      - *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: post_api_machines_id_checkpoints
+  /api/machines/{machineId}/checkpoints/{cpId}/restore:
+    post:
+      tags:
+      - Machines
+      summary: Restore machine from checkpoint
+      parameters:
+      - &id002
+        name: machineId
+        in: path
+        required: true
+        schema:
+          type: string
+      - &id003
+        name: cpId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: post_api_machines_machineId_checkpoints_cpId_restore
+  /api/machines/{machineId}/checkpoints/{cpId}:
+    delete:
+      tags:
+      - Machines
+      summary: Delete machine checkpoint
+      parameters:
+      - *id002
+      - *id003
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: delete_api_machines_machineId_checkpoints_cpId
+  /api/machine-graph:
+    get:
+      tags:
+      - Machine Graph
+      summary: Machine graph — nodes and overlap edges
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_machine_graph
+  /api/perceptual-simulation/configure/chunk:
+    post:
+      tags:
+      - Perceptual Simulation
+      summary: Append vectors and config to staging buffer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulationConfigureChunk'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_perceptual_simulation_configure_chunk
+  /api/perceptual-simulation/configure/commit:
+    post:
+      tags:
+      - Perceptual Simulation
+      summary: Commit staged simulation vectors
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_perceptual_simulation_configure_commit
+  /api/perceptual-simulation/start:
+    post:
+      tags:
+      - Perceptual Simulation
+      summary: Mark simulation running
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_perceptual_simulation_start
+  /api/perceptual-simulation/stop:
+    post:
+      tags:
+      - Perceptual Simulation
+      summary: Stop simulation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_perceptual_simulation_stop
+  /api/perceptual-simulation/step:
+    post:
+      tags:
+      - Perceptual Simulation
+      summary: Advance simulation by one step
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_perceptual_simulation_step
+  /api/perceptual-simulation/reset:
+    post:
+      tags:
+      - Perceptual Simulation
+      summary: Reset simulation state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_perceptual_simulation_reset
+  /api/perceptual-simulation/state:
+    get:
+      tags:
+      - Perceptual Simulation
+      summary: Current simulation state
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_perceptual_simulation_state
+  /api/perceptual-simulation/history:
+    get:
+      tags:
+      - Perceptual Simulation
+      summary: Bounded simulation step history
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_perceptual_simulation_history
+  /api/sampler/start:
+    post:
+      tags:
+      - Sampler
+      summary: Start sampler
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_sampler_start
+  /api/sampler/stop:
+    post:
+      tags:
+      - Sampler
+      summary: Stop sampler
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_sampler_stop
+  /api/sampler/sample:
+    post:
+      tags:
+      - Sampler
+      summary: Record a perceptual sample
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_sampler_sample
+  /api/sampler/stats:
+    get:
+      tags:
+      - Sampler
+      summary: Sampler statistics
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_sampler_stats
+  /api/perception/observe:
+    post:
+      tags:
+      - Perception
+      summary: Observe raw sensor values
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_perception_observe
+  /api/perception/diagnostic:
+    post:
+      tags:
+      - Perception
+      summary: Diagnose machine input mapping
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_perception_diagnostic
+  /api/perceive:
+    post:
+      tags:
+      - Perception
+      summary: Process perceptual-space vector through simulator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PerceiveRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulationStep'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_perceive
+  /api/governance/route:
+    get:
+      tags:
+      - Governance
+      summary: Resolve paging decision for a fired output
+      parameters:
+      - name: machineId
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: sequenceId
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: values
+        in: query
+        required: true
+        description: Comma-separated numeric values.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagingDecision'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_governance_route
+  /api/demo/multi-step:
+    get:
+      tags:
+      - Demos
+      summary: Multi-step sequence demonstration
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_demo_multi_step
+  /api/demo/data-center:
+    get:
+      tags:
+      - Demos
+      summary: Data-center scenario demonstration
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_demo_data_center
+  /api/demo/kleene-star:
+    get:
+      tags:
+      - Demos
+      summary: Kleene-star operator demonstration
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_demo_kleene_star
+  /api/engine/stream:
+    get:
+      tags:
+      - Streaming
+      summary: Get /api/engine/stream
+      description: 'Server-Sent Events stream. Frames: `data: <json>\n\n`; keepalive: `: keepalive\n\n` every 15 s.'
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+      operationId: get_api_engine_stream
 components:
   parameters:
     MachineId:
@@ -651,32 +1446,14 @@ components:
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
   schemas:
-    PagingDecision:
-      type: object
-      description: |
-        Governance contract resolved when a CES fires.  Same shape across
-        AI / CPP / LSP; produced by `/api/governance/route` and stamped
-        onto every mergeBatch entry whose `triggerConfig.rules` match.
-      properties:
-        machineId:       { type: string }
-        machineName:     { type: string }
-        sequenceId:      { type: string }
-        ragStatusCode:   { type: string, enum: [GREEN, AMBER, RED] }
-        processStatus:   { type: string, enum: [ok, info, warning, error] }
-        ownerTeam:       { type: string }
-        slaSeconds:      { type: integer, nullable: true }
-        runbook:         { type: string }
-        escalationPolicy: { type: string }
-        contact:
-          type: object
-          properties:
-            primary:   { type: string }
-            secondary: { type: string }
-        description:     { type: string }
-        source:          { type: string, enum: [rule-with-override, rule-only, machine-fallback] }
-        hasMachineGovernance: { type: boolean }
     Object:
       type: object
       additionalProperties: true
@@ -705,13 +1482,12 @@ components:
           type: number
         version:
           type: string
-          example: 1.0.0-cpp
     RealityConfig:
       type: object
       properties:
         vectorDimension:
-          type: number
-          example: 768
+          type: integer
+          example: 7680
         matchThreshold:
           type: number
           example: 0.5
@@ -724,21 +1500,17 @@ components:
       type: object
       properties:
         historyLimit:
-          type: number
+          type: integer
           example: 256
         includeMachineResults:
           type: boolean
         includePerceptualSpace:
           type: boolean
-        projectionControls:
-          type: object
-          additionalProperties:
-            type: string
     RuntimeOptionsPatch:
       type: object
       properties:
         historyLimit:
-          type: number
+          type: integer
           minimum: 0
         includeMachineResults:
           type: boolean
@@ -746,43 +1518,22 @@ components:
           type: boolean
     Region:
       type: object
-      required: [offset, length]
+      required:
+      - offset
+      - length
       properties:
         offset:
           type: integer
         length:
           type: integer
-    ActiveRegion:
-      type: object
-      properties:
-        offset:
-          type: integer
-        length:
-          type: integer
-        machineId:
-          type: string
-        type:
-          type: string
-          enum: [input, output]
-    MergeOperation:
-      type: object
-      properties:
-        region:
-          $ref: "#/components/schemas/Region"
-        machineId:
-          type: string
-        outputIndex:
-          type: number
     Machine:
       type: object
-      description: RealityEngine machine JSON. Unknown properties are preserved by schema clients.
       additionalProperties: true
+      description: RealityEngine machine JSON.
       properties:
         id:
           type: string
         name:
-          type: string
-        description:
           type: string
         version:
           type: string
@@ -800,7 +1551,7 @@ components:
         success:
           type: boolean
         machine:
-          $ref: "#/components/schemas/Machine"
+          $ref: '#/components/schemas/Machine'
         message:
           type: string
     MachineTransitionResult:
@@ -808,45 +1559,32 @@ components:
       additionalProperties: true
       properties:
         inputVector:
-          $ref: "#/components/schemas/Vector"
+          $ref: '#/components/schemas/Vector'
         timestamp:
           type: number
+        machineOutput:
+          type: array
+          items:
+            type: number
+            format: double
+          nullable: true
         sequenceResults:
           type: array
           items:
             type: object
             additionalProperties: true
-        machineOutput:
-          type: array
-          nullable: true
-          items:
-            type: number
-            format: double
-        arbiterMetadata:
-          type: object
-          additionalProperties: true
     SimulationStep:
       type: object
       properties:
         stepNumber:
-          type: number
+          type: integer
         timestamp:
           type: number
         perceptualSpace:
-          $ref: "#/components/schemas/Vector"
-        activeRegions:
-          type: array
-          items:
-            $ref: "#/components/schemas/ActiveRegion"
-        mergeBatch:
-          type: array
-          items:
-            $ref: "#/components/schemas/MergeOperation"
+          $ref: '#/components/schemas/Vector'
         machineResults:
           type: object
-          additionalProperties:
-            type: object
-            additionalProperties: true
+          additionalProperties: true
     SimulationConfigureChunk:
       type: object
       properties:
@@ -855,31 +1593,43 @@ components:
         vectors:
           type: array
           items:
-            $ref: "#/components/schemas/Vector"
+            $ref: '#/components/schemas/Vector'
         config:
           type: object
-          properties:
-            inputRegion:
-              $ref: "#/components/schemas/Region"
-            stepDelayMs:
-              type: number
-        inputRegion:
-          $ref: "#/components/schemas/Region"
-        stepDelayMs:
-          type: number
+          additionalProperties: true
     PerceiveRequest:
       type: object
-      required: [vector]
+      required:
+      - vector
       properties:
         vector:
-          $ref: "#/components/schemas/Vector"
-        matchAlgorithmOverride:
-          type: string
-          enum: [gte, equals]
+          $ref: '#/components/schemas/Vector'
         compact:
           type: boolean
-          description: When true, defaults includeMachineResults to false.
         includeMachineResults:
           type: boolean
         includePerceptualSpace:
           type: boolean
+    PagingDecision:
+      type: object
+      properties:
+        machineId:
+          type: string
+        sequenceId:
+          type: string
+        ragStatusCode:
+          type: string
+          enum:
+          - GREEN
+          - AMBER
+          - RED
+        ownerTeam:
+          type: string
+        runbook:
+          type: string
+        source:
+          type: string
+          enum:
+          - rule-with-override
+          - rule-only
+          - machine-fallback

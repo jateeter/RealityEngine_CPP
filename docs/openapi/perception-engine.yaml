@@ -1,805 +1,887 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
-  title: RealityEngine CPP - Perception Engine API
+  title: RealityEngine CPP — Perception Engine API
   version: 1.1.0-cpp
-  description: |
-    OpenAPI contract for the native C++ Perception Engine service.
+  description: 'OpenAPI contract for the C++ (Boost.Beast / Asio) Perception Engine runtime.
 
-    The service defaults to `http://localhost:5300` and pushes assembled
-    vectors into the Reality Engine at `http://localhost:5301/api/perceive`.
-    The MQTT bridge, when enabled, subscribes to a broker (default
-    `mqtt://yuma.lateraledge.cloud:1883`) and projects sensor messages
-    into perceptual-space regions via the mapping registry — same
-    contract across AI / CPP / LSP runtimes.
+
+    Default native port: **5300**.
+
+    Additional CPP instances add +100 per pair (cpp-2: 5400, cpp-3: 5500).
+
+    In Docker/CI deployments the TLS proxy exposes the PE at `https://localhost:3004`.
+
+
+    Wire-compatible with the LSP (Common Lisp) and Scala runtimes.
+
+    '
+  x-generated-from: /Users/johnt/workspace/GitHub/RealityEngine_CPP/SURFACE_SPEC.md
 servers:
-  - url: http://localhost:5300
-    description: Local Perception Engine default
+- url: http://localhost:5300
+  description: Local CPP Perception Engine (native, instance cpp-1)
+- url: https://localhost:3004
+  description: Docker TLS proxy (CI deployment)
 tags:
-  - name: System
-  - name: State
-  - name: Push
-  - name: Sources
-  - name: Sensors
-  - name: MQTT
-  - name: LocalAI
-  - name: Ollama
-  - name: OpenAI
-  - name: ACP
-  - name: HealthKit
-  - name: CareKit
-  - name: Completions
-  - name: Triggers
-  - name: Dispatch
-  - name: Machines
+- name: Configuration & Reset
+- name: Dispatch & Triggers
+- name: Info & Health
+- name: Integrations
+- name: MQTT Bridge
+- name: Machines Proxy
+- name: Push Cycle
+- name: Signals
+- name: Sources & Sensors
+- name: Streaming
 paths:
   /:
     get:
-      tags: [System]
+      tags:
+      - Info & Health
       summary: Service root
       responses:
-        "200":
-          description: Service identity
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_
   /api/health:
     get:
-      tags: [System]
+      tags:
+      - Info & Health
       summary: Health check
       responses:
-        "200":
-          description: Healthy service
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Health"
+                $ref: '#/components/schemas/Health'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_health
   /api/state:
     get:
-      tags: [State]
-      summary: Current perception engine state
+      tags:
+      - Info & Health
+      summary: Current PE state snapshot
       responses:
-        "200":
-          description: State snapshot
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
-  /api/config:
-    patch:
-      tags: [State]
-      summary: Update perception matching configuration
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                matchAlgorithm:
-                  type: string
-                  enum: [gte, equals]
-      responses:
-        "200":
-          description: Updated config
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  matchAlgorithm:
-                    type: string
-  /api/reset:
-    post:
-      tags: [State]
-      summary: Reset sources, persistent vector, and last-push state
-      responses:
-        "200":
-          description: Reset result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Success"
-        "409":
-          description: Push is already in progress
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_state
   /api/push:
     post:
-      tags: [Push]
-      summary: Push the assembled perceptual vector to Reality Engine
-      description: |
-        Synchronous by default. Set `async: true` to enqueue the push and poll
-        `GET /api/push/{id}`.
+      tags:
+      - Push Cycle
+      summary: Push assembled perceptual vector to RE
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PushRequest"
+              type: object
+              additionalProperties: true
       responses:
-        "200":
-          description: Synchronous push result
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PushResult"
-        "202":
-          description: Async push accepted
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PushAccepted"
-        "409":
-          description: Push already in progress; duplicate was coalesced
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "429":
-          description: Push worker queue is full
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_push
   /api/push/{id}:
     get:
-      tags: [Push]
-      summary: Read async push job status
+      tags:
+      - Push Cycle
+      summary: Read push result
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+      - &id001
+        name: id
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
-          description: Push job record
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PushJob"
-        "404":
-          $ref: "#/components/responses/NotFound"
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: get_api_push_id
   /api/auto/start:
     post:
-      tags: [Push]
-      summary: Mark auto-push running and set interval
+      tags:
+      - Push Cycle
+      summary: Start automatic push cycle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_auto_start
+  /api/auto/stop:
+    post:
+      tags:
+      - Push Cycle
+      summary: Stop automatic push cycle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_auto_stop
+  /api/config:
+    patch:
+      tags:
+      - Configuration & Reset
+      summary: Update PE matching configuration
       requestBody:
         required: false
         content:
           application/json:
             schema:
               type: object
-              properties:
-                intervalMs:
-                  type: number
-                  default: 1000
+              additionalProperties: true
       responses:
-        "200":
-          description: Auto state
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
-  /api/auto/stop:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: patch_api_config
+  /api/reset:
     post:
-      tags: [Push]
-      summary: Stop auto-push state
-      responses:
-        "200":
-          description: Stop result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Success"
-  /api/sources:
-    get:
-      tags: [Sources]
-      summary: List configured perception sources
-      responses:
-        "200":
-          description: Source list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  sources:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Source"
-    post:
-      tags: [Sources]
-      summary: Add a source
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SourceInput"
-      responses:
-        "200":
-          description: Created source
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  source:
-                    $ref: "#/components/schemas/Source"
-  /api/sources/{id}:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-    patch:
-      tags: [Sources]
-      summary: Replace a source by id
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SourceInput"
-      responses:
-        "200":
-          description: Updated source
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  source:
-                    $ref: "#/components/schemas/Source"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    delete:
-      tags: [Sources]
-      summary: Remove a source
-      responses:
-        "200":
-          description: Removal result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Success"
-  /api/sensors/{sensorId}:
-    post:
-      tags: [Sensors]
-      summary: Update an existing sensor source value
-      parameters:
-        - name: sensorId
-          in: path
-          required: true
-          schema:
-            type: string
+      tags:
+      - Configuration & Reset
+      summary: Reset PE state
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [values]
-              properties:
-                values:
-                  $ref: "#/components/schemas/Vector"
+              additionalProperties: true
       responses:
-        "200":
-          description: Sensor update result
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/signals:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_reset
+  /api/sources:
+    get:
+      tags:
+      - Sources & Sensors
+      summary: List test sources
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_sources
     post:
-      tags: [Sensors]
-      summary: Ingest a generic external signal and optionally trigger push
+      tags:
+      - Sources & Sensors
+      summary: Create test source
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SignalInput"
+              type: object
+              additionalProperties: true
       responses:
-        "200":
-          description: Signal ingestion result
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
-  /api/mqtt/status:
-    get:
-      tags: [MQTT]
-      summary: MQTT bridge connection state + counters
-      description: |
-        Returns `enabled=false` when MQTT_BROKER_HOST is unset or
-        MQTT_DISABLED=1.  Otherwise reports connection state, broker
-        config, and bridge-level counters: messagesReceived,
-        messagesMapped, messagesRejected, messagesUnmatched,
-        pushesTriggered.  Same shape across AI / CPP / LSP.
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_sources
+  /api/sources/{id}:
+    patch:
+      tags:
+      - Sources & Sensors
+      summary: Update test source
+      parameters:
+      - *id001
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
       responses:
-        "200":
-          description: Bridge status
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MqttBridgeStatus"
-  /api/mqtt/mappings:
-    get:
-      tags: [MQTT]
-      summary: Loaded MQTT mapping registry + per-rule counters
-      description: |
-        Returns the topic→region projection rules currently in force,
-        each decorated with runtime counters (received / mapped /
-        rejected / lastError).  Per the design rule, topics never
-        embed offsets — the registry is the sole authority.
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: patch_api_sources_id
+    delete:
+      tags:
+      - Sources & Sensors
+      summary: Delete test source
+      parameters:
+      - *id001
       responses:
-        "200":
-          description: Mapping registry snapshot
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MqttMappingsResponse"
-  /api/integrations/localai/status:
-    get:
-      tags: [LocalAI]
-      summary: localAIStack integration status
-      responses:
-        "200":
-          description: Integration status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/integrations/status:
-    get:
-      tags: [Completions]
-      summary: Provider-neutral integration registry status
-      description: |
-        Reports the startup-loaded `INTEGRATIONS_CONFIG` registry, including
-        configured providers and source mappings available to completion
-        callbacks.
-      responses:
-        "200":
-          description: Integration registry status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/integrations/localai/catalog:
-    get:
-      tags: [LocalAI]
-      summary: Discover allowed localAIStack integration endpoints
-      responses:
-        "200":
-          description: Integration catalog
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/integrations/localai/bootstrap:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: delete_api_sources_id
+  /api/sources/bootstrap-from-machines:
     post:
-      tags: [LocalAI]
-      summary: Register localAIStack sensor sources and import bridge machines
-      responses:
-        "200":
-          description: Bootstrap result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/integrations/localai/invoke:
-    post:
-      tags: [LocalAI]
-      summary: Invoke an allowed localAIStack endpoint
+      tags:
+      - Sources & Sensors
+      summary: Bootstrap test sources from machine corpus
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/LocalAIInvokeRequest"
+              type: object
+              additionalProperties: true
       responses:
-        "200":
-          description: Invocation result
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "403":
-          description: Endpoint is not allowed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "502":
-          description: localAIStack invocation failed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/integrations/ollama/status:
-    get:
-      tags: [Ollama]
-      summary: Local Ollama adapter status
-      description: Reports configured Ollama endpoint/model and `/api/tags` reachability.
-      responses:
-        "200":
-          description: Ollama adapter status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/integrations/ollama/dispatch:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_sources_bootstrap_from_machines
+  /api/sensors/{sensorId}:
     post:
-      tags: [Ollama]
-      summary: Deliver a recorded dispatch envelope to local Ollama
-      description: |
-        Caller-driven local adapter execution. PE reads an existing dispatch
-        record, calls Ollama `/api/chat`, annotates the dispatch ledger, and
-        optionally commits model-produced `values` through completion ingest.
-        PE push cycles do not wait on this endpoint.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/OllamaDispatchRequest"
-      responses:
-        "200":
-          description: Ollama dispatch completed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "502":
-          description: Ollama invocation failed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/integrations/openai/status:
-    get:
-      tags: [OpenAI]
-      summary: OpenAI Responses API adapter status
-      description: Reports configured OpenAI endpoint/model, API-key presence, and `/models` reachability when configured.
-      responses:
-        "200":
-          description: OpenAI adapter status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/integrations/openai/dispatch:
-    post:
-      tags: [OpenAI]
-      summary: Deliver a recorded dispatch envelope to the OpenAI Responses API
-      description: |
-        Caller-driven provider adapter execution. PE reads an existing dispatch
-        record, calls OpenAI `POST /v1/responses`, annotates the dispatch
-        ledger, and optionally commits model-produced `values` through
-        completion ingest. PE push cycles do not wait on this endpoint.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/OpenAIDispatchRequest"
-      responses:
-        "200":
-          description: OpenAI dispatch completed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "502":
-          description: OpenAI invocation failed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/integrations/acp/status:
-    get:
-      tags: [ACP]
-      summary: ACP/OpenClaw xACP adapter status
-      description: |
-        Reports the configured OpenClaw ACP command, Gateway URL, session key,
-        target agent, completion source mapping, and fixed no-wait dispatch
-        contract. This endpoint does not contact OpenClaw.
-      responses:
-        "200":
-          description: ACP adapter status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/integrations/acp/dispatch:
-    post:
-      tags: [ACP]
-      summary: Accept a recorded dispatch envelope for external ACP/OpenClaw handling
-      description: |
-        Caller-driven no-wait adapter receipt. PE reads an existing dispatch
-        record, annotates the dispatch ledger with an OpenClaw/xACP handoff,
-        and returns `202 Accepted`. PE does not launch OpenClaw and does not
-        wait for ACP output. Finished ACP work must return through
-        `/api/integrations/completions`.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AcpDispatchRequest"
-      responses:
-        "202":
-          description: ACP handoff accepted and recorded
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/integrations/healthkit/status:
-    get:
-      tags: [HealthKit]
-      summary: HealthKit bridge ingest contract status
-      description: |
-        Reports PE-side bridge settings. Native HealthKit authorization,
-        anchored reads, device storage, and HealthKit writes are owned by an
-        external Apple-platform bridge app, not this service.
-      responses:
-        "200":
-          description: HealthKit bridge contract status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/integrations/healthkit/ingest:
-    post:
-      tags: [HealthKit]
-      summary: Ingest bridge-approved HealthKit samples into PE sources
-      description: |
-        Accepts normalized values from a native Apple HealthKit bridge and maps
-        them into configured PE sensor sources. The endpoint accepts one sample
-        or `samples[]`; it does not perform native HealthKit authorization,
-        anchored queries, or HealthKit writes.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/HealthKitIngestRequest"
-      responses:
-        "200":
-          description: HealthKit sample(s) ingested
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-        "207":
-          description: Batch accepted with one or more failed samples
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          description: Optional bridge token rejected
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/integrations/carekit/status:
-    get:
-      tags: [CareKit]
-      summary: CareKit bridge ingest contract status
-      description: |
-        Reports PE-side bridge settings. Native CareKit store access, care
-        plans, tasks, outcomes, contacts, UI, and writeback are owned by an
-        external Apple-platform bridge app, not this service.
-      responses:
-        "200":
-          description: CareKit bridge contract status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/integrations/carekit/ingest:
-    post:
-      tags: [CareKit]
-      summary: Ingest bridge-approved CareKit samples into PE sources
-      description: |
-        Accepts normalized values from a native Apple CareKit bridge and maps
-        them into configured PE sensor sources. The endpoint accepts one task or
-        outcome sample or `samples[]`; it does not perform native CareKit store
-        access or writeback.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CareKitIngestRequest"
-      responses:
-        "200":
-          description: CareKit sample(s) ingested
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-        "207":
-          description: Batch accepted with one or more failed samples
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          description: Optional bridge token rejected
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/integrations/completions:
-    post:
-      tags: [Completions]
-      summary: Commit provider or agent completion as a PE source update
-      description: |
-        Accepts completion callbacks from OpenAI, Ollama, MCP, CLI, HTTPS, or
-        WebSocket adapters and maps them into the same sensor-source path used
-        by `/api/signals`. The request does not wait for agent work; it records
-        a completed result that has already arrived.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CompletionInput"
-      responses:
-        "200":
-          description: Completion mapped into a PE source
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/triggers/status:
-    get:
-      tags: [Triggers]
-      summary: Trigger envelope dispatcher status
-      description: |
-        Reports whether PE trigger-envelope recording is enabled, the configured
-        dispatch mode, endpoint metadata, and counters for envelopes created or
-        dropped. Trigger dispatch is asynchronous with respect to PE cycles.
-      responses:
-        "200":
-          description: Trigger dispatcher status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/dispatch/ledger:
-    get:
-      tags: [Dispatch]
-      summary: Recent trigger dispatch ledger records
-      description: |
-        Returns recent fire-and-record trigger envelopes. The ledger is audit
-        metadata, not a workflow queue; external completions return later
-        through ordinary PE source mappings.
-      responses:
-        "200":
-          description: Dispatch ledger snapshot
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-  /api/dispatch/records/{id}:
-    parameters:
-      - name: id
+      tags:
+      - Sources & Sensors
+      summary: Ingest a sensor reading
+      parameters:
+      - name: sensorId
         in: path
         required: true
         schema:
           type: string
-    get:
-      tags: [Dispatch]
-      summary: Read one dispatch ledger record
-      responses:
-        "200":
-          description: Dispatch record
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Object"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    patch:
-      tags: [Dispatch]
-      summary: Annotate dispatch delivery state
-      description: |
-        Updates audit metadata for a trigger dispatch record, such as adapter
-        delivery status or provider run id. This is not a completion path and
-        does not resume PE or RE work; completed agent results still return via
-        `/api/integrations/completions` or `/api/signals`.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/DispatchRecordUpdate"
+              type: object
+              additionalProperties: true
       responses:
-        "200":
-          description: Updated dispatch record
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_sensors_sensorId
+  /api/signals:
+    post:
+      tags:
+      - Signals
+      summary: Ingest a signal batch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_signals
   /api/machines:
     get:
-      tags: [Machines]
-      summary: Proxy Reality Engine machine list
+      tags:
+      - Machines Proxy
+      summary: List loaded machines
       responses:
-        "200":
-          description: Machine list from Reality Engine
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Object"
-        "502":
-          description: Reality Engine proxy failure
+                type: object
+                properties:
+                  machines:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Machine'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_machines
+  /api/integrations/status:
+    get:
+      tags:
+      - Integrations
+      summary: All integration provider status
+      responses:
+        '200':
+          description: Success
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_integrations_status
+  /api/integrations/completions:
+    post:
+      tags:
+      - Integrations
+      summary: Request AI completion from configured provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_integrations_completions
+  /api/integrations/ollama/status:
+    get:
+      tags:
+      - Integrations
+      summary: Ollama integration status
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_integrations_ollama_status
+  /api/integrations/ollama/dispatch:
+    post:
+      tags:
+      - Integrations
+      summary: Dispatch prompt to Ollama
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_integrations_ollama_dispatch
+  /api/integrations/openai/status:
+    get:
+      tags:
+      - Integrations
+      summary: OpenAI-compatible integration status
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_integrations_openai_status
+  /api/integrations/openai/dispatch:
+    post:
+      tags:
+      - Integrations
+      summary: Dispatch prompt to OpenAI-compatible endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_integrations_openai_dispatch
+  /api/integrations/acp/status:
+    get:
+      tags:
+      - Integrations
+      summary: ACP / OpenClaw integration status
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_integrations_acp_status
+  /api/integrations/acp/dispatch:
+    post:
+      tags:
+      - Integrations
+      summary: Dispatch request to ACP / OpenClaw gateway
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_integrations_acp_dispatch
+  /api/integrations/healthkit/status:
+    get:
+      tags:
+      - Integrations
+      summary: HealthKit bridge status
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_integrations_healthkit_status
+  /api/integrations/healthkit/ingest:
+    post:
+      tags:
+      - Integrations
+      summary: Ingest HealthKit samples
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HealthKitIngestRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthKitIngestResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_integrations_healthkit_ingest
+  /api/integrations/carekit/status:
+    get:
+      tags:
+      - Integrations
+      summary: CareKit bridge status
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_integrations_carekit_status
+  /api/integrations/carekit/ingest:
+    post:
+      tags:
+      - Integrations
+      summary: Ingest CareKit samples
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CareKitIngestRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CareKitIngestResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_integrations_carekit_ingest
+  /api/integrations/localai/status:
+    get:
+      tags:
+      - Integrations
+      summary: localAI integration status
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_integrations_localai_status
+  /api/integrations/localai/catalog:
+    get:
+      tags:
+      - Integrations
+      summary: localAI model catalog
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_integrations_localai_catalog
+  /api/integrations/localai/bootstrap:
+    post:
+      tags:
+      - Integrations
+      summary: Bootstrap localAI models
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_integrations_localai_bootstrap
+  /api/integrations/localai/invoke:
+    post:
+      tags:
+      - Integrations
+      summary: Invoke a localAI model
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_integrations_localai_invoke
+  /api/dispatch/ledger:
+    get:
+      tags:
+      - Dispatch & Triggers
+      summary: Dispatch event ledger
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_dispatch_ledger
+  /api/dispatch/records/{id}:
+    get:
+      tags:
+      - Dispatch & Triggers
+      summary: Read dispatch record
+      parameters:
+      - *id001
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DispatchRecord'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: get_api_dispatch_records_id
+    patch:
+      tags:
+      - Dispatch & Triggers
+      summary: Update dispatch record
+      parameters:
+      - *id001
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DispatchRecord'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: patch_api_dispatch_records_id
+  /api/triggers/status:
+    get:
+      tags:
+      - Dispatch & Triggers
+      summary: Trigger evaluation status
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_triggers_status
+  /api/mqtt/status:
+    get:
+      tags:
+      - MQTT Bridge
+      summary: MQTT bridge status
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MqttBridgeStatus'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_mqtt_status
+  /api/mqtt/mappings:
+    get:
+      tags:
+      - MQTT Bridge
+      summary: MQTT sensor mapping registry
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MqttMappingsResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_mqtt_mappings
+    put:
+      tags:
+      - MQTT Bridge
+      summary: Replace MQTT sensor mapping registry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MqttMappingsResponse'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MqttMappingsResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: put_api_mqtt_mappings
+  /api/mqtt/enable:
+    post:
+      tags:
+      - MQTT Bridge
+      summary: Enable MQTT bridge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_mqtt_enable
+  /api/mqtt/disable:
+    post:
+      tags:
+      - MQTT Bridge
+      summary: Disable MQTT bridge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_mqtt_disable
+  /api/events:
+    get:
+      tags:
+      - Streaming
+      summary: Get /api/events
+      description: 'Server-Sent Events stream. Frames: `data: <json>\n\n`; keepalive: `: keepalive\n\n` every 15 s.'
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+      operationId: get_api_events
+  /ws:
+    websocket:
+      tags:
+      - Streaming
+      summary: Websocket /ws
+      description: WebSocket endpoint. RFC 6455 text frames; ping every 15 s on idle. Each frame is a JSON event object.
+      responses:
+        '101':
+          description: Switching Protocols — WebSocket handshake
+      operationId: websocket_ws
 components:
   responses:
-    BadRequest:
-      description: Bad request
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
     NotFound:
       description: Resource not found
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: '#/components/schemas/Error'
   schemas:
     Object:
       type: object
       additionalProperties: true
-    Vector:
-      type: array
-      items:
-        type: number
-        format: double
     Success:
       type: object
       properties:
@@ -807,10 +889,7 @@ components:
           type: boolean
     Error:
       type: object
-      additionalProperties: true
       properties:
-        success:
-          type: boolean
         error:
           type: string
     Health:
@@ -821,361 +900,52 @@ components:
           example: healthy
         timestamp:
           type: number
-    Region:
-      type: object
-      required: [offset, length]
-      properties:
-        offset:
-          type: integer
-        length:
-          type: integer
+        version:
+          type: string
     Source:
       type: object
-      description: |
-        Perception source. The service auto-materializes inactive `test`
-        sources from loaded machine `inputSequences`; their regions match the
-        machine input mapping, their inputs match the authored test vectors, and
-        their `metadata` and `sequence` fields preserve the full authored
-        test-sequence representation.
-      additionalProperties: true
       properties:
         id:
           type: string
-        type:
-          type: string
-          enum: [test, simulated, sensor]
-        kind:
-          type: string
-        name:
-          type: string
-        active:
-          type: boolean
-          description: Auto-generated machine test-sequence sources default to false.
-        region:
-          $ref: "#/components/schemas/Region"
         machineId:
           type: string
-        machineName:
-          type: string
-        sequenceName:
-          type: string
-        inputs:
-          type: array
-          items:
-            $ref: "#/components/schemas/Vector"
-        metadata:
-          type: object
-          description: Authored metadata from the machine input sequence.
-        sequence:
-          type: object
-          description: Full authored machine input sequence represented by this source.
-        loop:
-          type: boolean
         sensorId:
           type: string
-        lastValue:
-          $ref: "#/components/schemas/Vector"
-        ttlMs:
-          type: number
-        pattern:
-          type: string
-          enum: [constant, sine, square, sawtooth]
-        frequency:
-          type: number
-        amplitude:
-          type: number
-        dcOffset:
-          type: number
-    SourceInput:
-      allOf:
-        - $ref: "#/components/schemas/Source"
-      required: [id]
-    PushRequest:
-      type: object
-      properties:
-        compact:
+        enabled:
           type: boolean
-          description: When true, defaults includeMachineResults to false.
-        includeMachineResults:
-          type: boolean
-        async:
-          type: boolean
-          default: false
-    PushAccepted:
-      type: object
-      properties:
-        success:
-          type: boolean
-        accepted:
-          type: boolean
-        jobId:
-          type: string
-        statusEndpoint:
-          type: string
-    PushResult:
-      type: object
-      additionalProperties: true
-      properties:
-        success:
-          type: boolean
-        step:
-          nullable: true
-          type: object
-          additionalProperties: true
-        timestamp:
-          type: number
-        globalStep:
-          type: number
-        error:
-          nullable: true
-          type: string
-    PushJob:
-      type: object
-      properties:
-        id:
-          type: string
-        status:
-          type: string
-          enum: [queued, running, completed, failed]
-        createdAt:
-          type: number
-        updatedAt:
-          type: number
-        result:
-          $ref: "#/components/schemas/PushResult"
-    SignalInput:
-      type: object
-      required: [values]
-      properties:
-        sensorId:
-          type: string
-        name:
-          type: string
-        region:
-          $ref: "#/components/schemas/Region"
-        values:
-          $ref: "#/components/schemas/Vector"
-        active:
-          type: boolean
-        ttlMs:
-          type: number
-          default: 30000
-        triggerPush:
-          type: boolean
-          default: false
-        compactPush:
-          type: boolean
-          default: false
-    CompletionInput:
-      type: object
-      required: [values]
-      properties:
-        provider:
-          type: string
-          description: openai, ollama, localai, mcp, cli, https, ws, or another adapter id.
-        agent:
-          type: string
-        agentId:
-          type: string
-        completionId:
-          type: string
-        sourceMappingId:
-          type: string
-          description: Identifier from the startup-loaded integration registry.
-        mappingId:
-          type: string
-          deprecated: true
-          description: Compatibility alias for sourceMappingId.
-        correlationId:
-          type: string
-        envelopeId:
-          type: string
-        sensorId:
-          type: string
-        name:
-          type: string
-        region:
-          $ref: "#/components/schemas/Region"
-        sourceMapping:
-          type: object
-          additionalProperties: true
-          description: Optional startup-resolved source mapping; direct fields override this block.
-        values:
-          $ref: "#/components/schemas/Vector"
-        ttlMs:
-          type: number
-          default: 300000
-        metadata:
-          type: object
-          additionalProperties: true
-        triggerPush:
-          type: boolean
-          default: false
-        compactPush:
-          type: boolean
-          default: true
-    LocalAIInvokeRequest:
-      type: object
-      properties:
-        method:
-          type: string
-          enum: [GET, POST]
-          default: POST
-        endpoint:
-          type: string
-          example: /graph/rag
-        path:
-          type: string
-        payload:
-          type: object
-          additionalProperties: true
-    OllamaDispatchRequest:
-      type: object
-      required: [dispatchId]
-      properties:
-        dispatchId:
-          type: string
-        id:
-          type: string
-          deprecated: true
-          description: Compatibility alias for dispatchId.
-        model:
-          type: string
-        sourceMappingId:
-          type: string
-        prompt:
-          type: string
-        systemPrompt:
-          type: string
-        payload:
-          type: object
-          additionalProperties: true
-          description: Complete Ollama `/api/chat` payload override.
-        format:
-          type: string
-        formatJson:
-          type: boolean
-          default: true
-        options:
-          type: object
-          additionalProperties: true
-        commitCompletion:
-          type: boolean
-          default: true
-        triggerPush:
-          type: boolean
-          default: false
-        values:
-          $ref: "#/components/schemas/Vector"
-    OpenAIDispatchRequest:
-      type: object
-      required: [dispatchId]
-      properties:
-        dispatchId:
-          type: string
-        id:
-          type: string
-          deprecated: true
-          description: Compatibility alias for dispatchId.
-        model:
-          type: string
-        sourceMappingId:
-          type: string
-        prompt:
-          type: string
-        instructions:
-          type: string
-        payload:
-          type: object
-          additionalProperties: true
-          description: Complete OpenAI `POST /v1/responses` payload override.
-        maxOutputTokens:
+        intervalMs:
           type: integer
-        temperature:
-          type: number
-        reasoning:
-          type: object
-          additionalProperties: true
-        text:
-          type: object
-          additionalProperties: true
-        commitCompletion:
-          type: boolean
-          default: true
-        triggerPush:
-          type: boolean
-          default: false
-        store:
-          type: boolean
-          default: true
-        values:
-          $ref: "#/components/schemas/Vector"
-    AcpDispatchRequest:
-      type: object
-      required: [dispatchId]
-      properties:
-        dispatchId:
-          type: string
-        targetAgent:
-          type: string
-          description: OpenClaw target agent or Gateway agent id.
-        sessionKey:
-          type: string
-          description: OpenClaw Gateway session key, for example agent:main:main.
-        sourceMappingId:
-          type: string
-          default: agent-completion-risk
-        prompt:
-          type: string
-        gatewayUrl:
-          type: string
-        command:
-          type: string
-          default: openclaw acp
-        externalRunId:
-          type: string
     HealthKitIngestRequest:
       type: object
+      description: Single sample (flat) or batch.
       properties:
-        bridgeId:
-          type: string
-        bridgeToken:
-          type: string
-          description: Optional shared bridge token when HEALTHKIT_BRIDGE_TOKEN is configured.
-        sampleType:
-          type: string
-          description: HealthKit sample type identifier normalized by the native bridge.
         type:
           type: string
-          deprecated: true
-          description: Compatibility alias for sampleType.
-        unit:
-          type: string
-        sourceMappingId:
-          type: string
-        sourceMapping:
-          type: object
-          additionalProperties: true
-        sensorId:
-          type: string
-        region:
-          $ref: "#/components/schemas/Region"
+          example: HKQuantityTypeIdentifierHeartRate
         value:
           type: number
-        values:
-          $ref: "#/components/schemas/Vector"
-        observedAtMs:
-          type: number
-        metadata:
-          type: object
-          additionalProperties: true
-        triggerPush:
-          type: boolean
-          default: false
-        compactPush:
-          type: boolean
-          default: true
+        sourceName:
+          type: string
+        bridgeId:
+          type: string
         samples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    HealthKitIngestResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        bridgeId:
+          type: string
+        resolved:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        unmapped:
           type: array
           items:
             type: object
@@ -1185,140 +955,72 @@ components:
       properties:
         bridgeId:
           type: string
-        bridgeToken:
-          type: string
-          description: Optional shared bridge token when CAREKIT_BRIDGE_TOKEN is configured.
         sampleType:
-          type: string
-          description: CareKit task or outcome sample type normalized by the native bridge.
-        type:
-          type: string
-          deprecated: true
-          description: Compatibility alias for sampleType.
-        taskId:
-          type: string
-        carePlanId:
           type: string
         sourceMappingId:
           type: string
-        sourceMapping:
-          type: object
-          additionalProperties: true
-        sensorId:
-          type: string
-        region:
-          $ref: "#/components/schemas/Region"
-        value:
-          type: number
         values:
-          $ref: "#/components/schemas/Vector"
-        observedAtMs:
-          type: number
-        metadata:
-          type: object
-          additionalProperties: true
-        triggerPush:
+          type: array
+          items:
+            type: number
+    CareKitIngestResponse:
+      type: object
+      properties:
+        success:
           type: boolean
-          default: false
-        compactPush:
-          type: boolean
-          default: true
-        samples:
+        bridgeId:
+          type: string
+        results:
           type: array
           items:
             type: object
             additionalProperties: true
-    DispatchRecordUpdate:
-      type: object
-      properties:
-        status:
-          type: string
-          description: Adapter-visible status such as observed, delivered, failed, or superseded.
-        provider:
-          type: string
-        adapter:
-          type: string
-        externalRunId:
-          type: string
-        attempts:
-          type: integer
-        incrementAttempts:
-          type: boolean
-          default: false
-        error:
-          type: string
-        clearError:
-          type: boolean
-          default: false
-        providerReceipt:
-          type: object
-          additionalProperties: true
     MqttBridgeStatus:
       type: object
-      description: Snapshot returned by GET /api/mqtt/status.
       properties:
-        enabled:    { type: boolean }
-        connected:  { type: boolean }
-        brokerHost: { type: string }
-        brokerPort: { type: integer }
-        clientId:   { type: string }
-        mappings:   { type: integer, description: number of mapping rules loaded }
-        bridge:
-          type: object
-          properties:
-            messagesReceived:        { type: integer }
-            messagesMapped:          { type: integer }
-            messagesRejected:        { type: integer }
-            messagesUnmatched:       { type: integer }
-            messagesRetainedDropped: { type: integer }
-            pushesTriggered:         { type: integer }
+        enabled:
+          type: boolean
+        connected:
+          type: boolean
+        brokerUrl:
+          type: string
+        clientId:
+          type: string
+        mappingCount:
+          type: integer
     MqttMappingRule:
       type: object
-      description: |
-        One topic→region projection rule.  Same schema across AI / CPP / LSP.
+      required:
+      - topic
+      - sensorId
       properties:
-        id:               { type: string }
-        topicFilter:      { type: string, description: "MQTT v3.1.1 filter with + and # wildcards" }
-        sensorIdTemplate: { type: string, description: "{1}, {2}, ... interpolate captures" }
-        region:
-          type: object
-          properties:
-            offset: { type: integer }
-            length: { type: integer }
-        extract:
-          type: object
-          properties:
-            type:    { type: string, enum: [csv-float, json, raw, single-float] }
-            pointer: { type: string, description: "RFC 6901 JSON pointer (when type=json)" }
-            index:   { type: integer, description: "CSV element index (optional)" }
-        normalize:
-          type: object
-          properties:
-            mode:   { type: string, enum: [passthrough, minmax, linear, band] }
-            min:    { type: number }
-            max:    { type: number }
-            scale:  { type: number }
-            offset: { type: number }
-            clamp:  { type: boolean }
-        ttlMs:          { type: integer }
-        qos:            { type: integer, enum: [0, 1, 2] }
-        acceptRetained: { type: boolean }
-        pushMode:       { type: string, enum: [debounced, manual, immediate] }
-        debounceMs:     { type: integer }
-        counters:
-          type: object
-          properties:
-            received:        { type: integer }
-            mapped:          { type: integer }
-            rejected:        { type: integer }
-            stale:           { type: integer }
-            lastMessageAtMs: { type: integer }
-            lastError:       { type: string }
-            lastErrorAtMs:   { type: integer }
+        topic:
+          type: string
+        sensorId:
+          type: string
+        field:
+          type: string
+        scale:
+          type: number
+        offset:
+          type: number
     MqttMappingsResponse:
       type: object
       properties:
-        enabled:  { type: boolean }
         mappings:
           type: array
-          items: { $ref: "#/components/schemas/MqttMappingRule" }
+          items:
+            $ref: '#/components/schemas/MqttMappingRule'
+    DispatchRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        machineId:
+          type: string
+        sequenceId:
+          type: string
+        timestamp:
+          type: number
+        status:
+          type: string
