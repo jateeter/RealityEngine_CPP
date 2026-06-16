@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -17,7 +18,27 @@ class RealityService {
 public:
   RealityService(const std::string& machinesDir, int vectorDimension, const LoadOptions& loadOpts = {})
       : dimension(vectorDimension), simulator(vectorDimension), perception(vectorDimension), machinesDirectory(machinesDir) {
-    for (const auto& m : load_machines_from_directory(machinesDir, loadOpts)) add_machine(m);
+    namespace fs = std::filesystem;
+    std::cerr << "Reality Engine startup — machinesDir=" << machinesDir
+              << " vectorDimension=" << vectorDimension
+              << " strictSta=" << (loadOpts.strictSta ? "true" : "false") << "\n";
+
+    if (!fs::exists(machinesDir)) {
+      throw std::runtime_error("machine directory not found: " + machinesDir);
+    }
+    if (!fs::is_directory(machinesDir)) {
+      throw std::runtime_error("machine path is not a directory: " + machinesDir);
+    }
+
+    size_t discovered = 0;
+    for (const auto& p : fs::directory_iterator(machinesDir)) {
+      if (p.path().extension() == ".json") ++discovered;
+    }
+    std::cerr << "Reality Engine machine discovery — jsonFiles=" << discovered << "\n";
+
+    auto loadedMachines = load_machines_from_directory(machinesDir, loadOpts);
+    for (const auto& m : loadedMachines) add_machine(m);
+    std::cerr << "Reality Engine machine registry — loaded=" << loadedMachines.size() << "\n";
   }
 
   void mount(http::Server& server) {
@@ -830,16 +851,21 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-  int port = argc > 1 ? std::stoi(argv[1]) : 5301;
-  std::string machinesDir = argc > 2 ? argv[2] : "../RealityEngine_Machines/machines";
-  int vectorDimension = argc > 3 ? std::stoi(argv[3]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 7680);
-  // RE_STRICT_STA=1 opts the corpus into life-safety STA enforcement at load.
-  // Off by default to match the AI runtime's permissive production behaviour.
-  LoadOptions loadOpts;
-  if (const char* s = std::getenv("RE_STRICT_STA"); s && *s && std::string(s) != "0") loadOpts.strictSta = true;
-  http::Server server;
-  RealityService service(machinesDir, vectorDimension, loadOpts);
-  service.mount(server);
-  server.listen(port);
-  return 0;
+  try {
+    int port = argc > 1 ? std::stoi(argv[1]) : 5301;
+    std::string machinesDir = argc > 2 ? argv[2] : "../RealityEngine_Machines/machines";
+    int vectorDimension = argc > 3 ? std::stoi(argv[3]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 7680);
+    // RE_STRICT_STA=1 opts the corpus into life-safety STA enforcement at load.
+    // Off by default to match the AI runtime's permissive production behaviour.
+    LoadOptions loadOpts;
+    if (const char* s = std::getenv("RE_STRICT_STA"); s && *s && std::string(s) != "0") loadOpts.strictSta = true;
+    http::Server server;
+    RealityService service(machinesDir, vectorDimension, loadOpts);
+    service.mount(server);
+    server.listen(port);
+    return 0;
+  } catch (const std::exception& e) {
+    std::cerr << "Reality Engine startup failed: " << e.what() << "\n";
+    return 1;
+  }
 }

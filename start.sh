@@ -253,7 +253,7 @@ if [ "${RE_LOAD_MACHINES}" != "0" ]; then
   fi
   MACHINE_COUNT="$(machine_count_from_api "http://localhost:${REALITY_ENGINE_PORT}")"
   if [ "${MACHINE_COUNT:-0}" -le 0 ]; then
-    tail -60 "$LOG_DIR/reality_engine.log" || true
+    tail -60 "$RE_LOG_FILE" || true
     ./stop.sh >/dev/null 2>&1 || true
     die "Reality Engine started but loaded 0 machines from $MACHINES_DIR"
   fi
