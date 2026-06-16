@@ -175,13 +175,16 @@ data = json.loads(sys.argv[1])
 if data.get("success") is not True:
     raise SystemExit(f"HealthKit ingest failed: {data!r}")
 results = data.get("results", [])
-if len(results) != 1 or results[0].get("success") is not True:
+if results:
+    raise SystemExit(f"HealthKit returned legacy results shape: {data!r}")
+resolved = data.get("resolved", [])
+if len(resolved) != 1 or resolved[0].get("resolved") is not True:
     raise SystemExit(f"HealthKit result mismatch: {data!r}")
-if results[0].get("sourceMappingId") != "healthkit-activity":
-    raise SystemExit(f"HealthKit source mapping mismatch: {results[0]!r}")
-if results[0].get("sensorId") != "healthkit.step-count":
-    raise SystemExit(f"HealthKit sensor id mismatch: {results[0]!r}")
-source = results[0].get("result", {}).get("source", {})
+if resolved[0].get("sourceMappingId") != "healthkit-activity":
+    raise SystemExit(f"HealthKit source mapping mismatch: {resolved[0]!r}")
+if resolved[0].get("sensorId") != "healthkit.step-count":
+    raise SystemExit(f"HealthKit sensor id mismatch: {resolved[0]!r}")
+source = resolved[0].get("source", {})
 if source.get("lastValue") != [1, 0, 0.9, 0]:
     raise SystemExit(f"HealthKit lastValue mismatch: {source!r}")
 ' "$payload"
