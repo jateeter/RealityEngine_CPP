@@ -9,7 +9,7 @@ info:
 
     Additional CPP instances add +100 per pair (cpp-2: 5401/5400, cpp-3: 5501/5500).
 
-    In Docker/CI deployments the TLS proxy exposes the RE at `https://localhost:3000`.
+    In Docker/CI deployments the TLS proxy exposes the RE at `https://localhost:5001`.
 
 
     Wire-compatible with the LSP (Common Lisp) and Scala runtimes.
@@ -21,7 +21,7 @@ info:
 servers:
 - url: http://localhost:5301
   description: Local CPP Reality Engine (native, instance cpp-1)
-- url: https://localhost:3000
+- url: https://localhost:5001
   description: Docker TLS proxy (CI deployment)
 tags:
 - name: Configuration
