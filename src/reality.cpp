@@ -606,6 +606,7 @@ void PerceptualSpaceSimulator::add_machine(const Machine& machine) {
   }
   machines[machine.id] = machine;
   ++mappingVersion;
+  edgesDirty = true;
 
   // Compose / meta-CES subscriptions — declared in
   // metadata.compose.subscriptions = [{ producerMachineId,
@@ -630,7 +631,7 @@ void PerceptualSpaceSimulator::add_machine(const Machine& machine) {
 }
 bool PerceptualSpaceSimulator::remove_machine(const std::string& machineId) {
   bool removed = machines.erase(machineId) > 0;
-  if (removed) ++mappingVersion;
+  if (removed) { ++mappingVersion; edgesDirty = true; }
   // Drop subscriptions this machine had registered.
   for (auto it = eventBusSubscriptions.begin(); it != eventBusSubscriptions.end(); ) {
     auto& list = it->second;
@@ -858,20 +859,36 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
   }
   return step;
 }
+void PerceptualSpaceSimulator::rebuild_edge_cache() const {
+  cachedEdges.clear();
+  for (const auto& [sid, sm] : machines) {
+    if (!sm.perceptualMapping) continue;
+    const auto& so = sm.perceptualMapping->output;
+    int send = so.offset + so.length;
+    for (const auto& [tid, tm] : machines) {
+      if (sid == tid || !tm.perceptualMapping) continue;
+      const auto& ti = tm.perceptualMapping->input;
+      int tend = ti.offset + ti.length;
+      if (!(send <= ti.offset || so.offset >= tend))
+        cachedEdges.push_back(Json::Object{{"source", sid}, {"target", tid},
+            {"sourceRegion", to_json(so)}, {"targetRegion", to_json(ti)}, {"overlap", true}});
+    }
+  }
+  edgesDirty = false;
+}
+
 Json PerceptualSpaceSimulator::machine_graph_data() const {
   Json::Array nodes;
-  Json::Array edges;
   for (const auto& [id, m] : machines) {
-    auto mapping = *m.perceptualMapping;
-    nodes.push_back(Json::Object{{"id", id}, {"name", m.name}, {"description", m.description}, {"inputMapping", to_json(mapping.input)}, {"outputMapping", to_json(mapping.output)}, {"metadata", m.metadata}});
+    if (!m.perceptualMapping) continue;
+    const auto& mapping = *m.perceptualMapping;
+    nodes.push_back(Json::Object{{"id", id}, {"name", m.name}, {"description", m.description},
+        {"inputMapping", to_json(mapping.input)}, {"outputMapping", to_json(mapping.output)},
+        {"metadata", m.metadata}});
   }
-  for (const auto& [sid, sm] : machines) for (const auto& [tid, tm] : machines) if (sid != tid) {
-    auto so = sm.perceptualMapping->output;
-    auto ti = tm.perceptualMapping->input;
-    int send = so.offset + so.length, tend = ti.offset + ti.length;
-    if (!(send <= ti.offset || so.offset >= tend)) edges.push_back(Json::Object{{"source", sid}, {"target", tid}, {"sourceRegion", to_json(so)}, {"targetRegion", to_json(ti)}, {"overlap", true}});
-  }
-  return Json::Object{{"nodes", nodes}, {"edges", edges}, {"perceptualSpaceDimension", static_cast<double>(space.dimension())}};
+  if (edgesDirty) rebuild_edge_cache();
+  return Json::Object{{"nodes", nodes}, {"edges", cachedEdges},
+      {"perceptualSpaceDimension", static_cast<double>(space.dimension())}};
 }
 Json PerceptualSpaceSimulator::state_json() const {
   Json::Array machineJson;

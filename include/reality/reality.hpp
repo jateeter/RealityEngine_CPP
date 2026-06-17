@@ -472,6 +472,11 @@ private:
   // workflow milestones.  Same semantic as latchedEventBits in the AI
   // PerceptualSpaceSimulator.
   std::set<int> latchedEventBits;
+  // Pre-computed edge list — rebuilt whenever machines are added or removed so
+  // machine_graph_data() does not recompute an O(n²) overlap check on every request.
+  mutable Json::Array cachedEdges;
+  mutable bool edgesDirty = true;
+  void rebuild_edge_cache() const;
   std::vector<EventBusWrite> apply_event_bus(const std::vector<MergeOperation>& mergeBatch);
 };
 
