@@ -50,6 +50,13 @@ MQTT_KEEPALIVE="${MQTT_KEEPALIVE:-60}"
 MQTT_MAPPINGS_FILE="${MQTT_MAPPINGS_FILE:-}"
 MQTT_ALLOW_REGION_OVERLAP="${MQTT_ALLOW_REGION_OVERLAP:-0}"
 
+# PE integration registry — HealthKit / CareKit / completion adapters.
+# When set, the PE loads the JSON file at startup and routes inbound
+# /api/integrations/healthkit/ingest and /api/integrations/carekit/ingest
+# payloads to the declared sensor regions.
+# localAIStack config: ../localAIStack/config/pe-integrations.json
+INTEGRATIONS_CONFIG="${INTEGRATIONS_CONFIG:-}"
+
 RUN_DIR="$ROOT_DIR/run"
 LOG_DIR="$ROOT_DIR/logs"
 mkdir -p "$RUN_DIR" "$LOG_DIR"
@@ -227,6 +234,9 @@ export VECTOR_DIMENSION
 # MQTT bridge: env vars consumed by perception_engine_server when present.
 export MQTT_BROKER_HOST MQTT_BROKER_PORT MQTT_CLIENT_ID MQTT_KEEPALIVE
 export MQTT_MAPPINGS_FILE MQTT_ALLOW_REGION_OVERLAP
+# Integration registry: consumed by perception_engine_server to route
+# HealthKit / CareKit ingest payloads to PE sensor regions.
+export INTEGRATIONS_CONFIG
 
 info "Starting Reality Engine on port $REALITY_ENGINE_PORT${INSTANCE_ID:+ [instance: $INSTANCE_ID]}..."
 nohup "$ROOT_DIR/bin/reality_engine_server" "$REALITY_ENGINE_PORT" "$_machines_load_dir" "$VECTOR_DIMENSION" \
@@ -295,6 +305,7 @@ if [ -n "$MQTT_BROKER_HOST" ]; then
   printf "  %-24s %s\n" "MQTT broker" "${MQTT_BROKER_HOST}:${MQTT_BROKER_PORT}"
   [ -n "$MQTT_MAPPINGS_FILE" ] && printf "  %-24s %s\n" "MQTT mappings" "${MQTT_MAPPINGS_FILE}"
 fi
+[ -n "$INTEGRATIONS_CONFIG" ] && printf "  %-24s %s\n" "Integrations config" "${INTEGRATIONS_CONFIG}"
 echo ""
 echo "Logs:"
 echo "  $RE_LOG_FILE"

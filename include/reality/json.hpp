@@ -146,6 +146,37 @@ private:
   void expect(char c) {
     if (get() != c) throw std::runtime_error(std::string("Expected ") + c);
   }
+  int hex_digit(char c) const {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    throw std::runtime_error("Invalid JSON unicode escape");
+  }
+  unsigned parse_hex4() {
+    if (pos + 4 > src.size()) throw std::runtime_error("Truncated JSON unicode escape");
+    unsigned code = 0;
+    for (int i = 0; i < 4; ++i) code = (code << 4) | static_cast<unsigned>(hex_digit(src[pos++]));
+    return code;
+  }
+  void append_utf8(std::string& out, unsigned code) const {
+    if (code <= 0x7F) {
+      out.push_back(static_cast<char>(code));
+    } else if (code <= 0x7FF) {
+      out.push_back(static_cast<char>(0xC0 | ((code >> 6) & 0x1F)));
+      out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+    } else if (code <= 0xFFFF) {
+      out.push_back(static_cast<char>(0xE0 | ((code >> 12) & 0x0F)));
+      out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+      out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+    } else if (code <= 0x10FFFF) {
+      out.push_back(static_cast<char>(0xF0 | ((code >> 18) & 0x07)));
+      out.push_back(static_cast<char>(0x80 | ((code >> 12) & 0x3F)));
+      out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+      out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+    } else {
+      throw std::runtime_error("Invalid JSON unicode code point");
+    }
+  }
   bool consume(const std::string& s) {
     if (src.compare(pos, s.size(), s) == 0) {
       pos += s.size();
@@ -182,8 +213,7 @@ private:
           case 'r': out += '\r'; break;
           case 't': out += '\t'; break;
           case 'u':
-            out += '?';
-            pos += 4;
+            append_utf8(out, parse_hex4());
             break;
           default: throw std::runtime_error("Invalid JSON escape");
         }
@@ -253,4 +283,3 @@ inline std::vector<double> to_numbers(const Value& v) {
 }
 
 } // namespace reality::json
-

@@ -67,6 +67,23 @@ http::Response ok(const Json& value) {
   return http::json_response(json::stringify(value));
 }
 
+struct BootstrapSummary {
+  size_t created = 0;
+  size_t skipped = 0;
+  size_t machinesSeen = 0;
+  Json::Array errors;
+
+  Json to_json() const {
+    return Json::Object{
+      {"created", static_cast<double>(created)},
+      {"errors", Json(errors)},
+      {"machinesSeen", static_cast<double>(machinesSeen)},
+      {"skipped", static_cast<double>(skipped)},
+      {"success", true}
+    };
+  }
+};
+
 SourceConfig source_from_json(const Json& j) {
   SourceConfig s;
   s.id = j.at("id").as_string();
@@ -242,7 +259,7 @@ public:
     });
     server.sse("/api/events", sseHub);
     server.route("GET", "/api/health", [](const http::Request&) {
-      return ok(Json::Object{{"status", "healthy"}, {"timestamp", static_cast<double>(now_ms())}});
+      return ok(Json::Object{{"status", "healthy"}});
     });
     server.route("GET", "/api/state", [this](const http::Request&) {
       sync_test_sources_from_reality();
@@ -549,19 +566,9 @@ public:
       // per machine not already registered.  Delegates to the existing private
       // helper which holds stateMutex only for the duration of each individual
       // engine.add_source() call, so the HTTP fetch runs without the lock.
-      size_t added = sync_test_sources_from_reality();
+      BootstrapSummary summary = bootstrap_test_sources_from_reality();
       broadcast_state();
-      Json::Array sources;
-      {
-        std::lock_guard<std::mutex> lock(stateMutex);
-        for (const auto& s : engine.get_sources())
-          if (s.kind == "test") sources.push_back(to_json(s));
-      }
-      return ok(Json::Object{
-        {"success", true},
-        {"created", static_cast<double>(added)},
-        {"sources", Json(sources)}
-      });
+      return ok(summary.to_json());
     });
     server.route("POST", "/api/sensors/:sensorId", [this](const http::Request& req) {
       auto values = json::to_numbers(parse_body(req).at("values"));
@@ -798,20 +805,37 @@ private:
   }
 
   size_t sync_test_sources_from_machine_list(const Json& data) {
+    return bootstrap_test_sources_from_machine_list(data).created;
+  }
+
+  BootstrapSummary bootstrap_test_sources_from_machine_list(const Json& data) {
     cache_machine_catalog(data);
     consolidate_stale_test_sources();
-    size_t added = 0;
+    BootstrapSummary summary;
     for (const auto& machine : data.at("machines").is_array() ? data.at("machines").array() : Json::Array{}) {
-      added += sync_test_sources_from_machine(machine);
+      summary.machinesSeen++;
+      size_t added = sync_test_sources_from_machine(machine);
+      summary.created += added;
+      if (added == 0) summary.skipped++;
     }
-    return added;
+    return summary;
   }
 
   size_t sync_test_sources_from_reality() {
+    return bootstrap_test_sources_from_reality().created;
+  }
+
+  BootstrapSummary bootstrap_test_sources_from_reality() {
     try {
-      return sync_test_sources_from_machine_list(json::parse(http::get(realityEngineUrl + "/api/machines")));
+      return bootstrap_test_sources_from_machine_list(json::parse(http::get(realityEngineUrl + "/api/machines")));
+    } catch (const std::exception& e) {
+      BootstrapSummary summary;
+      summary.errors.push_back(e.what());
+      return summary;
     } catch (...) {
-      return 0;
+      BootstrapSummary summary;
+      summary.errors.push_back("bootstrap failed");
+      return summary;
     }
   }
 

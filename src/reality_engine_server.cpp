@@ -50,7 +50,7 @@ public:
       return ok(Json::Object{{"name", "Reality Engine"}, {"version", "1.0.0-cpp"}, {"status", "running"}});
     });
     server.route("GET", "/api/health", [](const http::Request&) {
-      return ok(Json::Object{{"status", "healthy"}, {"timestamp", static_cast<double>(now_ms())}, {"version", "1.0.0-cpp"}});
+      return ok(Json::Object{{"status", "healthy"}});
     });
     server.route("GET", "/api/config", [this](const http::Request&) {
       std::shared_lock<std::shared_mutex> lock(registryMutex);
@@ -733,17 +733,42 @@ private:
     return Json::Object{{"totalMachines", static_cast<double>(machines.size())}, {"totalVectors", static_cast<double>(vectors)}, {"domainWorkerPool", worker_pool_metrics_json()}};
   }
   Json active_vectors_json() const {
-    Json::Object active;
+    Json::Array active;
     for (const auto& [id, m] : machines) {
-      Json::Array seqs;
       for (auto seq : m.all_sequences()) {
-        Json::Array vectors;
-        for (const auto* vector : seq.active_vectors()) vectors.push_back(vector->to_json());
-        if (!vectors.empty()) seqs.push_back(Json::Object{{"sequenceId", seq.id}, {"vectors", vectors}});
+        for (const auto* vector : seq.active_vectors()) {
+          active.push_back(Json::Object{
+            {"machineId", id},
+            {"sequenceId", seq.id},
+            {"vector", active_vector_json(*vector)}
+          });
+        }
       }
-      if (!seqs.empty()) active[id] = seqs;
     }
     return active;
+  }
+  Json active_vector_json(const RealityVector& vector) const {
+    Json full = vector.to_json();
+    Json::Array outs;
+    for (const auto& o : full.at("outputVectors").is_array() ? full.at("outputVectors").array() : Json::Array{}) {
+      outs.push_back(Json::Object{
+        {"id", o.at("id")},
+        {"metadata", o.at("metadata")},
+        {"vector", o.at("vector")}
+      });
+    }
+    return Json::Object{
+      {"elements", full.at("elements")},
+      {"id", full.at("id")},
+      {"isActive", full.at("isActive")},
+      {"isInitial", full.at("isInitial")},
+      {"matchAlgorithm", full.at("matchAlgorithm")},
+      {"metadata", full.at("metadata")},
+      {"nextVectorIds", full.at("nextVectorIds")},
+      {"outputVectors", outs},
+      {"state", full.at("state")},
+      {"wasJustMatched", full.at("wasJustMatched")}
+    };
   }
   void record_engine_history(const Json& item) {
     std::lock_guard<std::mutex> lock(historyMutex);
