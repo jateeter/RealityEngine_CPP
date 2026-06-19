@@ -5,3 +5,4 @@ run/
 *.o
 *.dSYM/
 .DS_Store
+.env
