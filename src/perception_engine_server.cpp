@@ -2671,14 +2671,14 @@ private:
   std::string openaiModel = "gpt-5";
   std::string openaiCompletionSourceMappingId = "agent-completion-risk";
   std::string openaiApiKey;
-  bool acpEnabled = false;
+  bool acpEnabled = true;
   std::string acpPlatform = "OpenClaw";
   std::string acpSurface = "xACP";
   std::string acpCommand = "openclaw acp";
   std::string acpGatewayUrl = "ws://127.0.0.1:18789";
   std::string acpSessionKey = "agent:main:main";
   std::string acpTargetAgent = "openclaw";
-  std::string acpCompletionSourceMappingId = "agent-completion-risk";
+  std::string acpCompletionSourceMappingId = "acp-openclaw-completion";
   std::string healthKitBridgeId = "healthkit-ios-bridge";
   std::string healthKitDefaultSourceMappingId = "healthkit-activity";
   std::string healthKitBridgeToken;

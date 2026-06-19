@@ -188,11 +188,11 @@ flags):
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible Responses API base URL |
 | `OPENAI_MODEL` | `gpt-5` | Default OpenAI model for PE-controlled dispatch |
 | `OPENAI_COMPLETION_SOURCE_MAPPING_ID` | `agent-completion-risk` | Default source mapping for OpenAI completion commits |
-| `ACP_ENABLED` | `false` | Enable ACP/OpenClaw adapter metadata in PE status |
+| `ACP_ENABLED` | `true` | Enable ACP/OpenClaw adapter metadata in PE status |
 | `ACP_COMMAND` / `OPENCLAW_ACP_COMMAND` | `openclaw acp` | External OpenClaw ACP command recorded in no-wait handoff receipts |
 | `ACP_GATEWAY_URL` / `OPENCLAW_GATEWAY_URL` | `ws://127.0.0.1:18789` | OpenClaw Gateway URL recorded for xACP handoff |
 | `ACP_SESSION_KEY` / `OPENCLAW_ACP_SESSION` | `agent:main:main` | OpenClaw Gateway session key for example xACP handoff |
-| `ACP_COMPLETION_SOURCE_MAPPING_ID` | `agent-completion-risk` | Default source mapping for ACP/OpenClaw completion commits |
+| `ACP_COMPLETION_SOURCE_MAPPING_ID` | `acp-openclaw-completion` | Default source mapping for ACP/OpenClaw completion commits |
 | `HEALTHKIT_BRIDGE_ID` | `healthkit-ios-bridge` | Expected Apple-platform HealthKit bridge identity |
 | `HEALTHKIT_DEFAULT_SOURCE_MAPPING_ID` | `healthkit-activity` | Default source mapping for HealthKit bridge ingest |
 | `HEALTHKIT_BRIDGE_TOKEN` | unset | Optional shared token required in HealthKit bridge ingest payloads |

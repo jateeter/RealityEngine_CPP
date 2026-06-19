@@ -56,7 +56,7 @@
     {
       "id": "openclaw-xacp",
       "kind": "acp",
-      "enabled": false,
+      "enabled": true,
       "platform": "OpenClaw",
       "surface": "xACP",
       "command": "openclaw acp",

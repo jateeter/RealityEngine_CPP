@@ -55,7 +55,23 @@ MQTT_ALLOW_REGION_OVERLAP="${MQTT_ALLOW_REGION_OVERLAP:-0}"
 # /api/integrations/healthkit/ingest and /api/integrations/carekit/ingest
 # payloads to the declared sensor regions.
 # localAIStack config: ../localAIStack/config/pe-integrations.json
-INTEGRATIONS_CONFIG="${INTEGRATIONS_CONFIG:-}"
+_DEFAULT_INTEGRATIONS_CONFIG="../RealityEngine_CI/config/integrations.json"
+if [ -z "${INTEGRATIONS_CONFIG:-}" ] && [ -f "$_DEFAULT_INTEGRATIONS_CONFIG" ]; then
+  INTEGRATIONS_CONFIG="$_DEFAULT_INTEGRATIONS_CONFIG"
+else
+  INTEGRATIONS_CONFIG="${INTEGRATIONS_CONFIG:-}"
+fi
+
+# OpenClaw ACP defaults shared with CI and the other engine runtimes.
+ACP_ENABLED="${ACP_ENABLED:-true}"
+ACP_PLATFORM="${ACP_PLATFORM:-OpenClaw}"
+ACP_SURFACE="${ACP_SURFACE:-xACP}"
+ACP_GATEWAY_URL="${ACP_GATEWAY_URL:-${OPENCLAW_GATEWAY_URL:-ws://127.0.0.1:18789}}"
+OPENCLAW_GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-$ACP_GATEWAY_URL}"
+ACP_SESSION_KEY="${ACP_SESSION_KEY:-${OPENCLAW_ACP_SESSION:-agent:main:main}}"
+OPENCLAW_ACP_SESSION="${OPENCLAW_ACP_SESSION:-$ACP_SESSION_KEY}"
+ACP_TARGET_AGENT="${ACP_TARGET_AGENT:-openclaw}"
+ACP_COMPLETION_SOURCE_MAPPING_ID="${ACP_COMPLETION_SOURCE_MAPPING_ID:-acp-openclaw-completion}"
 
 RUN_DIR="$ROOT_DIR/run"
 LOG_DIR="$ROOT_DIR/logs"
@@ -237,6 +253,8 @@ export MQTT_MAPPINGS_FILE MQTT_ALLOW_REGION_OVERLAP
 # Integration registry: consumed by perception_engine_server to route
 # HealthKit / CareKit ingest payloads to PE sensor regions.
 export INTEGRATIONS_CONFIG
+export ACP_ENABLED ACP_PLATFORM ACP_SURFACE ACP_GATEWAY_URL OPENCLAW_GATEWAY_URL
+export ACP_SESSION_KEY OPENCLAW_ACP_SESSION ACP_TARGET_AGENT ACP_COMPLETION_SOURCE_MAPPING_ID
 
 info "Starting Reality Engine on port $REALITY_ENGINE_PORT${INSTANCE_ID:+ [instance: $INSTANCE_ID]}..."
 nohup "$ROOT_DIR/bin/reality_engine_server" "$REALITY_ENGINE_PORT" "$_machines_load_dir" "$VECTOR_DIMENSION" \
@@ -306,6 +324,8 @@ if [ -n "$MQTT_BROKER_HOST" ]; then
   [ -n "$MQTT_MAPPINGS_FILE" ] && printf "  %-24s %s\n" "MQTT mappings" "${MQTT_MAPPINGS_FILE}"
 fi
 [ -n "$INTEGRATIONS_CONFIG" ] && printf "  %-24s %s\n" "Integrations config" "${INTEGRATIONS_CONFIG}"
+printf "  %-24s %s\n" "OpenClaw ACP" "enabled=${ACP_ENABLED} gateway=${ACP_GATEWAY_URL}"
+printf "  %-24s %s\n" "OpenClaw mapping" "${ACP_COMPLETION_SOURCE_MAPPING_ID}"
 echo ""
 echo "Logs:"
 echo "  $RE_LOG_FILE"
