@@ -294,17 +294,17 @@ public:
         heartbeatTimer(this->stream.get_executor()) {}
 
   void run(beast_http::request<beast_http::string_body> req) {
-    beast_http::response<beast_http::empty_body> res;
-    res.version(req.version());
-    res.result(beast_http::status::ok);
-    res.set(beast_http::field::content_type, "text/event-stream");
-    res.set(beast_http::field::cache_control, "no-cache");
-    res.set("Access-Control-Allow-Origin", "*");
-    res.set("X-Accel-Buffering", "no");
-    res.chunked(true);
-    auto sr = std::make_shared<beast_http::response_serializer<beast_http::empty_body>>(res);
+    auto res = std::make_shared<beast_http::response<beast_http::empty_body>>();
+    res->version(req.version());
+    res->result(beast_http::status::ok);
+    res->set(beast_http::field::content_type, "text/event-stream");
+    res->set(beast_http::field::cache_control, "no-cache");
+    res->set("Access-Control-Allow-Origin", "*");
+    res->set("X-Accel-Buffering", "no");
+    res->chunked(true);
+    auto sr = std::make_shared<beast_http::response_serializer<beast_http::empty_body>>(*res);
     beast_http::async_write_header(stream, *sr,
-      [self = shared_from_this(), sr](beast::error_code ec, std::size_t) {
+      [self = shared_from_this(), res, sr](beast::error_code ec, std::size_t) {
         if (ec) return;
         if (self->hub) self->hub->add(self);
         self->send(": connected\r\n\r\n");
@@ -488,7 +488,9 @@ void Server::listen(int port) {
   int timeoutMs = env_int("HTTP_SESSION_TIMEOUT_MS", 5000, 100);
   int maxRequests = env_int("HTTP_MAX_KEEPALIVE_REQUESTS", 32, 1);
 
-  std::make_shared<Listener>(ioc, endpoint, *this, timeoutMs, maxRequests)->run();
+  auto work = asio::make_work_guard(ioc);
+  auto listener = std::make_shared<Listener>(ioc, endpoint, *this, timeoutMs, maxRequests);
+  listener->run();
   std::vector<std::thread> workers;
   workers.reserve(workerCount > 0 ? workerCount - 1 : 0);
   for (size_t i = 1; i < workerCount; ++i) workers.emplace_back([&]() { ioc.run(); });
