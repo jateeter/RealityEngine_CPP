@@ -242,10 +242,28 @@ static constexpr const char* DEFAULT_MQTT_BROKER_HOST = "yuma.lateraledge.cloud"
 
 std::optional<MqttBridge::EnvConfig> MqttBridge::from_environment() {
   if (truthy_env(get_env("MQTT_DISABLED"))) return std::nullopt;
-  const char* host_env = std::getenv("MQTT_BROKER_HOST");  // explicit empty check, not get_env
+
+  // Bug 2 fix: honour MQTT_BROKER_URL when MQTT_BROKER_HOST is absent.
+  // MQTT_BROKER_HOST="" is still the explicit opt-out; MQTT_BROKER_HOST unset
+  // means "check URL, then fall back to default".
+  const char* host_env = std::getenv("MQTT_BROKER_HOST");
   std::string host;
+  int urlPort = 1883;  // port extracted from URL, overrideable by MQTT_BROKER_PORT
   if (host_env == nullptr) {
-    host = DEFAULT_MQTT_BROKER_HOST;
+    if (const char* url_env = get_env("MQTT_BROKER_URL")) {
+      std::string url = url_env;
+      auto scheme_end = url.find("://");
+      std::string authority = (scheme_end != std::string::npos) ? url.substr(scheme_end + 3) : url;
+      auto colon = authority.rfind(':');
+      if (colon != std::string::npos) {
+        host = authority.substr(0, colon);
+        try { urlPort = std::stoi(authority.substr(colon + 1)); } catch (...) {}
+      } else {
+        host = authority;
+      }
+    } else {
+      host = DEFAULT_MQTT_BROKER_HOST;
+    }
   } else if (*host_env == '\0') {
     return std::nullopt;  // explicit opt-out: MQTT_BROKER_HOST=""
   } else {
@@ -254,25 +272,41 @@ std::optional<MqttBridge::EnvConfig> MqttBridge::from_environment() {
 
   ClientConfig cfg;
   cfg.brokerHost = host;
+  cfg.brokerPort = urlPort;
   if (const char* p = get_env("MQTT_BROKER_PORT")) cfg.brokerPort = std::atoi(p);
   if (const char* c = get_env("MQTT_CLIENT_ID"))   cfg.clientId   = c;
   if (const char* u = get_env("MQTT_USERNAME"))    cfg.username   = u;
   if (const char* p = get_env("MQTT_PASSWORD"))    cfg.password   = p;
   if (const char* k = get_env("MQTT_KEEPALIVE"))   cfg.keepaliveSec = std::atoi(k);
 
+  // Bug 3 fix: split try blocks so a file-open failure falls through to the
+  // JSON inline fallback (startUniverse.sh exports both MQTT_MAPPINGS_FILE and
+  // MQTT_MAPPINGS_JSON so engines can survive a path that becomes stale).
   std::unique_ptr<MappingRegistry> registry;
-  try {
-    if (const char* path = get_env("MQTT_MAPPINGS_FILE")) {
+  if (const char* path = get_env("MQTT_MAPPINGS_FILE")) {
+    try {
       registry = std::make_unique<MappingRegistry>(MappingRegistry::from_file(path));
-    } else if (const char* raw = get_env("MQTT_MAPPINGS_JSON")) {
-      registry = std::make_unique<MappingRegistry>(MappingRegistry::from_json(json::parse(raw)));
+    } catch (const std::exception& e) {
+      std::cerr << "MQTT mappings file error (" << path << "): " << e.what() << " — trying JSON fallback\n";
+    }
+  }
+  if (!registry) {
+    if (const char* raw = get_env("MQTT_MAPPINGS_JSON")) {
+      try {
+        registry = std::make_unique<MappingRegistry>(MappingRegistry::from_json(json::parse(raw)));
+      } catch (const std::exception& e) {
+        std::cerr << "MQTT mappings JSON error: " << e.what() << " — bridge disabled\n";
+        return std::nullopt;
+      }
     } else if (const char* legacy = get_env("MQTT_TOPIC_MAP")) {
       // Backwards-compatible v1 → v2 conversion.
-      registry = legacy_topic_map_to_registry(json::parse(legacy));
+      try {
+        registry = legacy_topic_map_to_registry(json::parse(legacy));
+      } catch (const std::exception& e) {
+        std::cerr << "MQTT legacy topic map error: " << e.what() << " — bridge disabled\n";
+        return std::nullopt;
+      }
     }
-  } catch (const std::exception& e) {
-    std::cerr << "MQTT mappings parse error: " << e.what() << " — bridge disabled\n";
-    return std::nullopt;
   }
   if (!registry || registry->size() == 0) {
     std::cerr << "MQTT broker " << host << " configured but no mappings resolved — bridge disabled\n";

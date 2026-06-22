@@ -452,6 +452,11 @@ public:
       cfg.brokerHost = brokerHost;
       cfg.brokerPort = brokerPort;
       cfg.clientId   = clientId;
+      // Bug 5 fix: extract optional credentials from request body.
+      std::string usernameVal = body.at("username").as_string("");
+      std::string passwordVal = body.at("password").as_string("");
+      if (!usernameVal.empty()) cfg.username = usernameVal;
+      if (!passwordVal.empty()) cfg.password = passwordVal;
       try {
         mqttBridge = std::make_unique<mqtt::MqttBridge>(
           cfg, std::move(newRegistry),
