@@ -415,7 +415,7 @@ public:
     server.route("GET", "/api/machines/json/list", [this](const http::Request&) {
       Json::Array arr;
       namespace fs = std::filesystem;
-      if (fs::exists(machinesDirectory)) for (const auto& p : fs::directory_iterator(machinesDirectory)) if (p.path().extension() == ".json")
+      if (fs::exists(machinesDirectory)) for (const auto& p : fs::recursive_directory_iterator(machinesDirectory)) if (p.path().extension() == ".json")
         arr.push_back(Json::Object{{"filename", p.path().filename().string()}, {"name", p.path().stem().string()}, {"description", ""}, {"version", "1.0.0"}, {"metadata", Json::Object{}}, {"sequenceCount", 0.0}});
       return ok(Json::Object{{"machines", arr}});
     });

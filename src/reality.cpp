@@ -1096,7 +1096,7 @@ std::vector<Machine> load_machines_from_directory(const std::string& directory, 
   namespace fs = std::filesystem;
   if (!fs::exists(directory)) return out;
   std::vector<fs::path> files;
-  for (const auto& p : fs::directory_iterator(directory)) if (p.path().extension() == ".json") files.push_back(p.path());
+  for (const auto& p : fs::recursive_directory_iterator(directory)) if (p.path().extension() == ".json") files.push_back(p.path());
   std::sort(files.begin(), files.end());
   for (const auto& file : files) {
     std::ifstream in(file);
