@@ -306,6 +306,28 @@ public:
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       return ok(Json::Object{{"machine", it->second.to_json(true)}});
     });
+    server.route("GET", "/api/buses/semantic", [this](const http::Request&) {
+      try {
+        return ok(load_semantic_bus_registry());
+      } catch (const std::exception& e) {
+        return http::error_response(std::string("semantic bus registry unavailable: ") + e.what(), 404);
+      }
+    });
+    server.route("GET", "/api/buses/semantic/:id", [this](const http::Request& req) {
+      try {
+        Json registry = load_semantic_bus_registry();
+        const std::string id = req.pathParams.at("id");
+        const Json& buses = registry.at("semanticBuses");
+        if (buses.is_array()) {
+          for (const Json& bus : buses.array()) {
+            if (bus.at("id").as_string() == id) return ok(Json::Object{{"bus", bus}});
+          }
+        }
+        return http::error_response("Semantic bus not found", 404);
+      } catch (const std::exception& e) {
+        return http::error_response(std::string("semantic bus registry unavailable: ") + e.what(), 404);
+      }
+    });
     server.route("POST", "/api/machines", [this](const http::Request& req) {
       Machine m = load_machine_from_json_string(req.body);
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
@@ -645,6 +667,33 @@ private:
   static std::string collection_name() {
     const char* value = std::getenv("COLLECTION_NAME");
     return value ? value : "reality-vectors";
+  }
+
+  std::filesystem::path semantic_bus_registry_path() const {
+    if (const char* explicitPath = std::getenv("SEMANTIC_BUS_REGISTRY")) {
+      if (*explicitPath) return std::filesystem::path(explicitPath);
+    }
+
+    std::filesystem::path cursor = std::filesystem::absolute(machinesDirectory);
+    for (int i = 0; i < 6 && !cursor.empty(); ++i) {
+      std::filesystem::path candidate = cursor / "domains" / "semantic-bus-registry.json";
+      if (std::filesystem::exists(candidate)) return candidate;
+      cursor = cursor.parent_path();
+    }
+    return std::filesystem::absolute(machinesDirectory).parent_path() / "domains" / "semantic-bus-registry.json";
+  }
+
+  Json load_semantic_bus_registry() const {
+    const auto path = semantic_bus_registry_path();
+    std::ifstream in(path);
+    if (!in) throw std::runtime_error("cannot open " + path.string());
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    Json registry = json::parse(buffer.str());
+    if (!registry.is_object() || !registry.at("semanticBuses").is_array()) {
+      throw std::runtime_error("invalid registry shape at " + path.string());
+    }
+    return registry;
   }
 
   int bits_per_element_for_machine(const std::string& machineId) const {
