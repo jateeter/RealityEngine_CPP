@@ -215,12 +215,19 @@ static Response handle_with_idempotency(const Server& server, Request req) {
   return response;
 }
 
+static void set_cors_headers(auto& out) {
+  out.set("Access-Control-Allow-Origin", "*");
+  out.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  out.set("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization");
+}
+
 static beast_http::response<beast_http::string_body> to_beast_response(const Response& res, bool keepAlive) {
   beast_http::response<beast_http::string_body> out;
   out.version(11);
   out.result(static_cast<unsigned>(res.status));
   out.set(beast_http::field::server, "RealityEngine_CPP");
   out.set(beast_http::field::content_type, res.contentType);
+  set_cors_headers(out);
   out.body() = res.body;
   out.keep_alive(keepAlive);
   out.prepare_payload();
@@ -391,6 +398,18 @@ private:
 
   void write_current() {
     ++handled;
+    if (request.method() == beast_http::verb::options) {
+      beast_http::response<beast_http::string_body> out;
+      out.version(11);
+      out.result(beast_http::status::no_content);
+      out.set(beast_http::field::server, "RealityEngine_CPP");
+      set_cors_headers(out);
+      out.keep_alive(false);
+      out.prepare_payload();
+      auto outPtr = std::make_shared<beast_http::response<beast_http::string_body>>(std::move(out));
+      beast_http::async_write(stream, *outPtr, [self = shared_from_this(), outPtr](beast::error_code, std::size_t) { self->close(); });
+      return;
+    }
     if (beast_websocket::is_upgrade(request)) {
       Request req = to_request(request);
       std::shared_ptr<Server::WebSocketHub> hub;

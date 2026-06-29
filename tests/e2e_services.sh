@@ -357,4 +357,24 @@ chain_step_4="$(curl -sf -X POST "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}
 assert_merge_region "$chain_step_4" 4606 2
 
 echo "RealityEngine_CPP chained stream e2e tests passed"
+
+# ── CORS header checks ────────────────────────────────────────────────────────
+cors_origin="$(curl -si -H 'Origin: http://127.0.0.1:8088' \
+  "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/engine/stats" \
+  | tr -d '\r' | grep -i '^access-control-allow-origin:' | head -1)"
+if [[ -z "$cors_origin" ]]; then
+  echo "CORS: GET /api/engine/stats missing Access-Control-Allow-Origin" >&2; exit 1
+fi
+
+options_status="$(curl -si -X OPTIONS \
+  -H 'Origin: http://127.0.0.1:8088' \
+  -H 'Access-Control-Request-Method: GET' \
+  -H 'Access-Control-Request-Headers: accept' \
+  "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/engine/stats" \
+  | tr -d '\r' | head -1)"
+if [[ "$options_status" != *" 204 "* && "$options_status" != *" 200 "* ]]; then
+  echo "CORS: OPTIONS /api/engine/stats returned unexpected status: ${options_status}" >&2; exit 1
+fi
+echo "RealityEngine_CPP CORS e2e tests passed"
+
 echo "RealityEngine_CPP service e2e tests passed"
