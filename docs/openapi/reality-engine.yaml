@@ -1019,6 +1019,40 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
       operationId: delete_api_machines_machineId_checkpoints_cpId
+  /api/buses/semantic:
+    get:
+      tags:
+      - Machines
+      summary: Get /api/buses/semantic
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_buses_semantic
+  /api/buses/semantic/{id}:
+    get:
+      tags:
+      - Machines
+      summary: Get /api/buses/semantic/{id}
+      parameters:
+      - *id001
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: get_api_buses_semantic_id
   /api/machine-graph:
     get:
       tags:
