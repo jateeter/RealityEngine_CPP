@@ -1300,6 +1300,7 @@ Json to_json(const SourceConfig& s) {
     o["machineId"] = s.machineId; o["machineName"] = s.machineName; o["sequenceName"] = s.sequenceName; o["inputs"] = inputs; o["loop"] = s.loop; o["metadata"] = s.sequenceMetadata; o["sequence"] = s.testSequence;
   } else if (s.kind == "sensor") {
     o["sensorId"] = s.sensorId; o["lastValue"] = json::numbers(s.lastValue); o["lastUpdated"] = s.lastUpdated ? Json(static_cast<double>(*s.lastUpdated)) : Json(nullptr); o["ttlMs"] = static_cast<double>(s.ttlMs);
+    if (!s.origin.empty()) o["origin"] = s.origin;
   } else {
     o["pattern"] = to_string(s.pattern); o["frequency"] = s.frequency; o["amplitude"] = s.amplitude; o["dcOffset"] = s.dcOffset;
   }

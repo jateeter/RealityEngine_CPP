@@ -107,6 +107,7 @@ SourceConfig source_from_json(const Json& j) {
     s.lastValue = json::to_numbers(j.at("lastValue"));
     if (j.at("lastUpdated").is_number()) s.lastUpdated = static_cast<long long>(j.at("lastUpdated").as_number());
     s.ttlMs = static_cast<long>(j.at("ttlMs").as_number(5000));
+    s.origin = j.at("origin").as_string("");
   } else {
     s.kind = "simulated";
     s.pattern = sim_pattern_from_string(j.at("pattern").as_string("constant"));
@@ -125,6 +126,7 @@ SourceConfig sensor_source(const LocalAISensorSpec& spec) {
   s.active = true;
   s.sensorId = spec.sensorId;
   s.ttlMs = spec.ttlMs;
+  s.origin = "localai";
   return s;
 }
 
@@ -1768,6 +1770,7 @@ private:
         source.ttlMs = ttlMs > 0 ? ttlMs : 30000;
         source.lastValue = values;
         source.lastUpdated = now_ms();
+        source.origin = "mqtt";
         source = engine.add_source(source);
       }
     }
@@ -1784,6 +1787,7 @@ private:
   http::Response ingest_signal(const Json& body) {
     Vector values = json::to_numbers(body.at("values"));
     if (values.empty()) return http::error_response("values must be a non-empty array", 400);
+    const std::string signalOrigin = body.at("origin").as_string("signal");
 
     SourceConfig source;
     {
@@ -1805,6 +1809,7 @@ private:
           source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
           source.lastValue = values;
           source.lastUpdated = now_ms();
+          source.origin = signalOrigin;
           source = engine.add_source(source);
           updated = true;
         }
@@ -1821,6 +1826,7 @@ private:
         source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
         source.lastValue = values;
         source.lastUpdated = now_ms();
+        source.origin = signalOrigin;
         source = engine.add_source(source);
         updated = true;
       } else {
@@ -1871,6 +1877,7 @@ private:
     signal["ttlMs"] = body.at("ttlMs").is_number() ? body.at("ttlMs") : mapping.at("ttlMs").is_number() ? mapping.at("ttlMs") : Json(300000);
     signal["triggerPush"] = body.at("triggerPush").as_bool(false);
     signal["compactPush"] = body.at("compactPush").as_bool(true);
+    signal["origin"] = provider;
 
     http::Response signalResponse = ingest_signal(Json(signal));
     if (signalResponse.status < 200 || signalResponse.status >= 300) return signalResponse;
@@ -2019,6 +2026,7 @@ private:
     signal["values"]   = body.at("values").is_array() ? body.at("values") : Json(Json::Array{body.at("value").as_number()});
     signal["active"]   = true;
     signal["ttlMs"]    = static_cast<double>(ttl_ms);
+    signal["origin"]   = "healthkit";
     http::Response resp = ingest_signal(Json(signal));
     Json parsed = parse_json_or_null(resp.body);
 
@@ -2108,6 +2116,7 @@ private:
     signal["ttlMs"] = body.at("ttlMs").is_number() ? body.at("ttlMs") : mapping.at("ttlMs").is_number() ? mapping.at("ttlMs") : Json(300000);
     signal["triggerPush"] = body.at("triggerPush").as_bool(false);
     signal["compactPush"] = body.at("compactPush").as_bool(true);
+    signal["origin"] = "carekit";
     return signal;
   }
 
