@@ -501,6 +501,10 @@ struct SourceConfig {
   Vector lastValue;
   std::optional<long long> lastUpdated;
   long ttlMs = 5000;
+  // Provenance — which integration feeds this source ("mqtt", "openclaw",
+  // "ollama", "healthkit", "carekit", "localai", "signal").  Empty for
+  // manually created sources; omitted from JSON when unset.
+  std::string origin;
 };
 
 class PerceptionEngine {
