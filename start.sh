@@ -175,8 +175,17 @@ echo "=================================================="
 echo ""
 
 if [ "$NO_BUILD" = false ]; then
-  info "Building C++ services..."
-  make >/dev/null
+  # Startup only needs the two runtime servers. The Makefile's default `all`
+  # target also builds ~18 test/e2e/cesgen binaries, and a from-clean full
+  # build can exceed the orchestrator's health-check window (issue #43).
+  # Build just the servers by default; set CPP_BUILD_ALL=1 for the full build.
+  if [ "${CPP_BUILD_ALL:-0}" = "1" ]; then
+    info "Building all C++ services..."
+    make >/dev/null
+  else
+    info "Building C++ runtime servers..."
+    make bin/reality_engine_server bin/perception_engine_server >/dev/null
+  fi
   ok "Build complete"
 else
   [ -x bin/reality_engine_server ] || die "bin/reality_engine_server missing. Run make or omit --no-build."
