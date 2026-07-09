@@ -31,7 +31,7 @@ public:
     }
 
     size_t discovered = 0;
-    for (const auto& p : fs::directory_iterator(machinesDir)) {
+    for (const auto& p : fs::recursive_directory_iterator(machinesDir)) {
       if (p.path().extension() == ".json") ++discovered;
     }
     std::cerr << "Reality Engine machine discovery — jsonFiles=" << discovered << "\n";
@@ -416,16 +416,30 @@ public:
       Json::Array arr;
       namespace fs = std::filesystem;
       if (fs::exists(machinesDirectory)) for (const auto& p : fs::recursive_directory_iterator(machinesDirectory)) if (p.path().extension() == ".json")
-        arr.push_back(Json::Object{{"filename", p.path().filename().string()}, {"name", p.path().stem().string()}, {"description", ""}, {"version", "1.0.0"}, {"metadata", Json::Object{}}, {"sequenceCount", 0.0}});
+        arr.push_back(Json::Object{{"filename", p.path().filename().string()}, {"relFile", fs::relative(p.path(), machinesDirectory).generic_string()}, {"name", p.path().stem().string()}, {"description", ""}, {"version", "1.0.0"}, {"metadata", Json::Object{}}, {"sequenceCount", 0.0}});
       return ok(Json::Object{{"machines", arr}});
     });
     server.route("GET", "/api/machines/json/:name", [this](const http::Request& req) {
+      namespace fs = std::filesystem;
       std::string name = req.pathParams.at("name");
-      std::filesystem::path path = std::filesystem::path(machinesDirectory) / (name.ends_with(".json") ? name : name + ".json");
+      if (name.find("..") != std::string::npos) return http::error_response("Invalid machine name: " + name, 400);
+      std::string filename = name.ends_with(".json") ? name : name + ".json";
+      fs::path path = fs::path(machinesDirectory) / filename;
+      if (!fs::exists(path) && fs::exists(machinesDirectory)) {
+        // Corpus files may live in domain subdirectories — fall back to a
+        // recursive basename search (corpus filenames are unique).
+        for (const auto& p : fs::recursive_directory_iterator(machinesDirectory)) {
+          if (p.path().filename().string() == filename) { path = p.path(); break; }
+        }
+      }
       std::ifstream in(path);
       if (!in) return http::error_response("Machine file not found: " + name, 404);
       std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-      Machine m = load_machine_from_json_string(raw, "machine-" + path.stem().string());
+      // Same id canonicalization as startup loading so re-loading a corpus
+      // file replaces the startup machine instead of duplicating it.
+      std::string stem = path.stem().string();
+      std::transform(stem.begin(), stem.end(), stem.begin(), [](unsigned char c) { return std::isalnum(c) ? static_cast<char>(std::tolower(c)) : '-'; });
+      Machine m = load_machine_from_json_string(raw, "machine-" + stem);
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
       add_machine(m);
