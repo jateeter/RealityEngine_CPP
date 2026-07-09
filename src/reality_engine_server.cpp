@@ -420,18 +420,12 @@ public:
       return ok(Json::Object{{"machines", arr}});
     });
     server.route("GET", "/api/machines/json/:name", [this](const http::Request& req) {
-      namespace fs = std::filesystem;
       std::string name = req.pathParams.at("name");
       if (name.find("..") != std::string::npos) return http::error_response("Invalid machine name: " + name, 400);
       std::string filename = name.ends_with(".json") ? name : name + ".json";
-      fs::path path = fs::path(machinesDirectory) / filename;
-      if (!fs::exists(path) && fs::exists(machinesDirectory)) {
-        // Corpus files may live in domain subdirectories — fall back to a
-        // recursive basename search (corpus filenames are unique).
-        for (const auto& p : fs::recursive_directory_iterator(machinesDirectory)) {
-          if (p.path().filename().string() == filename) { path = p.path(); break; }
-        }
-      }
+      // Flat path first, then recursive basename search — corpus files may
+      // live in domain subdirectories (filenames are globally unique).
+      std::filesystem::path path = find_machine_file(machinesDirectory, filename);
       std::ifstream in(path);
       if (!in) return http::error_response("Machine file not found: " + name, 404);
       std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());

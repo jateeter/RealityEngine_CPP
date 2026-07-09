@@ -130,7 +130,7 @@ int main(int argc, char** argv) {
   auto raw_for = [&](const std::string& f) -> const std::string& {
     auto it = rawByFile.find(f);
     if (it != rawByFile.end()) return it->second;
-    return rawByFile[f] = read_file(machinesDir / f);
+    return rawByFile[f] = read_file(find_machine_file(machinesDir, f));
   };
 
   auto t0 = std::chrono::steady_clock::now();

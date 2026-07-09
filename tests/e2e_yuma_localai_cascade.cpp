@@ -57,7 +57,7 @@ std::string read_file(const std::filesystem::path& p) {
 }
 
 Machine load(const std::string& filename, const std::string& id) {
-  return load_machine_from_json_string(read_file(AI_MACHINES / filename), id);
+  return load_machine_from_json_string(read_file(find_machine_file(AI_MACHINES, filename)), id);
 }
 
 // Build a dense input vector by overlaying small write blocks onto a
