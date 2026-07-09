@@ -60,7 +60,7 @@ std::string chain_str(const std::vector<std::string>& c) {
 }
 
 void test_fall_confirmed_red(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "FallDetection.json"), "prov-fall-red");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "prov-fall-red");
   PerceptualSpaceSimulator sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
@@ -84,7 +84,7 @@ void test_fall_confirmed_red(const std::filesystem::path& machinesDir) {
 }
 
 void test_fall_slow_collapse(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "FallDetection.json"), "prov-fall-slow");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "prov-fall-slow");
   PerceptualSpaceSimulator sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
@@ -108,7 +108,7 @@ void test_fall_slow_collapse(const std::filesystem::path& machinesDir) {
 }
 
 void test_rsflipflop_initial(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "RSFlipFlop.json"), "prov-rsff-set");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlop.json")), "prov-rsff-set");
   PerceptualSpaceSimulator sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
@@ -130,7 +130,7 @@ void test_rsflipflop_initial(const std::filesystem::path& machinesDir) {
 void test_provenance_non_empty_property(const std::filesystem::path& machinesDir) {
   // Property: every emitted mergeBatch entry must carry at least its emitter
   // in the provenance chain.  Same property tested in the AI Jest suite.
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "RSFlipFlop.json"), "prov-rsff-prop");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlop.json")), "prov-rsff-prop");
   PerceptualSpaceSimulator sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
@@ -148,7 +148,7 @@ void test_provenance_non_empty_property(const std::filesystem::path& machinesDir
 int main(int argc, char** argv) {
   std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
 
-  if (!std::filesystem::exists(machinesDir / "FallDetection.json")) {
+  if (!std::filesystem::exists(find_machine_file(machinesDir, "FallDetection.json"))) {
     std::cerr << "Skipping cesgen_provenance — FallDetection.json not found in " << machinesDir << "\n";
     return 0;
   }

@@ -40,7 +40,7 @@ std::vector<std::string> failureMsgs;
 } while (0)
 
 void test_loader_propagates_lifecycle(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "RSFlipFlopDeprecatedDemo.json"), "dep-loader");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-loader");
   bool sawReset = false, sawSet = false;
   for (const auto& seq : m.all_sequences()) {
     if (seq.id == "rs-reset-sequence") {
@@ -62,7 +62,7 @@ void test_loader_propagates_lifecycle(const std::filesystem::path& machinesDir) 
 }
 
 void test_engine_stamps_deprecation(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "RSFlipFlopDeprecatedDemo.json"), "dep-stamp");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-stamp");
   PerceptualSpaceSimulator sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
@@ -86,7 +86,7 @@ void test_engine_stamps_deprecation(const std::filesystem::path& machinesDir) {
 }
 
 void test_non_deprecated_has_no_stamp(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "RSFlipFlopDeprecatedDemo.json"), "dep-set");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-set");
   PerceptualSpaceSimulator sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
@@ -105,7 +105,7 @@ void test_non_deprecated_has_no_stamp(const std::filesystem::path& machinesDir) 
 }
 
 void test_prom_emits_deprecated_fires(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "RSFlipFlopDeprecatedDemo.json"), "dep-prom");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-prom");
   std::map<std::string, Machine> machines{{m.id, m}};
   PerceptualSpaceSimulator sim(0);
   sim.add_machine(m);
@@ -130,7 +130,7 @@ void test_prom_emits_deprecated_fires(const std::filesystem::path& machinesDir) 
 int main(int argc, char** argv) {
   std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
 
-  if (!std::filesystem::exists(machinesDir / "RSFlipFlopDeprecatedDemo.json")) {
+  if (!std::filesystem::exists(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json"))) {
     std::cerr << "Skipping cesgen_deprecation — RSFlipFlopDeprecatedDemo.json not found in " << machinesDir << "\n";
     return 0;
   }

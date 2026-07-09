@@ -3,6 +3,7 @@
 #include "reality/json.hpp"
 
 #include <chrono>
+#include <filesystem>
 #include <map>
 #include <optional>
 #include <random>
@@ -548,6 +549,12 @@ Machine load_machine_from_json_string(const std::string& raw,
                                       const LoadOptions& opts = {});
 std::vector<Machine> load_machines_from_directory(const std::string& directory,
                                                   const LoadOptions& opts = {});
+// Resolve a corpus filename under DIRECTORY: flat path first, then a
+// recursive basename search (corpus files may live in machines/domains/<x>/;
+// filenames are globally unique). Returns DIRECTORY/FILENAME when not found
+// so callers keep their existing not-found handling.
+std::filesystem::path find_machine_file(const std::filesystem::path& directory,
+                                        const std::string& filename);
 
 Json to_json(const RegionMapping& r);
 Json to_json(const PerceptualMapping& m);

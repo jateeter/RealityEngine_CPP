@@ -38,7 +38,7 @@ std::vector<std::string> failureMsgs;
 } while (0)
 
 void test_rule_with_override(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "FallDetection.json"), "gov-fd");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "gov-fd");
   auto decision = resolve_governance(m, "fall-confirmed", {4.0, 3.0});
   EXPECT(decision.has_value(), "fall-confirmed [4,3] should resolve to a decision");
   if (decision) {
@@ -54,7 +54,7 @@ void test_rule_with_override(const std::filesystem::path& machinesDir) {
 }
 
 void test_partial_override(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "FallDetection.json"), "gov-fd-2");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "gov-fd-2");
   auto decision = resolve_governance(m, "fall-slow-collapse", {4.0, 2.0});
   EXPECT(decision.has_value(), "fall-slow-collapse [4,2] should resolve");
   if (decision) {
@@ -66,7 +66,7 @@ void test_partial_override(const std::filesystem::path& machinesDir) {
 }
 
 void test_machine_default_sla_by_status(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "FallDetection.json"), "gov-fd-3");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "gov-fd-3");
   auto decision = resolve_governance(m, "fall-sustained-instability", {2.0, 2.0});
   EXPECT(decision.has_value(), "fall-sustained-instability should resolve");
   if (decision) {
@@ -77,7 +77,7 @@ void test_machine_default_sla_by_status(const std::filesystem::path& machinesDir
 }
 
 void test_no_rule_matches(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "FallDetection.json"), "gov-fd-4");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "gov-fd-4");
   auto decision = resolve_governance(m, "fall-confirmed", {9.0, 9.0});
   EXPECT(!decision.has_value(), "unmatched values should resolve to nullopt");
   auto decision2 = resolve_governance(m, "no-such-sequence", {0.0});
@@ -126,7 +126,7 @@ void test_no_governance_returns_unrouted(const std::filesystem::path& /*machines
 void test_mergebatch_stamp(const std::filesystem::path& machinesDir) {
   // Drive the FallDetection nominal path and confirm the mergeBatch entry
   // carries the resolved governance decision (GREEN / ok / patient-safety-on-call).
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "FallDetection.json"), "gov-fd-stamp");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "gov-fd-stamp");
   PerceptualSpaceSimulator sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
@@ -150,7 +150,7 @@ void test_mergebatch_stamp(const std::filesystem::path& machinesDir) {
 }
 
 void test_paging_decisions_metric(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(machinesDir / "FallDetection.json"), "gov-fd-prom");
+  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "gov-fd-prom");
   std::map<std::string, Machine> machines{{m.id, m}};
   PerceptualSpaceSimulator sim(0);
   sim.add_machine(m);
@@ -172,7 +172,7 @@ void test_paging_decisions_metric(const std::filesystem::path& machinesDir) {
 int main(int argc, char** argv) {
   std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
 
-  if (!std::filesystem::exists(machinesDir / "FallDetection.json")) {
+  if (!std::filesystem::exists(find_machine_file(machinesDir, "FallDetection.json"))) {
     std::cerr << "Skipping cesgen_governance — FallDetection.json not found in " << machinesDir << "\n";
     return 0;
   }

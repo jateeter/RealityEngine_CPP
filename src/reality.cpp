@@ -1109,6 +1109,16 @@ std::vector<Machine> load_machines_from_directory(const std::string& directory, 
   return out;
 }
 
+std::filesystem::path find_machine_file(const std::filesystem::path& directory, const std::string& filename) {
+  namespace fs = std::filesystem;
+  fs::path flat = directory / filename;
+  if (fs::exists(flat) || !fs::exists(directory)) return flat;
+  for (const auto& p : fs::recursive_directory_iterator(directory)) {
+    if (p.path().filename().string() == filename) return p.path();
+  }
+  return flat;
+}
+
 Json to_json(const RegionMapping& r) { return Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}}; }
 Json to_json(const PerceptualMapping& m) {
   Json::Object out{{"input", to_json(m.input)}, {"output", to_json(m.output)}};

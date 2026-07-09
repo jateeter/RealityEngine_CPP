@@ -258,7 +258,7 @@ void walk_machine(const std::filesystem::path& file, WalkSummary& sum) {
 // values so a refactor of the generator script can't silently re-route the
 // envelopes to a different agent.
 void test_agx051_envelope_pins(const std::filesystem::path& machinesDir) {
-  std::string raw = read_file(machinesDir / "AGX051_yuma-aqua-maintenance-forecaster.json");
+  std::string raw = read_file(find_machine_file(machinesDir, "AGX051_yuma-aqua-maintenance-forecaster.json"));
   Json root = json::parse(raw);
   Machine m = load_machine_from_json_string(raw, "pin-agx051");
 
@@ -282,7 +282,7 @@ void test_agx051_envelope_pins(const std::filesystem::path& machinesDir) {
 }
 
 void test_agx055_envelope_pins(const std::filesystem::path& machinesDir) {
-  std::string raw = read_file(machinesDir / "AGX055_yuma-facility-ai-synthesis-bridge.json");
+  std::string raw = read_file(find_machine_file(machinesDir, "AGX055_yuma-facility-ai-synthesis-bridge.json"));
   Json root = json::parse(raw);
   Machine m = load_machine_from_json_string(raw, "pin-agx055");
 
@@ -312,7 +312,7 @@ void test_agx055_envelope_pins(const std::filesystem::path& machinesDir) {
   // Projection invariant: AGX055.output region must match
   // AgYieldOptimizationAI.input region exactly — the 12-cell bridge
   // contract is meaningless if those don't overlap.
-  std::string yieldRaw = read_file(machinesDir / "AgYieldOptimizationAI.json");
+  std::string yieldRaw = read_file(find_machine_file(machinesDir, "AgYieldOptimizationAI.json"));
   Json yieldRoot = json::parse(yieldRaw);
   const Json& bridgeOut  = root.at("machine").at("perceptualMapping").at("output");
   const Json& yieldIn    = yieldRoot.at("machine").at("perceptualMapping").at("input");
