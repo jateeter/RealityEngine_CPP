@@ -122,10 +122,10 @@ struct WalkSummary {
   int envelopesResolved = 0;
 };
 
-constexpr int kExpectedMachinesWithTriggers = 895;
-constexpr int kExpectedInputSequencesRun = 4480;
-constexpr int kExpectedOutputsProduced = 3586;
-constexpr int kExpectedEnvelopesResolved = 3586;
+constexpr int kExpectedMachinesWithTriggers = 1058;
+constexpr int kExpectedInputSequencesRun = 5126;
+constexpr int kExpectedOutputsProduced = 4251;
+constexpr int kExpectedEnvelopesResolved = 4251;
 
 // Walk a single machine file.  Skips files whose machine doesn't declare
 // triggerConfig + agentBinding — those aren't AI-routed and have
@@ -338,7 +338,9 @@ int main(int argc, char** argv) {
   }
 
   std::vector<std::filesystem::path> files;
-  for (const auto& entry : std::filesystem::directory_iterator(machinesDir)) {
+  // Recursive: domain subdirectories (machines/domains/<name>/) are part of
+  // the corpus and must be held to the same dispatch contract.
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(machinesDir)) {
     if (entry.path().extension() == ".json") files.push_back(entry.path());
   }
   std::sort(files.begin(), files.end());
