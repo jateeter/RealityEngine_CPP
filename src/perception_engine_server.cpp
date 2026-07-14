@@ -67,6 +67,26 @@ http::Response ok(const Json& value) {
   return http::json_response(json::stringify(value));
 }
 
+// Extracts the token from an "Authorization: Bearer <token>" header, if any.
+// Header name and scheme match case-insensitively; returns "" when absent.
+std::string bearer_token(const http::Request& req) {
+  for (const auto& [key, value] : req.headers) {
+    std::string lower_key = key;
+    std::transform(lower_key.begin(), lower_key.end(), lower_key.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lower_key != "authorization") continue;
+    if (value.size() <= 7) return "";
+    std::string scheme = value.substr(0, 7);
+    std::transform(scheme.begin(), scheme.end(), scheme.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (scheme != "bearer ") return "";
+    std::string token = value.substr(7);
+    const auto start = token.find_first_not_of(' ');
+    return start == std::string::npos ? std::string{} : token.substr(start);
+  }
+  return "";
+}
+
 struct BootstrapSummary {
   size_t created = 0;
   size_t skipped = 0;
@@ -302,7 +322,7 @@ public:
       return ok(healthkit_status());
     });
     server.route("POST", "/api/integrations/healthkit/ingest", [this](const http::Request& req) {
-      return ingest_healthkit(parse_body(req));
+      return ingest_healthkit(parse_body(req), bearer_token(req));
     });
     server.route("GET", "/api/integrations/carekit/status", [this](const http::Request&) {
       return ok(carekit_status());
@@ -1107,7 +1127,7 @@ private:
         {"transport", "https"},
         {"singleSample", Json::Array{"type", "value", "sourceName"}},
         {"batchSamples", Json::Array{"bridgeId", "samples[]"}},
-        {"auth", healthKitBridgeToken.empty() ? "none" : "bridgeToken"}
+        {"auth", healthKitBridgeToken.empty() ? "none" : "bridgeToken|bearer"}
       }}
     };
   }
@@ -2050,10 +2070,11 @@ private:
     };
   }
 
-  http::Response ingest_healthkit(const Json& body) {
+  http::Response ingest_healthkit(const Json& body, const std::string& bearerToken = "") {
     if (!body.is_object()) return http::error_response("HealthKit ingest body must be a JSON object", 400);
     const std::string hkToken = body.at("bridgeToken").as_string(body.at("token").as_string());
-    if (!healthKitBridgeToken.empty() && hkToken != healthKitBridgeToken)
+    if (!healthKitBridgeToken.empty()
+        && hkToken != healthKitBridgeToken && bearerToken != healthKitBridgeToken)
       return http::error_response("HealthKit bridge token rejected", 401);
 
     Json::Array resolved, unmapped;
