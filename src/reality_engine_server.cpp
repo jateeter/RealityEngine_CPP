@@ -436,6 +436,58 @@ public:
       }
       return ok(Json::Object{{"machines", arr}});
     });
+    // Semantic audit trail (SEMANTIC_AUDIT_CONTRACT.md, milestone M5):
+    // re:SequenceObservation records emitted while machines process input,
+    // IRI-enriched from the corpus semantics manifest at read time.
+    server.route("GET", "/api/audit/semantics", [this](const http::Request& req) {
+      size_t limit = 100;
+      auto limitQuery = req.queryParams.find("limit");
+      if (limitQuery != req.queryParams.end()) {
+        try { limit = static_cast<size_t>(std::max(0, std::stoi(limitQuery->second))); } catch (...) {}
+      }
+      // machine name -> ABox base IRI (manifest iri minus the #machine fragment).
+      std::map<std::string, std::string> baseByName;
+      try {
+        Json manifest = load_semantics_manifest();
+        for (const auto& [key, entry] : manifest.at("machines").object()) {
+          (void)key;
+          std::string iri = entry.at("iri").as_string();
+          const auto hash = iri.find('#');
+          if (hash != std::string::npos) baseByName[entry.at("name").as_string()] = iri.substr(0, hash);
+        }
+      } catch (...) {}
+
+      std::vector<SequenceObservation> observations;
+      {
+        std::lock_guard<std::mutex> lock(simulatorMutex);
+        observations = simulator.semantic_audit().recent(limit);
+      }
+      Json::Array records;
+      for (const auto& o : observations) {
+        auto found = baseByName.find(o.machineName);
+        const bool haveBase = found != baseByName.end();
+        auto iri = [&](const std::string& prefix, const std::string& local) -> Json {
+          if (!haveBase) return nullptr;
+          return found->second + "#" + prefix + "-" + sanitize_local_name(local);
+        };
+        Json::Object record{
+          {"type", std::string("re:SequenceObservation")},
+          {"at", static_cast<double>(o.at)},
+          {"machineId", o.machineId},
+          {"machineName", o.machineName},
+          {"machineIri", haveBase ? Json(found->second + "#machine") : Json(nullptr)},
+          {"sequenceId", o.sequenceId},
+          {"sequenceIri", iri("seq", o.sequenceId)},
+          {"stepId", o.stepId},
+          {"stepIri", iri("step", o.stepId)},
+          {"completed", o.completed},
+          {"determinationIri", o.determinationId.empty() ? Json(nullptr) : iri("out", o.determinationId)},
+          {"actionCode", o.actionCode.empty() ? Json(nullptr) : Json(o.actionCode)},
+          {"ragStatus", o.ragStatus.empty() ? Json(nullptr) : Json(o.ragStatus)}};
+        records.push_back(record);
+      }
+      return ok(Json::Object{{"records", records}, {"count", static_cast<double>(records.size())}});
+    });
     // OWL semantic identity (roadmap M4): IRI + ABox content hash from the
     // corpus semantics/abox-manifest.json, keyed by machine name. Contract
     // mirrors the Scala and TypeScript engines.
@@ -659,6 +711,18 @@ public:
 
 private:
   static Json parse_body(const http::Request& req) { return req.body.empty() ? Json::Object{} : json::parse(req.body); }
+
+  // Restrict an ABox IRI local name to the generator's PN_LOCAL subset
+  // (scripts/generate-owl.py sanitize()) so runtime IRIs match the corpus.
+  static std::string sanitize_local_name(const std::string& local) {
+    std::string out;
+    out.reserve(local.size());
+    for (char c : local) {
+      const bool safe = std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-';
+      out += safe ? c : '_';
+    }
+    return out.empty() ? "unnamed" : out;
+  }
 
   // Percent-decode a path parameter (machine names contain spaces).
   static std::string url_decode(const std::string& s) {

@@ -596,6 +596,8 @@ int PerceptualSpaceSimulator::required_dimension() const {
 long PerceptualSpaceSimulator::mapping_version() const { return mappingVersion; }
 CesCoverageRegistry& PerceptualSpaceSimulator::ces_coverage() { return coverage; }
 const CesCoverageRegistry& PerceptualSpaceSimulator::ces_coverage() const { return coverage; }
+SemanticAuditLog& PerceptualSpaceSimulator::semantic_audit() { return semanticAudit; }
+const SemanticAuditLog& PerceptualSpaceSimulator::semantic_audit() const { return semanticAudit; }
 void PerceptualSpaceSimulator::add_machine(const Machine& machine) {
   if (!machine.perceptualMapping) throw std::invalid_argument("Machine has no perceptual mapping");
   const auto& mapping = *machine.perceptualMapping;
@@ -784,7 +786,10 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
   // parallel phase joins so map writes are serialised by the main thread.
   for (const auto& result : results) {
     auto it = machines.find(result.id);
-    if (it != machines.end()) coverage.record(it->second, result.transition);
+    if (it != machines.end()) {
+      coverage.record(it->second, result.transition);
+      semanticAudit.record(it->second, result.transition);
+    }
   }
 
   SimulationStep step;
@@ -1372,6 +1377,44 @@ std::vector<std::string> split_key(const std::string& s) {
   return out;
 }
 } // anonymous namespace
+
+void SemanticAuditLog::record(const Machine& machine, const MachineTransitionResult& result) {
+  std::lock_guard<std::mutex> lock(mutex);
+  for (const auto& [sequenceId, sr] : result.sequenceResults) {
+    if (sr.matchedVectors.empty()) continue;
+    const bool completed = !sr.assertedOutputs.empty();
+    std::string determinationId, actionCode, ragStatus;
+    if (completed) {
+      const auto& output = sr.assertedOutputs.front();
+      determinationId = output.id;
+      auto action = output.metadata.find("action");
+      if (action != output.metadata.end() && action->second.is_string()) actionCode = action->second.as_string();
+      auto rag = output.metadata.find("ragStatusCode");
+      if (rag != output.metadata.end() && rag->second.is_string()) ragStatus = rag->second.as_string();
+    }
+    for (const auto& stepId : sr.matchedVectors) {
+      records.push_back(SequenceObservation{now_ms(), machine.id, machine.name, sequenceId, stepId,
+                                            completed, determinationId, actionCode, ragStatus});
+      while (records.size() > Capacity) records.pop_front();
+    }
+  }
+}
+
+std::vector<SequenceObservation> SemanticAuditLog::recent(size_t limit) const {
+  std::lock_guard<std::mutex> lock(mutex);
+  const size_t bounded = std::min(limit, records.size());
+  return std::vector<SequenceObservation>(records.end() - static_cast<long>(bounded), records.end());
+}
+
+size_t SemanticAuditLog::size() const {
+  std::lock_guard<std::mutex> lock(mutex);
+  return records.size();
+}
+
+void SemanticAuditLog::clear() {
+  std::lock_guard<std::mutex> lock(mutex);
+  records.clear();
+}
 
 void CesCoverageRegistry::record(const Machine& machine, const MachineTransitionResult& result) {
   std::string base = machine.id + "\t" + machine.name;

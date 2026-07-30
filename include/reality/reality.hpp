@@ -3,8 +3,10 @@
 #include "reality/json.hpp"
 
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <set>
@@ -367,6 +369,37 @@ struct WorkerPoolMetrics {
   size_t capacity = 0;
 };
 
+// Semantic audit trail — re:SequenceObservation records emitted while
+// machines process input.  Shapes and IRI rules are specified in
+// RealityEngine_Machines docs/SEMANTIC_AUDIT_CONTRACT.md (milestone M5); the
+// server joins the corpus semantics manifest at read time to attach IRIs.
+struct SequenceObservation {
+  long long at = 0;
+  std::string machineId;
+  std::string machineName;
+  std::string sequenceId;
+  std::string stepId;
+  bool completed = false;
+  std::string determinationId;  // empty when the step emitted no output
+  std::string actionCode;
+  std::string ragStatus;
+};
+
+class SemanticAuditLog {
+public:
+  static constexpr size_t Capacity = 1000;
+  // Append every matched step of every sequence in `result`.
+  void record(const Machine& machine, const MachineTransitionResult& result);
+  // Oldest-to-newest, at most `limit` most recent observations.
+  std::vector<SequenceObservation> recent(size_t limit) const;
+  size_t size() const;
+  void clear();
+
+private:
+  mutable std::mutex mutex;
+  std::deque<SequenceObservation> records;
+};
+
 // CES coverage telemetry — matched/activated/output counters keyed by
 // (machineId, sequenceId, vectorId).  Mirrors src/services/CesCoverageRegistry.ts
 // in the AI runtime so the /metrics endpoints in both engines share the same
@@ -420,6 +453,9 @@ public:
   // Coverage telemetry accumulated across every process_immediate / step call.
   CesCoverageRegistry& ces_coverage();
   const CesCoverageRegistry& ces_coverage() const;
+  // Semantic audit trail accumulated across the same calls (milestone M5).
+  SemanticAuditLog& semantic_audit();
+  const SemanticAuditLog& semantic_audit() const;
   // Number of declared (subscriberMachine, producerMachineId, producerSequenceId)
   // subscriptions, summed across all registered meta-machines.
   size_t event_bus_subscription_count() const;
@@ -458,6 +494,7 @@ private:
   bool configured = false;
   long mappingVersion = 0;
   CesCoverageRegistry coverage;
+  SemanticAuditLog semanticAudit;
   struct ComposeSubscription {
     std::string subscriberMachineId;
     int bitOffset = 0;
