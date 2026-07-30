@@ -415,9 +415,49 @@ public:
     server.route("GET", "/api/machines/json/list", [this](const http::Request&) {
       Json::Array arr;
       namespace fs = std::filesystem;
-      if (fs::exists(machinesDirectory)) for (const auto& p : fs::recursive_directory_iterator(machinesDirectory)) if (p.path().extension() == ".json")
-        arr.push_back(Json::Object{{"filename", p.path().filename().string()}, {"relFile", fs::relative(p.path(), machinesDirectory).generic_string()}, {"name", p.path().stem().string()}, {"description", ""}, {"version", "1.0.0"}, {"metadata", Json::Object{}}, {"sequenceCount", 0.0}});
+      // Corpus semantics manifest (may be absent — fields are then omitted).
+      Json::Object semanticsByKey;
+      try {
+        Json manifest = load_semantics_manifest();
+        semanticsByKey = manifest.at("machines").object();
+      } catch (...) {}
+      if (fs::exists(machinesDirectory)) for (const auto& p : fs::recursive_directory_iterator(machinesDirectory)) if (p.path().extension() == ".json") {
+        std::string relFile = fs::relative(p.path(), machinesDirectory).generic_string();
+        Json::Object entry{{"filename", p.path().filename().string()}, {"relFile", relFile}, {"name", p.path().stem().string()}, {"description", ""}, {"version", "1.0.0"}, {"metadata", Json::Object{}}, {"sequenceCount", 0.0}};
+        // Manifest keys are "<domain>/<stem>": domains/<d>/X.json -> d/X, else core/X.
+        std::string key = relFile.rfind("domains/", 0) == 0 ? relFile.substr(8) : "core/" + relFile;
+        if (key.size() > 5 && key.ends_with(".json")) key.erase(key.size() - 5);
+        auto found = semanticsByKey.find(key);
+        if (found != semanticsByKey.end()) {
+          entry["semanticsIri"] = found->second.at("iri").as_string();
+          entry["semanticsHash"] = found->second.at("sha256").as_string();
+        }
+        arr.push_back(entry);
+      }
       return ok(Json::Object{{"machines", arr}});
+    });
+    // OWL semantic identity (roadmap M4): IRI + ABox content hash from the
+    // corpus semantics/abox-manifest.json, keyed by machine name. Contract
+    // mirrors the Scala and TypeScript engines.
+    server.route("GET", "/api/machines/semantics/:name", [this](const http::Request& req) {
+      const std::string name = url_decode(req.pathParams.at("name"));
+      Json manifest;
+      try {
+        manifest = load_semantics_manifest();
+      } catch (const std::exception& e) {
+        return http::error_response(std::string("semantics manifest unavailable: ") + e.what(), 404);
+      }
+      for (const auto& [key, entry] : manifest.at("machines").object()) {
+        if (entry.at("name").as_string() != name) continue;
+        return ok(Json::Object{
+          {"name", name},
+          {"machineKey", key},
+          {"semanticsIri", entry.at("iri").as_string()},
+          {"semanticsHash", entry.at("sha256").as_string()},
+          {"sourceFile", entry.at("sourceFile").as_string()},
+          {"ontology", manifest.at("ontology").as_string()}});
+      }
+      return http::error_response("No semantics manifest entry for machine: " + name, 404);
     });
     server.route("GET", "/api/machines/json/:name", [this](const http::Request& req) {
       std::string name = req.pathParams.at("name");
@@ -619,6 +659,21 @@ public:
 
 private:
   static Json parse_body(const http::Request& req) { return req.body.empty() ? Json::Object{} : json::parse(req.body); }
+
+  // Percent-decode a path parameter (machine names contain spaces).
+  static std::string url_decode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+      if (s[i] == '%' && i + 2 < s.size() && std::isxdigit(static_cast<unsigned char>(s[i + 1])) && std::isxdigit(static_cast<unsigned char>(s[i + 2]))) {
+        out += static_cast<char>(std::stoi(s.substr(i + 1, 2), nullptr, 16));
+        i += 2;
+      } else {
+        out += s[i];
+      }
+    }
+    return out;
+  }
   static http::Response ok(const Json& value) { return http::json_response(json::stringify(value)); }
   static Json string_array(const std::vector<std::string>& values) {
     Json::Array out;
@@ -702,6 +757,35 @@ private:
       throw std::runtime_error("invalid registry shape at " + path.string());
     }
     return registry;
+  }
+
+  // OWL semantics manifest (RealityEngine_Machines semantics/abox-manifest.json):
+  // per-machine semantic identity — ABox IRI + content hash — for the
+  // cross-engine semantic-equivalence surface (roadmap milestone M4).
+  std::filesystem::path semantics_manifest_path() const {
+    if (const char* explicitPath = std::getenv("SEMANTICS_MANIFEST")) {
+      if (*explicitPath) return std::filesystem::path(explicitPath);
+    }
+    std::filesystem::path cursor = std::filesystem::absolute(machinesDirectory);
+    for (int i = 0; i < 6 && !cursor.empty(); ++i) {
+      std::filesystem::path candidate = cursor / "semantics" / "abox-manifest.json";
+      if (std::filesystem::exists(candidate)) return candidate;
+      cursor = cursor.parent_path();
+    }
+    return std::filesystem::absolute(machinesDirectory).parent_path() / "semantics" / "abox-manifest.json";
+  }
+
+  Json load_semantics_manifest() const {
+    const auto path = semantics_manifest_path();
+    std::ifstream in(path);
+    if (!in) throw std::runtime_error("cannot open " + path.string());
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    Json manifest = json::parse(buffer.str());
+    if (!manifest.is_object() || !manifest.at("machines").is_object()) {
+      throw std::runtime_error("invalid semantics manifest shape at " + path.string());
+    }
+    return manifest;
   }
 
   int bits_per_element_for_machine(const std::string& machineId) const {
