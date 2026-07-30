@@ -18,6 +18,7 @@
 #include <thread>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <sstream>
 
 using namespace reality;
@@ -182,6 +183,199 @@ Json merge_objects(Json base, const Json& overlay) {
   if (!overlay.is_object()) return base;
   for (const auto& [key, value] : overlay.object()) base.object()[key] = value;
   return base;
+}
+
+std::string decode_json_pointer_token(std::string token) {
+  size_t pos = 0;
+  while ((pos = token.find("~1", pos)) != std::string::npos) token.replace(pos, 2, "/");
+  pos = 0;
+  while ((pos = token.find("~0", pos)) != std::string::npos) token.replace(pos, 2, "~");
+  return token;
+}
+
+const Json* eval_json_pointer(const Json& doc, const std::string& pointer) {
+  if (pointer.empty()) return &doc;
+  if (pointer[0] != '/') return nullptr;
+  const Json* cursor = &doc;
+  size_t start = 1;
+  while (true) {
+    size_t slash = pointer.find('/', start);
+    std::string token = decode_json_pointer_token(pointer.substr(start, slash == std::string::npos ? std::string::npos : slash - start));
+    if (!cursor) return nullptr;
+    if (cursor->is_object()) {
+      const auto& obj = cursor->object();
+      auto it = obj.find(token);
+      if (it == obj.end()) return nullptr;
+      cursor = &it->second;
+    } else if (cursor->is_array()) {
+      if (token.empty() || token.find_first_not_of("0123456789") != std::string::npos) return nullptr;
+      size_t idx = static_cast<size_t>(std::stoul(token));
+      if (idx >= cursor->array().size()) return nullptr;
+      cursor = &cursor->array()[idx];
+    } else {
+      return nullptr;
+    }
+    if (slash == std::string::npos) break;
+    start = slash + 1;
+  }
+  return cursor;
+}
+
+std::string json_pointer_top_level_key(const std::string& pointer) {
+  if (pointer.empty() || pointer[0] != '/') return "value";
+  size_t slash = pointer.find('/', 1);
+  return decode_json_pointer_token(pointer.substr(1, slash == std::string::npos ? std::string::npos : slash - 1));
+}
+
+bool scalar_to_completion_number(const Json& value, double& out) {
+  if (value.is_number()) {
+    out = value.as_number();
+    return std::isfinite(out);
+  }
+  if (value.is_bool()) {
+    out = value.as_bool() ? 1.0 : 0.0;
+    return true;
+  }
+  if (value.is_string()) {
+    const std::string raw = value.as_string();
+    char* end = nullptr;
+    out = std::strtod(raw.c_str(), &end);
+    return end != raw.c_str() && end && *end == '\0' && std::isfinite(out);
+  }
+  return false;
+}
+
+double clamp01(double value) {
+  if (!std::isfinite(value)) return 0.0;
+  if (value < 0.0) return 0.0;
+  if (value > 1.0) return 1.0;
+  return value;
+}
+
+Json validate_completion_values_array(const Json& values) {
+  if (!values.is_array()) throw std::runtime_error("provider completion values must be an array");
+  Json::Array out;
+  for (const auto& value : values.array()) {
+    double n = 0.0;
+    if (!scalar_to_completion_number(value, n)) throw std::runtime_error("provider completion value is not a finite number");
+    out.emplace_back(n);
+  }
+  return Json(out);
+}
+
+Json response_values_from_content(const Json& contentJson) {
+  if (contentJson.at("values").is_array()) return validate_completion_values_array(contentJson.at("values"));
+  if (contentJson.at("completion").at("values").is_array()) return validate_completion_values_array(contentJson.at("completion").at("values"));
+  return Json(nullptr);
+}
+
+Json extract_completion_values_for_mapping(const Json& contentJson, const Json& mapping) {
+  const Json& extract = mapping.at("extract");
+  if (!extract.is_object() || extract.at("type").as_string() != "json") {
+    Json values = response_values_from_content(contentJson);
+    if (!values.is_array()) throw std::runtime_error("provider response did not include completion values");
+    return values;
+  }
+
+  Json::Array values;
+  if (extract.at("pointers").is_array()) {
+    for (const auto& item : extract.at("pointers").array()) {
+      const std::string pointer = item.as_string();
+      const Json* value = eval_json_pointer(contentJson, pointer);
+      if (!value) throw std::runtime_error("missing required JSON pointer: " + pointer);
+      double n = 0.0;
+      if (!scalar_to_completion_number(*value, n)) throw std::runtime_error("JSON pointer resolved to a non-finite value: " + pointer);
+      values.emplace_back(n);
+    }
+    return Json(values);
+  }
+
+  const std::string pointer = extract.at("pointer").as_string();
+  if (!pointer.empty()) {
+    const Json* value = eval_json_pointer(contentJson, pointer);
+    if (!value) throw std::runtime_error("missing required JSON pointer: " + pointer);
+    if (value->is_array()) return validate_completion_values_array(*value);
+    double n = 0.0;
+    if (!scalar_to_completion_number(*value, n)) throw std::runtime_error("JSON pointer resolved to a non-finite value: " + pointer);
+    return Json(Json::Array{n});
+  }
+
+  Json fallback = response_values_from_content(contentJson);
+  if (!fallback.is_array()) throw std::runtime_error("provider response did not include completion values");
+  return fallback;
+}
+
+Json normalize_completion_values(Json values, const Json& mapping) {
+  if (!values.is_array()) return values;
+  const Json& normalize = mapping.at("normalize");
+  if (!normalize.is_object()) return values;
+  const std::string mode = normalize.at("mode").as_string("passthrough");
+  const bool clamp = normalize.at("clamp").as_bool(false);
+  Json::Array out;
+  for (const auto& item : values.array()) {
+    double n = item.as_number();
+    if (mode == "minmax") {
+      const double min = normalize.at("min").as_number();
+      const double max = normalize.at("max").as_number();
+      const double span = max - min;
+      n = span == 0.0 ? 0.0 : (n - min) / span;
+    } else if (mode == "linear") {
+      n = n * normalize.at("scale").as_number(1.0) + normalize.at("offset").as_number(0.0);
+    }
+    out.emplace_back(clamp ? clamp01(n) : n);
+  }
+  return Json(out);
+}
+
+Json completion_values_from_content(const Json& contentJson, const Json& mapping) {
+  if (contentJson.is_null()) throw std::runtime_error("provider response content is not valid JSON");
+  Json values = mapping.is_object()
+    ? extract_completion_values_for_mapping(contentJson, mapping)
+    : response_values_from_content(contentJson);
+  if (!values.is_array()) throw std::runtime_error("provider response did not include completion values");
+  return mapping.is_object() ? normalize_completion_values(values, mapping) : values;
+}
+
+Json completion_schema_for_mapping(const Json& mapping) {
+  const Json& extract = mapping.at("extract");
+  if (mapping.is_object() && extract.is_object() && extract.at("type").as_string() == "json") {
+    Json::Array pointers;
+    if (extract.at("pointers").is_array()) pointers = extract.at("pointers").array();
+    else if (extract.at("pointer").is_string()) pointers.push_back(extract.at("pointer"));
+    if (!pointers.empty()) {
+      Json::Object properties;
+      Json::Array required;
+      for (const auto& item : pointers) {
+        std::string key = json_pointer_top_level_key(item.as_string());
+        if (key.empty()) key = "value";
+        properties[key] = Json::Object{{"type", Json::Array{"number", "boolean"}}};
+        required.push_back(key);
+      }
+      return Json::Object{
+        {"type", "object"},
+        {"additionalProperties", false},
+        {"properties", Json(properties)},
+        {"required", Json(required)}
+      };
+    }
+  }
+  return Json::Object{
+    {"type", "object"},
+    {"additionalProperties", false},
+    {"properties", Json::Object{{"values", Json::Object{{"type", "array"}, {"items", Json::Object{{"type", "number"}}}}}}},
+    {"required", Json::Array{"values"}}
+  };
+}
+
+Json openai_text_format_for_mapping(const Json& mapping) {
+  return Json::Object{
+    {"format", Json::Object{
+      {"type", "json_schema"},
+      {"name", "reality_engine_completion"},
+      {"strict", true},
+      {"schema", completion_schema_for_mapping(mapping)}
+    }}
+  };
 }
 
 std::string test_source_id(const std::string& machineId) {
@@ -1360,17 +1554,38 @@ private:
     }
   }
 
-  static Json response_values_from_content(const Json& contentJson) {
-    if (contentJson.at("values").is_array()) return contentJson.at("values");
-    if (contentJson.at("completion").at("values").is_array()) return contentJson.at("completion").at("values");
-    return Json(nullptr);
-  }
-
   std::map<std::string, std::string> openai_headers() const {
     if (openaiApiKey.empty()) throw std::runtime_error("OPENAI_API_KEY is not configured");
     return {
       {"Authorization", "Bearer " + openaiApiKey}
     };
+  }
+
+  static void assert_openai_response_ready(const Json& response) {
+    if (response.at("error").is_object()) {
+      throw std::runtime_error(json::stringify(response.at("error")));
+    }
+    const std::string status = response.at("status").as_string();
+    if (!status.empty() && status != "completed") {
+      throw std::runtime_error("OpenAI response did not complete: " + status);
+    }
+    if (response.at("refusal").is_string() && !response.at("refusal").as_string().empty()) {
+      throw std::runtime_error("OpenAI response refused: " + response.at("refusal").as_string());
+    }
+    const Json& output = response.at("output");
+    if (!output.is_array()) return;
+    for (const auto& item : output.array()) {
+      const Json& content = item.at("content");
+      if (!content.is_array()) continue;
+      for (const auto& part : content.array()) {
+        if (part.at("type").as_string() == "refusal") {
+          throw std::runtime_error("OpenAI response refused");
+        }
+        if (part.at("refusal").is_string() && !part.at("refusal").as_string().empty()) {
+          throw std::runtime_error("OpenAI response refused: " + part.at("refusal").as_string());
+        }
+      }
+    }
   }
 
   static std::string openai_response_text(const Json& response) {
@@ -1424,6 +1639,8 @@ private:
 
     const std::string model = body.at("model").as_string(ollamaModel);
     const std::string sourceMappingId = body.at("sourceMappingId").as_string(ollamaCompletionSourceMappingId);
+    Json completionMapping = sourceMappingId.empty() ? Json(nullptr) : configured_source_mapping(sourceMappingId);
+    if (!sourceMappingId.empty() && !completionMapping.is_object()) return http::error_response("Unknown sourceMappingId \"" + sourceMappingId + "\"", 404);
     (void)update_dispatch_record(dispatchId, Json::Object{
       {"status", "delivering"},
       {"adapter", "ollama"},
@@ -1446,27 +1663,26 @@ private:
       Json completionResult = nullptr;
       bool completionCommitted = false;
       if (body.at("commitCompletion").as_bool(true) && !sourceMappingId.empty()) {
-        Json values = body.at("values").is_array() ? body.at("values") : response_values_from_content(contentJson);
-        if (values.is_array()) {
-          Json::Object completionBody{
-            {"provider", "ollama"},
-            {"agent", record.target.empty() ? "ollama" : record.target},
-            {"sourceMappingId", sourceMappingId},
-            {"correlationId", record.correlationId},
-            {"envelopeId", record.envelopeId},
-            {"completionId", make_id("ollama-completion")},
-            {"values", values},
-            {"metadata", Json::Object{
-              {"model", model},
-              {"dispatchId", dispatchId},
-              {"content", content}
-            }},
-            {"triggerPush", body.at("triggerPush").as_bool(false)}
-          };
-          http::Response completionResponse = ingest_completion(Json(completionBody));
-          completionResult = parse_json_or_null(completionResponse.body);
-          completionCommitted = completionResponse.status >= 200 && completionResponse.status < 300;
-        }
+        Json values = body.at("values").is_array() ? validate_completion_values_array(body.at("values")) : completion_values_from_content(contentJson, completionMapping);
+        Json::Object completionBody{
+          {"provider", "ollama"},
+          {"agent", record.target.empty() ? "ollama" : record.target},
+          {"sourceMappingId", sourceMappingId},
+          {"correlationId", record.correlationId},
+          {"envelopeId", record.envelopeId},
+          {"completionId", make_id("ollama-completion")},
+          {"values", values},
+          {"metadata", Json::Object{
+            {"model", model},
+            {"dispatchId", dispatchId},
+            {"content", content}
+          }},
+          {"triggerPush", body.at("triggerPush").as_bool(false)}
+        };
+        http::Response completionResponse = ingest_completion(Json(completionBody));
+        completionResult = parse_json_or_null(completionResponse.body);
+        completionCommitted = completionResponse.status >= 200 && completionResponse.status < 300;
+        if (!completionCommitted) throw std::runtime_error("completion ingest failed: " + completionResponse.body);
       }
 
       (void)update_dispatch_record(dispatchId, Json::Object{
@@ -1490,7 +1706,14 @@ private:
         {"response", response},
         {"contentJson", contentJson},
         {"completionCommitted", completionCommitted},
-        {"completion", completionResult}
+        {"completion", completionResult},
+        {"receipt", Json::Object{
+          {"provider", "ollama"},
+          {"adapter", "ollama"},
+          {"status", "sent"},
+          {"externalRunId", response.at("created_at").as_string()},
+          {"providerReceipt", Json::Object{{"model", model}, {"completionCommitted", completionCommitted}}}
+        }}
       });
     } catch (const std::exception& e) {
       (void)update_dispatch_record(dispatchId, Json::Object{
@@ -1508,13 +1731,21 @@ private:
         {"dispatchId", dispatchId},
         {"provider", "ollama"},
         {"model", model},
-        {"error", e.what()}
+        {"error", e.what()},
+        {"receipt", Json::Object{
+          {"provider", "ollama"},
+          {"adapter", "ollama"},
+          {"status", "failed"},
+          {"error", e.what()},
+          {"providerReceipt", Json::Object{{"model", model}}}
+        }}
       }), 502);
     }
   }
 
-  Json build_openai_payload(const DispatchRecord& record, const Json& body, const std::string& model) const {
+  Json build_openai_payload(const DispatchRecord& record, const Json& body, const std::string& model, const std::string& sourceMappingId) const {
     if (body.at("payload").is_object()) return body.at("payload");
+    const Json mapping = sourceMappingId.empty() ? Json(nullptr) : configured_source_mapping(sourceMappingId);
     const std::string instructions = body.at("instructions").as_string(
       "You are a PE-controlled OpenAI adapter. Analyze the trigger envelope and respond as JSON. "
       "When committing a PE completion, include a numeric values array matching the configured source mapping.");
@@ -1537,6 +1768,8 @@ private:
     if (body.at("temperature").is_number()) payload["temperature"] = body.at("temperature");
     if (body.at("reasoning").is_object()) payload["reasoning"] = body.at("reasoning");
     if (body.at("text").is_object()) payload["text"] = body.at("text");
+    else if (body.at("responseFormatMode").as_string("json-schema") == "json-object") payload["text"] = Json::Object{{"format", Json::Object{{"type", "json_object"}}}};
+    else payload["text"] = openai_text_format_for_mapping(mapping);
     return Json(payload);
   }
 
@@ -1550,6 +1783,8 @@ private:
 
     const std::string model = body.at("model").as_string(openaiModel);
     const std::string sourceMappingId = body.at("sourceMappingId").as_string(openaiCompletionSourceMappingId);
+    Json completionMapping = sourceMappingId.empty() ? Json(nullptr) : configured_source_mapping(sourceMappingId);
+    if (!sourceMappingId.empty() && !completionMapping.is_object()) return http::error_response("Unknown sourceMappingId \"" + sourceMappingId + "\"", 404);
     (void)update_dispatch_record(dispatchId, Json::Object{
       {"status", "delivering"},
       {"adapter", "openai"},
@@ -1564,40 +1799,37 @@ private:
     });
 
     try {
-      Json payload = build_openai_payload(record, body, model);
+      Json payload = build_openai_payload(record, body, model, sourceMappingId);
       std::string raw = http::request_json("POST", openaiBaseUrl + "/responses", json::stringify(payload), openai_headers());
       Json response = json::parse(raw);
-      if (response.at("error").is_object()) {
-        throw std::runtime_error(json::stringify(response.at("error")));
-      }
+      assert_openai_response_ready(response);
       std::string content = openai_response_text(response);
       Json contentJson = parse_json_or_null(content);
 
       Json completionResult = nullptr;
       bool completionCommitted = false;
       if (body.at("commitCompletion").as_bool(true) && !sourceMappingId.empty()) {
-        Json values = body.at("values").is_array() ? body.at("values") : response_values_from_content(contentJson);
-        if (values.is_array()) {
-          Json::Object completionBody{
-            {"provider", "openai"},
-            {"agent", record.target.empty() ? "openai" : record.target},
-            {"sourceMappingId", sourceMappingId},
-            {"correlationId", record.correlationId},
-            {"envelopeId", record.envelopeId},
-            {"completionId", response.at("id").as_string(make_id("openai-completion"))},
-            {"values", values},
-            {"metadata", Json::Object{
-              {"model", model},
-              {"dispatchId", dispatchId},
-              {"responseId", response.at("id").as_string()},
-              {"content", content}
-            }},
-            {"triggerPush", body.at("triggerPush").as_bool(false)}
-          };
-          http::Response completionResponse = ingest_completion(Json(completionBody));
-          completionResult = parse_json_or_null(completionResponse.body);
-          completionCommitted = completionResponse.status >= 200 && completionResponse.status < 300;
-        }
+        Json values = body.at("values").is_array() ? validate_completion_values_array(body.at("values")) : completion_values_from_content(contentJson, completionMapping);
+        Json::Object completionBody{
+          {"provider", "openai"},
+          {"agent", record.target.empty() ? "openai" : record.target},
+          {"sourceMappingId", sourceMappingId},
+          {"correlationId", record.correlationId},
+          {"envelopeId", record.envelopeId},
+          {"completionId", response.at("id").as_string(make_id("openai-completion"))},
+          {"values", values},
+          {"metadata", Json::Object{
+            {"model", model},
+            {"dispatchId", dispatchId},
+            {"responseId", response.at("id").as_string()},
+            {"content", content}
+          }},
+          {"triggerPush", body.at("triggerPush").as_bool(false)}
+        };
+        http::Response completionResponse = ingest_completion(Json(completionBody));
+        completionResult = parse_json_or_null(completionResponse.body);
+        completionCommitted = completionResponse.status >= 200 && completionResponse.status < 300;
+        if (!completionCommitted) throw std::runtime_error("completion ingest failed: " + completionResponse.body);
       }
 
       (void)update_dispatch_record(dispatchId, Json::Object{
@@ -1622,7 +1854,14 @@ private:
         {"response", response},
         {"contentJson", contentJson},
         {"completionCommitted", completionCommitted},
-        {"completion", completionResult}
+        {"completion", completionResult},
+        {"receipt", Json::Object{
+          {"provider", "openai"},
+          {"adapter", "openai"},
+          {"status", "sent"},
+          {"externalRunId", response.at("id").as_string()},
+          {"providerReceipt", Json::Object{{"model", model}, {"completionCommitted", completionCommitted}}}
+        }}
       });
     } catch (const std::exception& e) {
       (void)update_dispatch_record(dispatchId, Json::Object{
@@ -1641,7 +1880,14 @@ private:
         {"dispatchId", dispatchId},
         {"provider", "openai"},
         {"model", model},
-        {"error", e.what()}
+        {"error", e.what()},
+        {"receipt", Json::Object{
+          {"provider", "openai"},
+          {"adapter", "openai"},
+          {"status", "failed"},
+          {"error", e.what()},
+          {"providerReceipt", Json::Object{{"model", model}, {"endpoint", "/responses"}}}
+        }}
       }), 502);
     }
   }

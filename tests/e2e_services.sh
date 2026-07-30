@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 
 REALITY_ENGINE_E2E_PORT="${REALITY_ENGINE_E2E_PORT:-5401}"
 PERCEPTION_ENGINE_E2E_PORT="${PERCEPTION_ENGINE_E2E_PORT:-5400}"
+OPENAI_STUB_E2E_PORT="${OPENAI_STUB_E2E_PORT:-5412}"
 VECTOR_DIMENSION="${VECTOR_DIMENSION:-7680}"
 MACHINES_DIR="${MACHINES_DIR:-../RealityEngine_Machines/machines}"
 LOCAL_AI_API_URL="${LOCAL_AI_API_URL:-http://localhost:4000}"
@@ -14,8 +15,13 @@ LOCAL_AI_MACHINES_DIR="${LOCAL_AI_MACHINES_DIR:-../localAIStack/data/machines}"
 
 REALITY_PID=""
 PERCEPTION_PID=""
+OPENAI_STUB_PID=""
 
 cleanup() {
+  if [ -n "$OPENAI_STUB_PID" ] && kill -0 "$OPENAI_STUB_PID" >/dev/null 2>&1; then
+    kill "$OPENAI_STUB_PID" >/dev/null 2>&1 || true
+    wait "$OPENAI_STUB_PID" >/dev/null 2>&1 || true
+  fi
   if [ -n "$PERCEPTION_PID" ] && kill -0 "$PERCEPTION_PID" >/dev/null 2>&1; then
     kill "$PERCEPTION_PID" >/dev/null 2>&1 || true
     wait "$PERCEPTION_PID" >/dev/null 2>&1 || true
@@ -106,11 +112,13 @@ expected_machine_test_source_count() {
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 count = 0
-for path in root.glob("*.json"):
+for path in root.rglob("*.json"):
     data = json.loads(path.read_text())
     machine = data.get("machine", {})
     mapping = machine.get("perceptualMapping", {})
     seqs = machine.get("inputSequences", [])
+    if not isinstance(seqs, list) or not seqs:
+        seqs = machine.get("sequences", [])
     if (
         isinstance(mapping, dict)
         and isinstance(mapping.get("input"), dict)
@@ -251,6 +259,49 @@ if receipt.get("adapter") != "e2e" or receipt.get("externalRunId") != "run-e2e":
 ' "$payload"
 }
 
+assert_openai_dispatch_success() {
+  local payload="$1"
+  python3 -c '
+import json, sys
+data = json.loads(sys.argv[1])
+if data.get("success") is not True:
+    raise SystemExit(f"OpenAI dispatch failed: {data!r}")
+if data.get("provider") != "openai":
+    raise SystemExit(f"unexpected provider: {data!r}")
+receipt = data.get("receipt", {})
+if receipt.get("status") != "sent" or receipt.get("adapter") != "openai":
+    raise SystemExit(f"receipt mismatch: {receipt!r}")
+fmt = data.get("response", {}).get("receivedTextFormat", {})
+if fmt.get("type") != "json_schema" or fmt.get("strict") is not True:
+    raise SystemExit(f"OpenAI payload was not schema-strict: {fmt!r}")
+required = fmt.get("schema", {}).get("required", [])
+if required != ["completed", "failed", "confidence", "actionClass"]:
+    raise SystemExit(f"OpenAI schema required fields mismatch: {required!r}")
+signal = data.get("completion", {}).get("signal", {}).get("source", {})
+if signal.get("lastValue") != [1, 0, 0.83, 0]:
+    raise SystemExit(f"OpenAI completion values mismatch: {signal!r}")
+' "$payload"
+}
+
+assert_openai_dispatch_failure() {
+  local payload="$1"
+  python3 -c '
+import json, sys
+raw = sys.argv[1]
+body, status = raw.rsplit("\n", 1)
+data = json.loads(body)
+if status != "502":
+    raise SystemExit(f"expected HTTP 502 for invalid provider output, got {status}: {data!r}")
+if data.get("success") is not False:
+    raise SystemExit(f"expected failed dispatch body: {data!r}")
+if "missing required JSON pointer: /actionClass" not in data.get("error", ""):
+    raise SystemExit(f"unexpected validation error: {data!r}")
+receipt = data.get("receipt", {})
+if receipt.get("status") != "failed" or receipt.get("adapter") != "openai":
+    raise SystemExit(f"failed receipt mismatch: {receipt!r}")
+' "$payload"
+}
+
 post_machine() {
   local payload="$1"
   curl -sf -X POST "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/machines" \
@@ -270,6 +321,10 @@ echo "  Perception Engine port: $PERCEPTION_ENGINE_E2E_PORT"
 bin/reality_engine_server "$REALITY_ENGINE_E2E_PORT" "$MACHINES_DIR" "$VECTOR_DIMENSION" >/tmp/reality_engine_e2e.log 2>&1 &
 REALITY_PID="$!"
 wait_for_http "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/health" "Reality Engine"
+
+python3 tests/openai_stub_server.py "$OPENAI_STUB_E2E_PORT" >/tmp/openai_stub_e2e.log 2>&1 &
+OPENAI_STUB_PID="$!"
+wait_for_http "http://localhost:${OPENAI_STUB_E2E_PORT}/v1/models" "OpenAI stub"
 
 curl -sf "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/machines" | assert_machine_count_gt_zero
 
@@ -292,7 +347,8 @@ curl -sf -X POST "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/perceive" \
 
 INTEGRATIONS_CONFIG="config/integrations.example.json" \
   TRIGGERS_ENABLED=true \
-  OPENAI_API_KEY="" \
+  OPENAI_BASE_URL="http://localhost:${OPENAI_STUB_E2E_PORT}/v1" \
+  OPENAI_API_KEY="sk-e2e-stub" \
   bin/perception_engine_server "$PERCEPTION_ENGINE_E2E_PORT" "http://localhost:${REALITY_ENGINE_E2E_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" >/tmp/perception_engine_e2e.log 2>&1 &
 PERCEPTION_PID="$!"
 wait_for_http "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/health" "Perception Engine"
@@ -324,6 +380,10 @@ dispatch_id="$(bin/reality_engine_cli pe dispatch-ledger --pe-url "$PE_URL" | fi
 bin/reality_engine_cli pe dispatch-read "$dispatch_id" --pe-url "$PE_URL" >/dev/null
 dispatch_update="$(bin/reality_engine_cli pe dispatch-update "$dispatch_id" --pe-url "$PE_URL" --status delivered --adapter e2e --external-run-id run-e2e --increment-attempts)"
 assert_dispatch_update_success "$dispatch_update"
+openai_failure="$(curl -sS -X POST "${PE_URL}/api/integrations/openai/dispatch" -H "Content-Type: application/json" -d '{"id":"'"$dispatch_id"'","prompt":"MISSING_ACTION_CLASS","triggerPush":false}' -w '\n%{http_code}')"
+assert_openai_dispatch_failure "$openai_failure"
+openai_success="$(curl -sf -X POST "${PE_URL}/api/integrations/openai/dispatch" -H "Content-Type: application/json" -d '{"id":"'"$dispatch_id"'","triggerPush":false}')"
+assert_openai_dispatch_success "$openai_success"
 
 completion_downstream='{"version":"1.0.0","machine":{"name":"E2E Async Completion Consumer","description":"Consumes async agent completion source after dispatch record delivery","arbiterRule":"PASSTHROUGH","perceptualMapping":{"input":{"offset":4200,"length":4},"output":{"offset":4710,"length":2}},"sequences":[{"id":"e2e-async-completion-seq","name":"completion source drives downstream transition","vectors":[{"id":"e2e-async-completion-ready","elements":[{"value":1,"comparatorType":"equals"},{"value":0,"comparatorType":"equals"},{"value":0.75,"comparatorType":"equals"},{"value":0,"comparatorType":"equals"}],"isInitial":true,"outputVectors":[{"id":"e2e-async-completion-out","vector":[1,0],"metadata":{"boundary":"agent completion consumed"}}]}]}]}}'
 post_machine "$completion_downstream"
