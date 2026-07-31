@@ -482,6 +482,25 @@ public:
       std::lock_guard<std::mutex> lock(stateMutex);
       return ok(engine.state_json(lastPush, autoRunning, autoIntervalMs));
     });
+    // Prometheus exposition — RealityEngine_Machines docs/PE_METRICS_CONTRACT.md.
+    // The semantic_* block must stay byte-identical across PE runtimes after
+    // normalizing the runtime label, so the writer below is deliberately
+    // literal and must not be "tidied" into a different ordering or wording.
+    server.route("GET", "/api/metrics", [this](const http::Request&) {
+      int sources = 0;
+      long long globalStep = 0;
+      long long lastPushMs = 0;
+      int vectorSize = 0;
+      {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        sources = static_cast<int>(engine.get_sources().size());
+        globalStep = engine.globalStep;
+        lastPushMs = lastPush.value_or(0);
+        vectorSize = engine.vector_dimension();
+      }
+      return http::Response{200, semantic_metrics_text(sources, globalStep, vectorSize, lastPushMs),
+                            "text/plain; charset=utf-8"};
+    });
     server.route("GET", "/api/integrations/localai/status", [this](const http::Request&) {
       return ok(localai_status());
     });
@@ -2549,6 +2568,26 @@ private:
         lastPush = ts;
         step = engine.globalStep;
       }
+      // Semantic audit (SEMANTIC_AUDIT_CONTRACT.md): one re:PerceptionEvent
+      // per active source region written this push, attributed to the
+      // integration that feeds it and joined to the corpus ABox when the
+      // source names a machine.
+      {
+        const auto& bases = semantics_bases();
+        std::vector<SourceConfig> active;
+        {
+          std::lock_guard<std::mutex> lock(stateMutex);
+          for (const auto& s : engine.get_sources()) {
+            if (s.active) active.push_back(s);
+          }
+        }
+        for (const auto& s : active) {
+          const std::string integration = !s.origin.empty() ? s.origin
+                                        : (!s.kind.empty() ? s.kind : "unattributed");
+          record_perception_event(integration,
+                                  !s.machineName.empty() && bases.count(s.machineName) > 0);
+        }
+      }
       Json dispatch = dispatch_triggers_from_step(parsed);
       Json result = Json::Object{{"success", true}, {"step", parsed}, {"timestamp", static_cast<double>(ts)}, {"globalStep", static_cast<double>(step)}, {"error", nullptr}};
       if (dispatch.is_object()) result.object()["dispatch"] = dispatch;
@@ -2644,6 +2683,142 @@ private:
       }
     }
   }
+
+  // ── Semantic guardrail metrics (docs/PE_METRICS_CONTRACT.md) ─────────────
+  // Counters are monotonic for the process lifetime and bumped where records
+  // are created, so a ring-buffer eviction never loses a count.
+
+  std::filesystem::path semantics_manifest_path() const {
+    if (const char* explicitPath = std::getenv("SEMANTICS_MANIFEST")) {
+      if (*explicitPath) return std::filesystem::path(explicitPath);
+    }
+    const char* machinesEnv = std::getenv("MACHINES_DIR");
+    std::filesystem::path cursor = std::filesystem::absolute(
+        machinesEnv && *machinesEnv ? machinesEnv : "../RealityEngine_Machines/machines");
+    for (int i = 0; i < 6 && !cursor.empty(); ++i) {
+      std::filesystem::path candidate = cursor / "semantics" / "abox-manifest.json";
+      if (std::filesystem::exists(candidate)) return candidate;
+      cursor = cursor.parent_path();
+    }
+    return {};
+  }
+
+  // machine name -> ABox base IRI, cached on the manifest's mtime.
+  const std::map<std::string, std::string>& semantics_bases() const {
+    std::lock_guard<std::mutex> lock(semanticsMutex);
+    const auto path = semantics_manifest_path();
+    if (path.empty() || !std::filesystem::exists(path)) {
+      semanticsBases.clear();
+      semanticsStamp = 0;
+      return semanticsBases;
+    }
+    const auto stamp = static_cast<long long>(
+        std::filesystem::last_write_time(path).time_since_epoch().count());
+    if (stamp == semanticsStamp) return semanticsBases;
+    semanticsBases.clear();
+    semanticsStamp = stamp;
+    try {
+      std::ifstream in(path);
+      std::ostringstream buffer;
+      buffer << in.rdbuf();
+      Json manifest = json::parse(buffer.str());
+      for (const auto& [key, entry] : manifest.at("machines").object()) {
+        (void)key;
+        std::string iri = entry.at("iri").as_string();
+        std::string name = entry.at("name").as_string();
+        const auto hash = iri.find('#');
+        if (!name.empty() && hash != std::string::npos) semanticsBases[name] = iri.substr(0, hash);
+      }
+    } catch (...) {
+      semanticsBases.clear();
+    }
+    return semanticsBases;
+  }
+
+  void record_perception_event(const std::string& integration, bool joined) {
+    std::lock_guard<std::mutex> lock(semanticsMutex);
+    semanticEvents[integration] += 1;
+    semanticEventsJoined[integration] += joined ? 1 : 0;
+    if (++semanticAuditRecords > 1000) semanticAuditRecords = 1000;
+  }
+
+  static std::string metric_line(const std::string& name, const std::string& help,
+                                 const std::string& kind,
+                                 const std::vector<std::pair<std::string, std::string>>& labels,
+                                 long long value) {
+    std::vector<std::pair<std::string, std::string>> all = labels;
+    all.emplace_back("runtime", "cpp");
+    std::sort(all.begin(), all.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::ostringstream out;
+    out << "# HELP " << name << ' ' << help << '\n'
+        << "# TYPE " << name << ' ' << kind << '\n'
+        << name << '{';
+    for (size_t i = 0; i < all.size(); ++i) {
+      if (i) out << ',';
+      out << all[i].first << "=\"" << all[i].second << "\"";
+    }
+    out << "} " << value << '\n';
+    return out.str();
+  }
+
+  std::string semantic_metrics_text(int sources, long long globalStep, int vectorSize,
+                                    long long lastPushMs) const {
+    const auto& bases = semantics_bases();
+    std::lock_guard<std::mutex> lock(semanticsMutex);
+    std::string out;
+    out += metric_line("perception_engine_sources_total",
+                       "Total sensor/test/simulated sources registered.", "gauge", {}, sources);
+    out += metric_line("perception_engine_global_step",
+                       "Engine globalStep counter (push count since start).", "gauge", {}, globalStep);
+    out += metric_line("perception_engine_vector_size",
+                       "Configured vector dimension.", "gauge", {}, vectorSize);
+    out += metric_line("perception_engine_last_push_ms",
+                       "Wall-clock timestamp of the last successful push (0 if never).", "gauge", {},
+                       lastPushMs);
+    out += metric_line("semantic_manifest_available",
+                       "Corpus OWL semantics manifest resolved (1/0).", "gauge", {},
+                       bases.empty() ? 0 : 1);
+    out += metric_line("semantic_manifest_machines",
+                       "Machines carrying a semantic identity in the manifest.", "gauge", {},
+                       static_cast<long long>(bases.size()));
+    out += metric_line("semantic_audit_buffer_records",
+                       "re:PerceptionEvent records held in the audit ring buffer.", "gauge", {},
+                       semanticAuditRecords);
+    for (const auto& [integration, count] : semanticEvents) {
+      out += metric_line("semantic_perception_events_total",
+                         "re:PerceptionEvent records emitted, by originating integration.",
+                         "counter", {{"integration", integration}}, count);
+    }
+    for (const auto& [integration, count] : semanticEventsJoined) {
+      out += metric_line("semantic_perception_events_iri_joined_total",
+                         "Perception events whose machine resolved to a corpus ABox IRI.",
+                         "counter", {{"integration", integration}}, count);
+    }
+    out += metric_line("semantic_dispatch_records_total",
+                       "Dispatch records created with a semantics link.", "counter", {},
+                       semanticDispatchTotal);
+    out += metric_line("semantic_dispatch_records_iri_joined_total",
+                       "Dispatch records whose machine resolved to a corpus ABox IRI.", "counter", {},
+                       semanticDispatchJoined);
+    for (const auto& [rag, count] : semanticEscalations) {
+      out += metric_line("semantic_escalation_dispatches_total",
+                         "Escalation-class actions dispatched, by RAG status of the determination.",
+                         "counter", {{"rag", rag}}, count);
+    }
+    return out;
+  }
+
+  // std::map keeps label values sorted ascending, as the contract requires.
+  mutable std::mutex semanticsMutex;
+  mutable std::map<std::string, std::string> semanticsBases;
+  mutable long long semanticsStamp = 0;
+  std::map<std::string, long long> semanticEvents;
+  std::map<std::string, long long> semanticEventsJoined;
+  std::map<std::string, long long> semanticEscalations;
+  long long semanticDispatchTotal = 0;
+  long long semanticDispatchJoined = 0;
+  long long semanticAuditRecords = 0;
 
   Json current_global_step() const {
     std::lock_guard<std::mutex> lock(stateMutex);
