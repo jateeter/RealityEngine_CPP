@@ -561,6 +561,8 @@ public:
   void advance();
   void reset();
   Json state_json(std::optional<long long> lastPush, bool autoRunning, long autoIntervalMs) const;
+  // Configured vector dimension — reported as perception_engine_vector_size.
+  int vector_dimension() const { return dimension; }
 
 private:
   Vector source_values(const SourceConfig& source) const;
