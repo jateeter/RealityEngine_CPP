@@ -535,8 +535,12 @@ void Machine::reset() { for (auto& [_, s] : sequences) s.reset(); }
 Json Machine::to_json(bool full) const {
   Json::Array seqIds;
   for (const auto& id : sequence_ids()) seqIds.emplace_back(id);
+  // Via all_sequences() so the serialized order is canonical (name, id).
+  // Iterating `sequences` directly walks the map in id order, and ids are
+  // generated per runtime — which is what kept /api/machines diverging from
+  // Scala and LSP even after both had adopted the canonical rule.
   Json::Array seqs;
-  for (const auto& [_, s] : sequences) {
+  for (const auto& s : all_sequences()) {
     seqs.push_back(full ? s.to_json() : Json::Object{{"id", s.id}, {"name", s.name}});
   }
   Json mapping = nullptr;
