@@ -914,8 +914,25 @@ long PerceptualSpaceSimulator::step_delay_ms() const { return configuredStepDela
 PerceptionEngine::PerceptionEngine(int vectorDimension)
   : dimension(vectorDimension), persistentVector(static_cast<size_t>(vectorDimension), 0.0) {}
 
+void PerceptionEngine::ensure_capacity(int requiredEnd, const std::string& context) {
+  if (requiredEnd <= dimension) return;
+  const int previous = dimension;
+  persistentVector.resize(static_cast<size_t>(requiredEnd), 0.0);
+  dimension = requiredEnd;
+  std::cerr << "[PerceptionEngine] perceptionDimension grew " << previous << " -> " << requiredEnd
+            << " for " << context << std::endl;
+}
+
 SourceConfig PerceptionEngine::add_source(SourceConfig source) {
   if (source.id.empty()) source.id = make_id("source");
+  // Grow to cover the source's region.  Without this the source is stored,
+  // counted and returned by /api/pe/sources, then silently dropped by
+  // assemble_vector — machines whose perceptualMapping.input starts past the
+  // configured dimension never receive input at all.
+  ensure_capacity(source.region.offset + source.region.length,
+                  "source '" + source.name + "' region [" +
+                    std::to_string(source.region.offset) + "," +
+                    std::to_string(source.region.offset + source.region.length) + ")");
   sources[source.id] = source;
   testStep[source.id] = 0;
   if (source.pattern == SimPattern::RandomWalk) walkState[source.id] = Vector(static_cast<size_t>(source.region.length), source.dcOffset);
@@ -944,12 +961,25 @@ Vector PerceptionEngine::assemble_vector() const {
   Vector out = persistentVector;
   for (const auto& [_, s] : sources) if (s.active) {
     auto vals = source_values(s);
+    const int end = s.region.offset + s.region.length;
+    // With growth in place this is unreachable, but a region that still does
+    // not fit must say so rather than vanish.
+    if (s.region.offset < 0 || end > static_cast<int>(out.size())) {
+      std::cerr << "[PerceptionEngine] source '" << s.name << "' region ["
+                << s.region.offset << "," << end << ") exceeds perceptionDimension "
+                << out.size() << " — region not written (machineId=" << s.machineId
+                << ", sourceId=" << s.id << ")" << std::endl;
+    }
     for (int i = 0; i < s.region.length && i < static_cast<int>(vals.size()) && s.region.offset + i < static_cast<int>(out.size()); ++i)
       out[static_cast<size_t>(s.region.offset + i)] = std::clamp(vals[static_cast<size_t>(i)], 0.0, 1.0);
   }
   return out;
 }
 void PerceptionEngine::update_from_perceptual_space(const Vector& values) {
+  // The RE grows its perceptual space to fit every loaded machine's mapping,
+  // so it may hand back a vector larger than ours.  Adopt that length instead
+  // of truncating to the configured default.
+  ensure_capacity(static_cast<int>(values.size()), "perceptual space returned by the Reality Engine");
   persistentVector.assign(static_cast<size_t>(dimension), 0.0);
   for (size_t i = 0; i < persistentVector.size() && i < values.size(); ++i) persistentVector[i] = values[i];
 }

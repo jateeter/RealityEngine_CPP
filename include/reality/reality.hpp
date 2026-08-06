@@ -561,11 +561,18 @@ public:
   void advance();
   void reset();
   Json state_json(std::optional<long long> lastPush, bool autoRunning, long autoIntervalMs) const;
-  // Configured vector dimension — reported as perception_engine_vector_size.
+  // Number of elements this engine will actually read and write.  Grows as
+  // sources are added and as the RE reports a larger perceptual space, so a
+  // machine whose perceptualMapping extends past the configured default still
+  // receives input.  Reported as perceptionDimension.
   int vector_dimension() const { return dimension; }
 
 private:
   Vector source_values(const SourceConfig& source) const;
+  // Expand persistentVector and dimension to cover [0, requiredEnd).
+  // `context` names the machine/source that required the growth so the log
+  // line is diagnosable.
+  void ensure_capacity(int requiredEnd, const std::string& context);
   std::map<std::string, SourceConfig> sources;
   std::map<std::string, int> testStep;
   std::map<std::string, Vector> walkState;
