@@ -297,7 +297,7 @@ public:
     server.route("GET", "/api/machines", [this](const http::Request&) {
       Json::Array arr;
       std::shared_lock<std::shared_mutex> lock(registryMutex);
-      for (const auto& [_, m] : machines) arr.push_back(m.to_json());
+      for (const auto& m : machines_in_canonical_order(machines)) arr.push_back(m.to_json());
       return ok(Json::Object{{"machines", arr}});
     });
     server.route("GET", "/api/machines/:id", [this](const http::Request& req) {

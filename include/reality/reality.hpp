@@ -230,6 +230,21 @@ private:
   OutputArbiter arbiter;
 };
 
+// Canonical ordering for machine collections, shared by every runtime.
+//
+// Machines and sequences are stored in maps keyed by id, and ids are generated
+// per runtime — so iteration order differed between C++, LSP and Scala and the
+// same corpus serialized to different bytes.  Ordering by content rather than
+// by identity is what makes the comparison meaningful.
+//
+// Machines sort by (metadata.domain, name, id).  The trailing id keeps the
+// order total when two machines share a domain and name, and metadata.domain is
+// absent on a handful of corpus machines, which sort first under an empty key.
+std::string machine_domain(const Machine& m);
+bool machine_order_less(const Machine& a, const Machine& b);
+// Machines from a map, in canonical order.
+std::vector<Machine> machines_in_canonical_order(const std::map<std::string, Machine>& machines);
+
 class PerceptualSpace {
 public:
   explicit PerceptualSpace(int dimension = 0);
