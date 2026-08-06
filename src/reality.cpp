@@ -476,14 +476,41 @@ Machine::Machine(std::string machineName, std::string machineDescription, Arbite
     perceptualMapping(std::move(mapping)), arbiter(arbiterRule) {}
 void Machine::add_sequence(const CriticalEventSequence& sequence) { sequences[sequence.id] = sequence; }
 void Machine::remove_sequence(const std::string& sequenceId) { sequences.erase(sequenceId); }
+std::string machine_domain(const Machine& m) {
+  auto it = m.metadata.find("domain");
+  if (it == m.metadata.end() || !it->second.is_string()) return "";
+  return it->second.as_string();
+}
+bool machine_order_less(const Machine& a, const Machine& b) {
+  const std::string da = machine_domain(a), db = machine_domain(b);
+  if (da != db) return da < db;
+  if (a.name != b.name) return a.name < b.name;
+  return a.id < b.id;
+}
+std::vector<Machine> machines_in_canonical_order(const std::map<std::string, Machine>& machines) {
+  std::vector<Machine> out;
+  out.reserve(machines.size());
+  for (const auto& [_, m] : machines) out.push_back(m);
+  std::sort(out.begin(), out.end(), machine_order_less);
+  return out;
+}
+
 std::vector<CriticalEventSequence> Machine::all_sequences() const {
+  // Canonical order: by name, then id.  The map is keyed by id, and ids are
+  // generated per runtime, so map order varied between engines for the same
+  // corpus — the "MEMORY ALERT SET / RESET" divergence.
   std::vector<CriticalEventSequence> out;
   for (const auto& [_, s] : sequences) out.push_back(s);
+  std::sort(out.begin(), out.end(), [](const CriticalEventSequence& x, const CriticalEventSequence& y) {
+    if (x.name != y.name) return x.name < y.name;
+    return x.id < y.id;
+  });
   return out;
 }
 std::vector<std::string> Machine::sequence_ids() const {
+  // Mirror all_sequences() so ids and sequences line up positionally.
   std::vector<std::string> out;
-  for (const auto& [id, _] : sequences) out.push_back(id);
+  for (const auto& s : all_sequences()) out.push_back(s.id);
   return out;
 }
 int Machine::sequence_count() const { return static_cast<int>(sequences.size()); }
@@ -884,10 +911,10 @@ void PerceptualSpaceSimulator::rebuild_edge_cache() const {
 
 Json PerceptualSpaceSimulator::machine_graph_data() const {
   Json::Array nodes;
-  for (const auto& [id, m] : machines) {
+  for (const auto& m : machines_in_canonical_order(machines)) {
     if (!m.perceptualMapping) continue;
     const auto& mapping = *m.perceptualMapping;
-    nodes.push_back(Json::Object{{"id", id}, {"name", m.name}, {"description", m.description},
+    nodes.push_back(Json::Object{{"id", m.id}, {"name", m.name}, {"description", m.description},
         {"inputMapping", to_json(mapping.input)}, {"outputMapping", to_json(mapping.output)},
         {"metadata", m.metadata}});
   }
@@ -897,7 +924,7 @@ Json PerceptualSpaceSimulator::machine_graph_data() const {
 }
 Json PerceptualSpaceSimulator::state_json() const {
   Json::Array machineJson;
-  for (const auto& [_, m] : machines) machineJson.push_back(m.to_json());
+  for (const auto& m : machines_in_canonical_order(machines)) machineJson.push_back(m.to_json());
   return Json::Object{{"state", Json::Object{{"perceptualSpace", json::numbers(space.vector())}, {"currentStep", static_cast<double>(currentStep)}, {"isRunning", running}, {"machines", machineJson}}}};
 }
 std::vector<SimulationStep> PerceptualSpaceSimulator::history() const { return steps; }
