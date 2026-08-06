@@ -955,8 +955,16 @@ std::optional<SourceConfig> PerceptionEngine::get_source(const std::string& id) 
   return it->second;
 }
 std::vector<SourceConfig> PerceptionEngine::get_sources() const {
+  // Canonical order: (name, id).  The map is keyed by id and ids are generated
+  // per runtime, so every PE listed sources differently — C++ by id, Scala and
+  // LSP by hash order, TypeScript by insertion order.  Four engines, four
+  // orderings, on an endpoint under byte comparison.
   std::vector<SourceConfig> out;
   for (const auto& [_, s] : sources) out.push_back(s);
+  std::sort(out.begin(), out.end(), [](const SourceConfig& a, const SourceConfig& b) {
+    if (a.name != b.name) return a.name < b.name;
+    return a.id < b.id;
+  });
   return out;
 }
 bool PerceptionEngine::update_sensor_value(const std::string& sensorId, const Vector& values) {
@@ -1041,8 +1049,9 @@ Vector PerceptionEngine::source_values(const SourceConfig& s) const {
   return out;
 }
 Json PerceptionEngine::state_json(std::optional<long long> lastPush, bool autoRunning, long autoIntervalMs) const {
+  // Via get_sources() so /api/pe/state and /api/pe/sources agree on order.
   Json::Array srcs;
-  for (const auto& [_, s] : sources) srcs.push_back(to_json(s));
+  for (const auto& s : get_sources()) srcs.push_back(to_json(s));
   return Json::Object{{"sources", srcs}, {"assembledVector", json::numbers(assemble_vector())}, {"globalStep", static_cast<double>(globalStep)}, {"auto", Json::Object{{"running", autoRunning}, {"intervalMs", static_cast<double>(autoIntervalMs)}}}, {"lastPush", lastPush ? Json(static_cast<double>(*lastPush)) : Json(nullptr)}, {"matchAlgorithm", to_string(matchAlgorithm)}, {"vectorSize", static_cast<double>(dimension)}};
 }
 
