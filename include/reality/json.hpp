@@ -1,15 +1,76 @@
 #pragma once
 
 #include <cctype>
+#include <charconv>
+#include <cmath>
 #include <cstdlib>
 #include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <variant>
 #include <vector>
 
 namespace reality::json {
+
+// Render a double exactly as ECMAScript Number::toString does (ECMA-262
+// 6.1.6.1.20), which is the form JSON.stringify produces and therefore the
+// form the TypeScript runtime already emits.  Shortest round-trip digits;
+// integer form when the value is whole and within plain range; exponential
+// form only outside 1e21 / 1e-7.
+//
+// This replaces `ostringstream << double`, which defaulted to six significant
+// digits and silently corrupted values: 1234567.0 came out as "1.23457e+06"
+// (i.e. 1234570) and pi as "3.14159".  Precision loss, not just formatting
+// drift (RealityEngine_CI#91).
+inline std::string format_double(double value) {
+  if (std::isnan(value) || std::isinf(value)) return "null";
+  if (value == 0.0) return "0";
+
+  const bool negative = value < 0.0;
+  const double magnitude = negative ? -value : value;
+
+  char buf[64];
+  auto res = std::to_chars(buf, buf + sizeof(buf), magnitude, std::chars_format::scientific);
+  if (res.ec != std::errc{}) return "null";
+  const std::string sci(buf, res.ptr);
+
+  const std::size_t epos = sci.find('e');
+  std::string digits;
+  for (std::size_t i = 0; i < epos; ++i) {
+    if (sci[i] != '.') digits.push_back(sci[i]);
+  }
+  // ECMA-262 names: s = digits, k = digit count, n = decimal point position.
+  const int k = static_cast<int>(digits.size());
+  const int n = std::atoi(sci.c_str() + epos + 1) + 1;
+
+  std::string out;
+  if (negative) out.push_back('-');
+
+  if (k <= n && n <= 21) {
+    out += digits;
+    out.append(static_cast<std::size_t>(n - k), '0');
+  } else if (0 < n && n <= 21) {
+    out += digits.substr(0, static_cast<std::size_t>(n));
+    out.push_back('.');
+    out += digits.substr(static_cast<std::size_t>(n));
+  } else if (-6 < n && n <= 0) {
+    out += "0.";
+    out.append(static_cast<std::size_t>(-n), '0');
+    out += digits;
+  } else {
+    out.push_back(digits[0]);
+    if (k > 1) {
+      out.push_back('.');
+      out += digits.substr(1);
+    }
+    out.push_back('e');
+    out.push_back(n - 1 >= 0 ? '+' : '-');
+    out += std::to_string(std::abs(n - 1));
+  }
+  return out;
+}
 
 class Value {
 public:
@@ -109,11 +170,7 @@ inline std::string stringify_object(const Value::Object& obj) {
 inline std::string stringify(const Value& v) {
   if (v.is_null()) return "null";
   if (v.is_bool()) return std::get<bool>(v.data) ? "true" : "false";
-  if (v.is_number()) {
-    std::ostringstream out;
-    out << std::get<double>(v.data);
-    return out.str();
-  }
+  if (v.is_number()) return format_double(std::get<double>(v.data));
   if (v.is_string()) return "\"" + escape(std::get<std::string>(v.data)) + "\"";
   if (v.is_array()) return stringify_array(v.array());
   return stringify_object(v.object());
