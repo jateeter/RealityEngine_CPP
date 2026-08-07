@@ -1086,7 +1086,7 @@ Json PerceptionEngine::state_json(std::optional<long long> lastPush, bool autoRu
   // Via get_sources() so /api/pe/state and /api/pe/sources agree on order.
   Json::Array srcs;
   for (const auto& s : get_sources()) srcs.push_back(to_json(s));
-  return Json::Object{{"sources", srcs}, {"assembledVector", json::numbers(assemble_vector())}, {"globalStep", static_cast<double>(globalStep)}, {"auto", Json::Object{{"running", autoRunning}, {"intervalMs", static_cast<double>(autoIntervalMs)}}}, {"lastPush", lastPush ? Json(static_cast<double>(*lastPush)) : Json(nullptr)}, {"matchAlgorithm", to_string(matchAlgorithm)}, {"vectorSize", static_cast<double>(dimension)}};
+  return Json::Object{{"sources", srcs}, {"assembledVector", json::numbers(assemble_vector())}, {"globalStep", static_cast<double>(globalStep)}, {"auto", Json::Object{{"running", autoRunning}, {"intervalMs", static_cast<double>(autoIntervalMs)}}}, {"lastPush", lastPush ? Json(static_cast<double>(*lastPush)) : Json(nullptr)}, {"matchAlgorithm", to_string(matchAlgorithm)}, {"perceptionDimension", static_cast<double>(dimension)}};
 }
 
 static RegionMapping parse_region(const Json& j) {
