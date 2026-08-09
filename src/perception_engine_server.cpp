@@ -2156,7 +2156,17 @@ private:
     Json::Object signal;
     signal["sensorId"] = sensorId;
     signal["name"] = body.at("name").as_string(mapping.at("name").as_string("agent:" + provider + "/" + agent + "/completion"));
-    if (mapping.at("region").is_object()) signal["region"] = mapping.at("region");
+    // The envelope's own region wins, falling back to the source mapping —
+    // the same body-then-mapping precedence as name, values and ttlMs around
+    // it. Reading it from the mapping alone meant a self-describing
+    // completion (region in the body, no sourceMappingId) reached
+    // ingest_signal with no region at all, and that is the one path where a
+    // sensorId with no existing source is rejected rather than materialized.
+    // External providers commit asynchronously and have no registration step,
+    // so an envelope has to be able to place its own signal; LSP and Scala
+    // both already created the source here (#24).
+    if (body.at("region").is_object()) signal["region"] = body.at("region");
+    else if (mapping.at("region").is_object()) signal["region"] = mapping.at("region");
     signal["values"] = body.at("values").is_array() ? body.at("values") : mapping.at("values");
     signal["active"] = mapping.at("active").as_bool(body.at("active").as_bool(true));
     signal["ttlMs"] = body.at("ttlMs").is_number() ? body.at("ttlMs") : mapping.at("ttlMs").is_number() ? mapping.at("ttlMs") : Json(300000);
