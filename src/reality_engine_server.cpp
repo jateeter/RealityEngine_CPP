@@ -1089,6 +1089,11 @@ int main(int argc, char** argv) {
     // Off by default to match the AI runtime's permissive production behaviour.
     LoadOptions loadOpts;
     if (const char* s = std::getenv("RE_STRICT_STA"); s && *s && std::string(s) != "0") loadOpts.strictSta = true;
+    // Declares how each contended universal-vector position resolves. Loaded
+    // before the corpus so the first step already arbitrates rather than
+    // falling back (ARBITER_CONTRACT.md 5).
+    ArbitrationRegistry::instance().load(machinesDir);
+
     http::Server server;
     RealityService service(machinesDir, vectorDimension, loadOpts);
     service.mount(server);

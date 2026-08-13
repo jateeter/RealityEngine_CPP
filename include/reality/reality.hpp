@@ -1,4 +1,5 @@
 #pragma once
+#include "reality/arbiter.hpp"
 
 #include "reality/json.hpp"
 
@@ -373,6 +374,10 @@ struct SimulationStep {
   // Empty when no subscriptions are active.  Same wire shape as the AI
   // runtime's step.eventBus so cross-runtime parity covers composition too.
   std::vector<EventBusWrite> eventBus;
+  // Arbitration records for this step — contributors, rule applied, resolved
+  // value, and what was suppressed. A discarded contribution has to stay
+  // attributable (ARBITER_CONTRACT.md 6).
+  std::vector<ArbitrationRecord> arbitration;
 };
 
 struct WorkerPoolMetrics {
