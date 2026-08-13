@@ -1,4 +1,5 @@
 #include "reality/reality.hpp"
+#include "reality/arbiter.hpp"
 #include "reality/sta_checker.hpp"
 
 #include <algorithm>
@@ -881,8 +882,35 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     if (a.sequenceId != b.sequenceId) return a.sequenceId < b.sequenceId;
     return a.outputIndex < b.outputIndex;
   });
-  for (const auto& merge : step.mergeBatch) {
-    space.merge_machine_output(merge.values, PerceptualMapping{{0, 0}, merge.region});
+  // GATHER -> RESOLVE -> COMMIT (ARBITER_CONTRACT.md 2).
+  //
+  // The batch above is canonically sorted, which made the previous
+  // apply-each-in-order loop deterministic — but determinism is not resolution.
+  // On a contended cell the last operation still won, and a stable wrong answer
+  // reproduces perfectly and reads as correct. Gather turns each merge operation
+  // into per-cell contributions carrying the governance already resolved from
+  // triggerConfig (the 4.3.1 join), resolve reduces per cell under the declared
+  // rule, and commit writes exactly once per cell.
+  {
+    std::map<int, std::vector<Contribution>> byCell;
+    for (const auto& merge : step.mergeBatch) {
+      const int n = std::min<int>(merge.region.length, static_cast<int>(merge.values.size()));
+      for (int i = 0; i < n; ++i) {
+        Contribution c;
+        c.cell           = merge.region.offset + i;
+        c.value          = merge.values[static_cast<size_t>(i)];
+        c.provider       = "machine";
+        c.originId       = merge.machineId;
+        c.cesId          = merge.sequenceId;
+        c.outputVectorId = std::to_string(merge.outputIndex);
+        if (merge.governance) c.ragStatusCode = merge.governance->ragStatusCode;
+        byCell[c.cell].push_back(std::move(c));
+      }
+    }
+    std::vector<ArbitrationRecord> records;
+    const auto resolved = resolve_all(byCell, step.stepNumber, records);
+    for (const auto& [cell, value] : resolved) space.update_region(cell, Vector{value});
+    step.arbitration = std::move(records);
   }
   // Phase 4 — apply compose/meta-CES event-bus subscriptions, latching
   // 1.0 bits at the offsets every subscriber asked for.  These writes
