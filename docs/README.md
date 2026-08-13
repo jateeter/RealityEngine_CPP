@@ -11,6 +11,8 @@ This is the maintained documentation set for RealityEngine_CPP.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Visual native architecture overview. |
 | [API_EQUIVALENCE.md](API_EQUIVALENCE.md) | API parity against the active Scala replacement surface and other runtimes. |
 | [INTEGRATION_ARCHITECTURE.md](INTEGRATION_ARCHITECTURE.md) | Provider-neutral PE integration, trigger dispatch, source mapping, and MCP architecture. |
+| [SEMANTIC_OWL_ANALYSIS.md](SEMANTIC_OWL_ANALYSIS.md) | Current OWL/ROBOT semantic coverage analysis for PE.x.MCP and PE.x.ACP flows. |
+| [SEMANTIC_OWL_ROADMAP.md](SEMANTIC_OWL_ROADMAP.md) | Roadmap for static and dynamic ROBOT validation across semantic workflows. |
 | [VECTOR_MANAGEMENT.md](VECTOR_MANAGEMENT.md) | Dynamic perceptual-vector strategy. |
 | [ACRONYMS.md](ACRONYMS.md) | Acronym definitions. |
 | [BIBLIOGRAPHY.md](BIBLIOGRAPHY.md) | External and project references. |
