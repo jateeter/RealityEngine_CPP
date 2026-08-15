@@ -6,3 +6,7 @@ run/
 *.dSYM/
 .DS_Store
 .env
+
+# clangd index and compilation database (see workspace CLAUDE.md, LSP Support)
+.cache/
+compile_commands.json
