@@ -28,6 +28,10 @@ enum class Determinism { Deterministic, Measured, Generated };
 // outrank a reading, which is the failure 4.3a exists to prevent.
 Determinism determinism_of(const std::string& provider);
 int determinism_rank(Determinism d);
+// The contract's own spelling of the class: "deterministic" | "measured" |
+// "generated". Serialised by GET /api/arbitration, so it is part of the wire
+// contract rather than a debug string.
+const char* determinism_name(Determinism d);
 int severity_rank(const std::string& ragStatusCode, bool lifeSafety = false);
 
 struct Contribution {
@@ -75,6 +79,15 @@ class ArbitrationRegistry {
   std::map<int, ArbitrationEntry> entries_;
   std::string                     source_;
 };
+
+// The shard count resolve_all would use for the current environment.
+//
+// Reported by GET /api/arbitration so a parallelism difference between runtimes
+// is visible rather than inferred. Correctness does not depend on it — every
+// rule is a commutative monoid, which is what makes any partitioning safe
+// (ARBITER_CONTRACT.md acceptance criterion 3) — but a run that cannot say how
+// it partitioned cannot demonstrate that criterion either.
+unsigned arbiter_shards();
 
 // Resolve one cell. Returns the value; when the cell is contended, record is
 // populated with contributors and what was suppressed — a discarded agent
