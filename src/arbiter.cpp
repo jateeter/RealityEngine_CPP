@@ -200,6 +200,22 @@ double resolve_cell(int cell, int instant,
   return resolved;
 }
 
+const char* determinism_name(Determinism d) {
+  switch (d) {
+    case Determinism::Deterministic: return "deterministic";
+    case Determinism::Measured:      return "measured";
+    case Determinism::Generated:     return "generated";
+  }
+  return "generated";
+}
+
+unsigned arbiter_shards() {
+  const char* shardEnv = std::getenv("ARBITER_SHARDS");
+  unsigned hw = std::thread::hardware_concurrency();
+  unsigned shards = shardEnv ? static_cast<unsigned>(std::atoi(shardEnv)) : (hw ? hw : 1u);
+  return shards == 0 ? 1u : shards;
+}
+
 std::vector<std::pair<int, double>> resolve_all(
     const std::map<int, std::vector<Contribution>>& byCell,
     int instant,
@@ -213,10 +229,7 @@ std::vector<std::pair<int, double>> resolve_all(
   // shared mutable state. Correctness does not depend on the shard count —
   // every rule is a commutative monoid, which is exactly what makes any
   // partitioning safe (acceptance criterion 3).
-  const char* shardEnv = std::getenv("ARBITER_SHARDS");
-  unsigned hw = std::thread::hardware_concurrency();
-  unsigned shards = shardEnv ? static_cast<unsigned>(std::atoi(shardEnv)) : (hw ? hw : 1u);
-  if (shards == 0) shards = 1;
+  const unsigned shards = arbiter_shards();
 
   std::vector<std::pair<int, const std::vector<Contribution>*>> flat;
   flat.reserve(byCell.size());

@@ -608,6 +608,54 @@ public:
       std::lock_guard<std::mutex> lock(simulatorMutex);
       return ok(simulator.state_json());
     });
+    // Arbitration records for the most recent step (ARBITER_CONTRACT.md 6).
+    //
+    // The records were produced and retained on the step all along; nothing
+    // served them, so a resolution was indistinguishable from no resolution
+    // from outside the process, and acceptance criteria 8 and 9 could not be
+    // checked at all. A suppressed contribution in particular has to stay
+    // attributable — "the agent's answer was discarded" is exactly the
+    // operational fact the domain bus exists to surface.
+    //
+    // Wire shape matches the Scala runtime's /api/arbitration byte for byte;
+    // cross-runtime parity is the acceptance test for this contract, so a
+    // divergent shape here would defeat the endpoint's own purpose.
+    server.route("GET", "/api/arbitration", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(simulatorMutex);
+      const auto hist = simulator.history();
+      Json::Array records;
+      if (!hist.empty()) {
+        auto emit = [](const Contribution& c) {
+          return Json::Object{
+              {"provider", c.provider},
+              {"determinism", determinism_name(determinism_of(c.provider))},
+              {"originId", c.originId},
+              {"cesId", c.cesId.empty() ? Json{} : Json{c.cesId}},
+              {"outputVectorId", c.outputVectorId.empty() ? Json{} : Json{c.outputVectorId}},
+              {"ragStatusCode", c.ragStatusCode.empty() ? Json{} : Json{c.ragStatusCode}},
+              {"value", c.value}};
+        };
+        for (const auto& r : hist.back().arbitration) {
+          Json::Array contributors, suppressed;
+          for (const auto& c : r.contributors) contributors.push_back(emit(c));
+          for (const auto& c : r.suppressed) suppressed.push_back(emit(c));
+          records.push_back(Json::Object{
+              {"instant", static_cast<double>(r.instant)},
+              {"cell", static_cast<double>(r.cell)},
+              {"rule", r.rule},
+              {"resolved", r.resolved},
+              {"contributors", contributors},
+              {"suppressed", suppressed}});
+        }
+      }
+      const auto& registry = ArbitrationRegistry::instance();
+      return ok(Json::Object{
+          {"registryEntries", static_cast<double>(registry.size())},
+          {"registrySource", registry.source().empty() ? Json{} : Json{registry.source()}},
+          {"shards", static_cast<double>(arbiter_shards())},
+          {"count", static_cast<double>(records.size())},
+          {"records", records}});
+    });
     server.route("GET", "/api/perceptual-simulation/history", [this](const http::Request&) {
       Json::Array arr;
       std::lock_guard<std::mutex> lock(simulatorMutex);
