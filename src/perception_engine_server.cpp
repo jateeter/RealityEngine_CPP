@@ -417,6 +417,7 @@ public:
     // skipping the rebuild keeps a source that describes a machine that no
     // longer exists. PE_SOURCE_MERGE=true restores the skip.
     if (const char* merge = std::getenv("PE_SOURCE_MERGE")) sourceMergeOnly = truthy_env(merge);
+    if (const char* act = std::getenv("PE_SOURCE_ACTIVATE_ON_LOAD")) sourceActivateOnLoad = truthy_env(act);
     if (const char* enabled = std::getenv("TRIGGERS_ENABLED")) triggerDispatchEnabled = truthy_env(enabled);
     if (const char* mode = std::getenv("TRIGGER_DISPATCH_MODE")) triggerDispatchMode = mode;
     if (triggerDispatchMode.empty()) triggerDispatchMode = "dry-run";
@@ -1000,11 +1001,13 @@ private:
     source.machineId = machineId;
     source.machineName = machine.at("name").as_string(machineId);
     source.region = region;
-    // Active on successful load. A machine that loaded is a machine the
-    // deployment asked for; leaving its source inactive made the PE's account
-    // of the corpus differ from the Reality Engine's for no reason the operator
-    // expressed. A corpus segment marked active still forces it below.
-    source.active = !sourceMergeOnly;
+    // Inactive by default. Activating every machine source made all three
+    // runtimes replay their concatenated input sequences on every push, and the
+    // divergence went three-way rather than away — event-1 agreed across all
+    // three, events 2-5 differed between all three (RealityEngine_Scala#43).
+    // PE_SOURCE_ACTIVATE_ON_LOAD=true turns it on for a deliberate experiment;
+    // a corpus segment marked active still forces it below.
+    source.active = sourceActivateOnLoad;
     source.loop = true;
 
     Json::Array segments;
@@ -3191,6 +3194,8 @@ private:
   // Skip machines that already have a source instead of reloading them.
   // Off by default; see the constructor note. PE_SOURCE_MERGE=true.
   bool sourceMergeOnly = false;
+  // Activate machine sources on load. Off by default; PE_SOURCE_ACTIVATE_ON_LOAD.
+  bool sourceActivateOnLoad = false;
   bool triggerDispatchEnabled = false;
   std::string triggerDispatchMode = "dry-run";
   std::string triggerGraphQLEndpoint;
