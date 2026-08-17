@@ -410,6 +410,13 @@ public:
         localAIBaseUrl(std::move(localAIUrl)),
         localAIMachinesDirectory(std::move(localAIMachinesDir)),
         engine(vectorDimension) {
+    // A corpus machine is (re)loaded whether or not a source already claims to
+    // describe it, and the resulting source is active. Nothing in an existing
+    // source says whether its machine still has the same CESs, interconnections
+    // or regions — a redefined machine may replace the old one entirely — so
+    // skipping the rebuild keeps a source that describes a machine that no
+    // longer exists. PE_SOURCE_MERGE=true restores the skip.
+    if (const char* merge = std::getenv("PE_SOURCE_MERGE")) sourceMergeOnly = truthy_env(merge);
     if (const char* enabled = std::getenv("TRIGGERS_ENABLED")) triggerDispatchEnabled = truthy_env(enabled);
     if (const char* mode = std::getenv("TRIGGER_DISPATCH_MODE")) triggerDispatchMode = mode;
     if (triggerDispatchMode.empty()) triggerDispatchMode = "dry-run";
@@ -983,7 +990,9 @@ private:
     // loops the entire set.  `segments` retains per-sequence boundaries
     // for UI display.
     const std::string id = test_source_id(machineId);
-    if (engine.get_source(id)) return 0;
+    // add_source() replaces by id, and the id derives from the machine, so a
+    // reload overwrites in place rather than duplicating.
+    if (sourceMergeOnly && engine.get_source(id)) return 0;
 
     SourceConfig source;
     source.kind = "test";
@@ -991,7 +1000,11 @@ private:
     source.machineId = machineId;
     source.machineName = machine.at("name").as_string(machineId);
     source.region = region;
-    source.active = false;  // overridden below if any segment was marked active
+    // Active on successful load. A machine that loaded is a machine the
+    // deployment asked for; leaving its source inactive made the PE's account
+    // of the corpus differ from the Reality Engine's for no reason the operator
+    // expressed. A corpus segment marked active still forces it below.
+    source.active = !sourceMergeOnly;
     source.loop = true;
 
     Json::Array segments;
@@ -3175,6 +3188,9 @@ private:
   bool autoRunning = false;
   long autoIntervalMs = 1000;
   std::optional<long long> lastPush;
+  // Skip machines that already have a source instead of reloading them.
+  // Off by default; see the constructor note. PE_SOURCE_MERGE=true.
+  bool sourceMergeOnly = false;
   bool triggerDispatchEnabled = false;
   std::string triggerDispatchMode = "dry-run";
   std::string triggerGraphQLEndpoint;
