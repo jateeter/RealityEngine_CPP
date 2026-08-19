@@ -721,7 +721,15 @@ void PerceptualSpaceSimulator::reset() {
   running = false;
   space.reset();
   steps.clear();
+  orevHistory.clear();
+  isreHistory.clear();
   currentStep = 0;
+  // Reset cleared the histories and left this counting, so the first step of a
+  // reset engine was stepNumber 19 while its history held one entry. LSP zeroed
+  // its step counter here and this did not, which makes `stepNumber` mean
+  // something different per runtime the moment anything resets — and the
+  // trajectory histories are compared by it (RealityEngine_CI#148).
+  immediateStepCount = 0;
   latchedEventBits.clear();
   for (auto& [_, m] : machines) m.reset();
 }
@@ -749,7 +757,30 @@ SimulationStep PerceptualSpaceSimulator::process_immediate(const Vector& vector,
   if (steps.size() > maxHistory) steps.resize(maxHistory);
   return result;
 }
+namespace {
+// Dense vector -> sparse trajectory entry.  Cells absent from the result are
+// zero; `length` keeps the dense width so the reconstruction is exact.
+TrajectoryEntry sparse_trajectory(int stepNumber, const Vector& dense) {
+  TrajectoryEntry entry;
+  entry.stepNumber = stepNumber;
+  entry.length     = static_cast<int>(dense.size());
+  for (size_t i = 0; i < dense.size(); ++i) {
+    if (dense[i] != 0.0) entry.nonZero.push_back({static_cast<int>(i), dense[i]});
+  }
+  return entry;
+}
+} // namespace
+
 SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optional<ComparatorType> overrideType) {
+  // ISRE(n) observation point.  This is the input space reality event the
+  // corpus is about to be presented with: every machine snapshot below is
+  // extracted from exactly this state, so capturing it here — before the first
+  // extract_machine_input — records what the corpus read, not an approximation
+  // of it.  The arbitration feedback from step n-1 is already merged in; the
+  // gap between this and the seed is what arbitration did.
+  TrajectoryEntry isre = sparse_trajectory(stepNumber, space.vector());
+  TrajectoryEntry orev;
+
   struct MachinePhaseJob {
     std::string id;
     Machine* machine = nullptr;
@@ -909,7 +940,19 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     }
     std::vector<ArbitrationRecord> records;
     const auto resolved = resolve_all(byCell, step.stepNumber, records);
-    for (const auto& [cell, value] : resolved) space.update_region(cell, Vector{value});
+    // OREV(n) observation point.  The corpus's output for this step exists as
+    // a single-valued vector at exactly one instant: after resolution, as it
+    // is committed. Recording it here, in the same loop as the writes, is what
+    // makes the entry and the space agree by construction rather than by a
+    // later read that could observe a different state.
+    orev.stepNumber = stepNumber;
+    for (const auto& [cell, value] : resolved) {
+      space.update_region(cell, Vector{value});
+      if (value != 0.0) orev.nonZero.push_back({cell, value});
+    }
+    orev.length = space.dimension();
+    std::sort(orev.nonZero.begin(), orev.nonZero.end(),
+              [](const TrajectoryCell& a, const TrajectoryCell& b) { return a.index < b.index; });
     step.arbitration = std::move(records);
   }
   // Phase 4 — apply compose/meta-CES event-bus subscriptions, latching
@@ -921,7 +964,17 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     step.activeRegions.push_back({msr.inputRegion.offset, msr.inputRegion.length, id, "input"});
     if (msr.outputRegion) step.activeRegions.push_back({msr.outputRegion->offset, msr.outputRegion->length, id, "output"});
   }
+  record_trajectory(std::move(isre), std::move(orev));
   return step;
+}
+void PerceptualSpaceSimulator::record_trajectory(TrajectoryEntry isre, TrajectoryEntry orev) {
+  isreHistory.push_back(std::move(isre));
+  orevHistory.push_back(std::move(orev));
+  // Trim the oldest, keeping ascending order intact.
+  if (isreHistory.size() > maxTrajectory)
+    isreHistory.erase(isreHistory.begin(), isreHistory.begin() + static_cast<long>(isreHistory.size() - maxTrajectory));
+  if (orevHistory.size() > maxTrajectory)
+    orevHistory.erase(orevHistory.begin(), orevHistory.begin() + static_cast<long>(orevHistory.size() - maxTrajectory));
 }
 void PerceptualSpaceSimulator::rebuild_edge_cache() const {
   cachedEdges.clear();
@@ -965,6 +1018,16 @@ void PerceptualSpaceSimulator::set_history_limit(size_t limit) {
   if (steps.size() > maxHistory) steps.resize(maxHistory);
 }
 size_t PerceptualSpaceSimulator::history_limit() const { return maxHistory; }
+std::vector<TrajectoryEntry> PerceptualSpaceSimulator::orev_history() const { return orevHistory; }
+std::vector<TrajectoryEntry> PerceptualSpaceSimulator::isre_history() const { return isreHistory; }
+void PerceptualSpaceSimulator::set_trajectory_limit(size_t limit) {
+  maxTrajectory = limit;
+  if (isreHistory.size() > maxTrajectory)
+    isreHistory.erase(isreHistory.begin(), isreHistory.begin() + static_cast<long>(isreHistory.size() - maxTrajectory));
+  if (orevHistory.size() > maxTrajectory)
+    orevHistory.erase(orevHistory.begin(), orevHistory.begin() + static_cast<long>(orevHistory.size() - maxTrajectory));
+}
+size_t PerceptualSpaceSimulator::trajectory_limit() const { return maxTrajectory; }
 PerceptualSpace& PerceptualSpaceSimulator::perceptual_space() { return space; }
 int PerceptualSpaceSimulator::current_step() const { return currentStep; }
 bool PerceptualSpaceSimulator::is_running() const { return running; }
@@ -1338,6 +1401,16 @@ Json to_json(const MachineTransitionResult& r) {
   for (const auto& [id, sr] : r.sequenceResults) seqs[id] = to_json(sr);
   Json output = r.machineOutput ? to_json(*r.machineOutput) : Json(nullptr);
   return Json::Object{{"inputVector", json::numbers(r.inputVector)}, {"timestamp", static_cast<double>(r.timestamp)}, {"sequenceResults", seqs}, {"machineOutput", output}, {"arbiterMetadata", Json::Object{{"rule", r.arbiterMetadata.rule}, {"totalInputs", static_cast<double>(r.arbiterMetadata.totalInputs)}, {"sequencesWithOutput", static_cast<double>(r.arbiterMetadata.sequencesWithOutput)}, {"shouldOutput", r.arbiterMetadata.shouldOutput}}}};
+}
+Json to_json(const TrajectoryEntry& entry) {
+  Json::Array cells;
+  for (const auto& c : entry.nonZero)
+    cells.push_back(Json::Object{{"index", static_cast<double>(c.index)}, {"value", c.value}});
+  return Json::Object{
+    {"stepNumber", static_cast<double>(entry.stepNumber)},
+    {"length", static_cast<double>(entry.length)},
+    {"nonZero", cells}
+  };
 }
 Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace) {
   Json::Object machineResults;

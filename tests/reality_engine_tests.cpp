@@ -153,6 +153,76 @@ int main() {
     assert(mapping.at("bitsPerElement").as_number() == 2.0);
   }
 
+  {
+    // Trajectory histories — SURFACE_SPEC.md, "Trajectory histories".
+    //
+    // ISRE(n) is what the corpus was presented with, OREV(n) what it produced.
+    // A machine at input [0,1] output [20,1] firing 1.0 gives a step whose ISRE
+    // carries the pushed input and whose OREV carries the output cell — which
+    // is the whole shape of the claim, at one machine.
+    PerceptualSpaceSimulator sim(32);
+    sim.add_machine(make_output_machine("machine-traj", 1.0));
+
+    Vector input(32, 0.0);
+    input[0] = 1.0;
+    sim.process_immediate(input);
+
+    auto isre = sim.isre_history();
+    auto orev = sim.orev_history();
+    assert(isre.size() == 1);
+    assert(orev.size() == 1);
+
+    // ISRE is the space as presented: the pushed input, before the corpus ran.
+    assert(isre[0].stepNumber == 0);
+    assert(isre[0].length == 32);
+    assert(isre[0].nonZero.size() == 1);
+    assert(isre[0].nonZero[0].index == 0);
+    assert(isre[0].nonZero[0].value == 1.0);
+
+    // OREV is what the corpus produced: the output cell, not the input it read.
+    assert(orev[0].stepNumber == 0);
+    assert(orev[0].nonZero.size() == 1);
+    assert(orev[0].nonZero[0].index == 20);
+    assert(orev[0].nonZero[0].value == 1.0);
+
+    // Ascending stepNumber — these are compared by index across engines, so a
+    // newest-first history would report every step as the first divergence.
+    sim.process_immediate(input);
+    assert(sim.isre_history().size() == 2);
+    assert(sim.isre_history()[0].stepNumber == 0);
+    assert(sim.isre_history()[1].stepNumber == 1);
+
+    // ISRE records what was presented, not what the engine remembered.
+    // process_immediate replaces the space with the pushed vector, so the
+    // second step's ISRE carries the input alone — the first step's output at
+    // cell 20 is gone. The arbitration feedback that makes ISRE(n) differ from
+    // ISRESeed(n) travels back through the Perception Engine, which reads the
+    // output regions and assembles them into the next push. Asserting the
+    // feedback here would be asserting a loop this object does not close.
+    const TrajectoryEntry second = sim.isre_history()[1];
+    assert(second.nonZero.size() == 1);
+    assert(second.nonZero[0].index == 0);
+
+    Json entry = to_json(orev[0]);
+    assert(entry.at("stepNumber").as_number() == 0.0);
+    assert(entry.at("length").as_number() == 32.0);
+    const Json& cells = entry.at("nonZero");
+    assert(cells.array().size() == 1);
+    assert(cells.array()[0].at("index").as_number() == 20.0);
+
+    sim.reset();
+    assert(sim.isre_history().empty());
+    assert(sim.orev_history().empty());
+
+    // stepNumber restarts with the history. It used to keep counting while the
+    // history was cleared, so a reset engine's first entry was stepNumber 2
+    // here and 0 on LSP — and these histories are compared by stepNumber.
+    sim.process_immediate(input);
+    assert(sim.isre_history().size() == 1);
+    assert(sim.isre_history()[0].stepNumber == 0);
+    assert(sim.orev_history()[0].stepNumber == 0);
+  }
+
   std::cout << "RealityEngine_CPP smoke tests passed\n";
   return 0;
 }
