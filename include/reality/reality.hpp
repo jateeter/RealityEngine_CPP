@@ -380,6 +380,35 @@ struct SimulationStep {
   std::vector<ArbitrationRecord> arbitration;
 };
 
+// Trajectory observation — the two histories the cross-engine trajectory proof
+// reads (RealityEngine_CI#148).  Definitions, wire shape and ordering are
+// specified in SURFACE_SPEC.md, "Trajectory histories".
+//
+//   OREV(n)  the output reality event vector — the resolved output-cell writes
+//            committed by the corpus at step n.  Observed at the commit, which
+//            is the only moment the corpus's output for the step exists as a
+//            single-valued vector.
+//   ISRE(n)  the input space reality event vector — the perceptual space as
+//            presented to the corpus at step n.  Observed immediately before
+//            the machines' input snapshots are taken from it, so the recorded
+//            vector and the vector the corpus read cannot differ.
+//
+// Carried sparsely: a cell absent from `nonZero` is zero.  The dense vector is
+// 16k+ cells and a handful are ever non-zero, so sparse is the difference
+// between a history that can be kept and one that cannot.  It is lossless —
+// `length` and the (index, value) pairs reconstruct the dense vector exactly,
+// which is what makes a first-divergent-index comparison possible.
+struct TrajectoryCell {
+  int index = 0;
+  double value = 0.0;
+};
+
+struct TrajectoryEntry {
+  int stepNumber = 0;
+  int length = 0;                       // cells in the full input space
+  std::vector<TrajectoryCell> nonZero;  // ascending index
+};
+
 struct WorkerPoolMetrics {
   size_t workers = 0;
   size_t queued = 0;
@@ -492,6 +521,14 @@ public:
   std::vector<SimulationStep> history() const;
   void set_history_limit(size_t limit);
   size_t history_limit() const;
+  // Ascending stepNumber — oldest first.  The step history above is newest
+  // first because it is read as "what just happened"; these are read as
+  // sequences to be compared element by element, and the index of the first
+  // disagreement is the answer they exist to give.
+  std::vector<TrajectoryEntry> orev_history() const;
+  std::vector<TrajectoryEntry> isre_history() const;
+  void set_trajectory_limit(size_t limit);
+  size_t trajectory_limit() const;
   PerceptualSpace& perceptual_space();
   int current_step() const;
   bool is_running() const;
@@ -503,6 +540,13 @@ private:
   PerceptualSpace space;
   std::map<std::string, Machine> machines;
   std::vector<SimulationStep> steps;
+  std::vector<TrajectoryEntry> orevHistory;
+  std::vector<TrajectoryEntry> isreHistory;
+  size_t maxTrajectory = 1024;
+  // Appends ISRE(n) and OREV(n) together.  They are captured at their own
+  // observation points inside the step and recorded in one action, so no
+  // observer can see a step whose trajectories are half-written.
+  void record_trajectory(TrajectoryEntry isre, TrajectoryEntry orev);
   std::vector<Vector> configuredInputSequence;
   RegionMapping configuredInputRegion;
   long configuredStepDelayMs = 100;
@@ -630,6 +674,7 @@ Json to_json(const MachineTransitionResult& r);
 Json to_json(const SimulationStep& step);
 Json to_json(const SimulationStep& step, bool includeMachineResults);
 Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace);
+Json to_json(const TrajectoryEntry& entry);
 Json to_json(const SourceConfig& source);
 Json worker_pool_metrics_json();
 Json to_json(const PagingDecision& d);

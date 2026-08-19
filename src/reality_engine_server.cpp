@@ -250,6 +250,32 @@ public:
       }
       return ok(Json::Object{{"history", arr}});
     });
+    // Trajectory histories — SURFACE_SPEC.md, "Trajectory histories".
+    // Ascending stepNumber. `from` selects the first stepNumber to include,
+    // `limit` caps the entries returned from there; both default to the whole
+    // history. A comparison walks these by index across engines and reports
+    // the first disagreement, so the window has to be selectable by step
+    // rather than by recency.
+    auto trajectory_route = [this](std::vector<TrajectoryEntry> (PerceptualSpaceSimulator::*source)() const) {
+      return [this, source](const http::Request& req) {
+        long from = 0;
+        size_t limit = 0;
+        auto fromIt = req.queryParams.find("from");
+        if (fromIt != req.queryParams.end() && !fromIt->second.empty()) from = std::stol(fromIt->second);
+        auto limitIt = req.queryParams.find("limit");
+        if (limitIt != req.queryParams.end() && !limitIt->second.empty())
+          limit = static_cast<size_t>(std::max(0L, std::stol(limitIt->second)));
+        Json::Array arr;
+        for (const auto& entry : (simulator.*source)()) {
+          if (entry.stepNumber < from) continue;
+          if (limit > 0 && arr.size() >= limit) break;
+          arr.push_back(to_json(entry));
+        }
+        return ok(Json::Object{{"history", arr}});
+      };
+    };
+    server.route("GET", "/api/engine/orev-history", trajectory_route(&PerceptualSpaceSimulator::orev_history));
+    server.route("GET", "/api/engine/isre-history", trajectory_route(&PerceptualSpaceSimulator::isre_history));
     server.route("POST", "/api/engine/process", [this](const http::Request& req) {
       auto body = parse_body(req);
       auto vec = json::to_numbers(body.at("vector"));
