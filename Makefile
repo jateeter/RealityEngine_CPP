@@ -19,75 +19,73 @@ endif
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -pedantic -Iinclude $(BOOST_CPPFLAGS) $(OPENSSL_CPPFLAGS) $(MACOS_CXXFLAGS)
 LDFLAGS ?= -pthread $(OPENSSL_LDFLAGS) -lssl -lcrypto
 
+# Header dependency generation. Kept out of CXXFLAGS deliberately: CXXFLAGS is
+# `?=` and callers override it, which would otherwise silently drop dependency
+# tracking and restore the failure mode described below.
+#
+# Without this, editing a header rebuilt nothing. `make` compared each binary
+# only against the .cpp files listed as its prerequisites, found them older, and
+# reported "up to date" — so a changed include/reality/*.hpp produced a stale
+# binary and a green build. That is worse than a slow build: it reports success
+# for something it did not build. Caught when a fix to
+# include/reality/vector_aggregator.hpp was verified against a binary compiled
+# 40 minutes before the change (RealityEngine_CI corpus parity sweep,
+# 2026-08-19).
+DEPFLAGS := -MMD -MP
+
 BIN_DIR := bin
+OBJ_DIR := build
 SRC := src/reality.cpp src/arbiter.cpp src/http.cpp src/sta_checker.cpp src/mqtt_client.cpp src/mqtt_mapping.cpp src/mqtt_bridge.cpp
+
+# Every binary used to compile all of SRC from source, so `make all` compiled
+# the same seven engine files once per binary — about 140 compilations at -O2
+# for 20 binaries. They are now compiled once into objects and linked.
+SRC_OBJ := $(SRC:%.cpp=$(OBJ_DIR)/%.o)
+
+SERVER_OBJ := $(OBJ_DIR)/src/reality_engine_server.o $(OBJ_DIR)/src/perception_engine_server.o
+CLI_OBJ    := $(OBJ_DIR)/src/http.o $(OBJ_DIR)/tools/reality_engine_cli.o
+
+TEST_NAMES := reality_engine_tests arbiter_tests sta_checker_tests mqtt_client_tests \
+              mqtt_mapping_tests e2e_machine_sequences e2e_machine_domains \
+              e2e_domain_scenarios e2e_ai_trigger_dispatch e2e_yuma_localai_cascade \
+              cesgen_oracles_parity cesgen_provenance cesgen_composition \
+              cesgen_governance cesgen_contracts_parity cesgen_deprecation
+TEST_OBJ   := $(TEST_NAMES:%=$(OBJ_DIR)/tests/%.o) $(OBJ_DIR)/tests/cesgen_index_compile.o
+
+ALL_OBJ := $(SRC_OBJ) $(SERVER_OBJ) $(CLI_OBJ) $(TEST_OBJ)
+DEPS    := $(ALL_OBJ:.o=.d)
 
 .PHONY: all clean test e2e e2e-corpus e2e-services e2e-healthkit-spezi
 
-all: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_cli $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/sta_checker_tests $(BIN_DIR)/mqtt_client_tests $(BIN_DIR)/mqtt_mapping_tests $(BIN_DIR)/arbiter_tests $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_index_compile $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity $(BIN_DIR)/cesgen_deprecation
+all: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_cli $(TEST_NAMES:%=$(BIN_DIR)/%) $(BIN_DIR)/cesgen_index_compile
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
-$(BIN_DIR)/reality_engine_server: $(SRC) src/reality_engine_server.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) src/reality_engine_server.cpp -o $@ $(LDFLAGS)
+# One compile rule for every translation unit. `mkdir -p $(@D)` mirrors the
+# source tree under $(OBJ_DIR) so src/, tests/ and tools/ can share it.
+$(OBJ_DIR)/%.o: %.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(BIN_DIR)/perception_engine_server: $(SRC) src/perception_engine_server.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) src/perception_engine_server.cpp -o $@ $(LDFLAGS)
+# Link only.
+$(BIN_DIR)/reality_engine_server: $(SRC_OBJ) $(OBJ_DIR)/src/reality_engine_server.o | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
-$(BIN_DIR)/reality_engine_cli: src/http.cpp tools/reality_engine_cli.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) src/http.cpp tools/reality_engine_cli.cpp -o $@ $(LDFLAGS)
+$(BIN_DIR)/perception_engine_server: $(SRC_OBJ) $(OBJ_DIR)/src/perception_engine_server.o | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
-$(BIN_DIR)/reality_engine_tests: $(SRC) tests/reality_engine_tests.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/reality_engine_tests.cpp -o $@ $(LDFLAGS)
+$(BIN_DIR)/reality_engine_cli: $(CLI_OBJ) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
-$(BIN_DIR)/arbiter_tests: $(SRC) tests/arbiter_tests.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/arbiter_tests.cpp -o $@ $(LDFLAGS)
+# cesgen_index_compile is a standalone translation unit: no engine sources and
+# no OpenSSL, matching its previous rule.
+$(BIN_DIR)/cesgen_index_compile: $(OBJ_DIR)/tests/cesgen_index_compile.o | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@
 
-$(BIN_DIR)/sta_checker_tests: $(SRC) tests/sta_checker_tests.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/sta_checker_tests.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/mqtt_client_tests: $(SRC) tests/mqtt_client_tests.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/mqtt_client_tests.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/mqtt_mapping_tests: $(SRC) tests/mqtt_mapping_tests.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/mqtt_mapping_tests.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/e2e_machine_sequences: $(SRC) tests/e2e_machine_sequences.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/e2e_machine_sequences.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/e2e_machine_domains: $(SRC) tests/e2e_machine_domains.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/e2e_machine_domains.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/e2e_domain_scenarios: $(SRC) tests/e2e_domain_scenarios.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/e2e_domain_scenarios.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/e2e_ai_trigger_dispatch: $(SRC) tests/e2e_ai_trigger_dispatch.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/e2e_ai_trigger_dispatch.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/e2e_yuma_localai_cascade: $(SRC) tests/e2e_yuma_localai_cascade.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/e2e_yuma_localai_cascade.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/cesgen_index_compile: tests/cesgen_index_compile.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) tests/cesgen_index_compile.cpp -o $@
-
-$(BIN_DIR)/cesgen_oracles_parity: $(SRC) tests/cesgen_oracles_parity.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/cesgen_oracles_parity.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/cesgen_provenance: $(SRC) tests/cesgen_provenance.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/cesgen_provenance.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/cesgen_composition: $(SRC) tests/cesgen_composition.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/cesgen_composition.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/cesgen_governance: $(SRC) tests/cesgen_governance.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/cesgen_governance.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/cesgen_contracts_parity: $(SRC) tests/cesgen_contracts_parity.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/cesgen_contracts_parity.cpp -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/cesgen_deprecation: $(SRC) tests/cesgen_deprecation.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) tests/cesgen_deprecation.cpp -o $@ $(LDFLAGS)
+# Every remaining test binary is the engine objects plus its own object.
+$(TEST_NAMES:%=$(BIN_DIR)/%): $(BIN_DIR)/%: $(SRC_OBJ) $(OBJ_DIR)/tests/%.o | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
 test: $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/arbiter_tests $(BIN_DIR)/sta_checker_tests $(BIN_DIR)/mqtt_client_tests $(BIN_DIR)/mqtt_mapping_tests
 	$(BIN_DIR)/reality_engine_tests
@@ -95,7 +93,7 @@ test: $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/arbiter_tests $(BIN_DIR)/sta_ch
 	$(BIN_DIR)/mqtt_client_tests
 	$(BIN_DIR)/mqtt_mapping_tests
 
-e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity
+e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity $(BIN_DIR)/cesgen_deprecation
 	$(BIN_DIR)/e2e_machine_sequences ../RealityEngine_Machines/machines
 	$(BIN_DIR)/e2e_machine_domains ../RealityEngine_Machines/machines
 	$(BIN_DIR)/e2e_domain_scenarios ../RealityEngine_Machines/machines
@@ -117,4 +115,8 @@ e2e-healthkit-spezi: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engi
 e2e: e2e-corpus e2e-services e2e-healthkit-spezi
 
 clean:
-	rm -rf $(BIN_DIR)
+	rm -rf $(BIN_DIR) $(OBJ_DIR)
+
+# Generated .d files record each object's header dependencies. Included last,
+# and with `-` so a clean tree (no .d files yet) is not an error.
+-include $(DEPS)

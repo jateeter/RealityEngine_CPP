@@ -29,10 +29,29 @@ inline std::vector<double> aggregate_machine_outputs(
 {
     if (!machine_results.is_object()) return base;
 
-    // Object keys (machineId strings) are stored in std::map — already sorted.
-    for (const auto& [machine_id, result] : machine_results.object()) {
-        (void)machine_id;
+    // Merge order must be identical on every runtime, not merely stable here.
+    // Object keys are machineIds and std::map keeps them sorted, which made this
+    // deterministic within one process and different between processes: the
+    // corpus declares no id, so each runtime mints its own. Where two machines'
+    // output regions overlap the write below is last-writer-wins, so the winner
+    // was decided by an id that differs per engine and the merged vector — the
+    // next InputSpaceVector — diverged. Seen on AgHarvestReadinessAssessor,
+    // whose output [3967:3971] overlaps AGX055's [3959:3971]: ISRE cell 3968
+    // read 1.0 here and 0.0 on Scala while every OREV agreed
+    // (RealityEngine_CI corpus parity sweep, 2026-08-19).
+    //
+    // machineName is corpus-declared and globally unique across the corpus, so
+    // ordering by it is the same everywhere. Results are collected first, then
+    // sorted by that name, rather than relying on the container's key order.
+    struct MergeRecord {
+        std::string sort_key;
+        int offset;
+        int write_len;
+        std::vector<double> vec;
+    };
+    std::vector<MergeRecord> records;
 
+    for (const auto& [machine_id, result] : machine_results.object()) {
         // Gate: transitionResult.arbiterMetadata.shouldOutput must be true
         const auto& transition = result.at("transitionResult");
         if (!transition.is_object()) continue;
@@ -49,18 +68,31 @@ inline std::vector<double> aggregate_machine_outputs(
         // outputVector
         const auto& out_vec = result.at("outputVector");
         if (!out_vec.is_array()) continue;
-        const std::vector<double> vec = reality::json::to_numbers(out_vec);
+        std::vector<double> vec = reality::json::to_numbers(out_vec);
         if (vec.empty()) continue;
 
+        // Fall back to the id only when a result carries no name, which keeps a
+        // malformed payload ordered rather than unordered.
+        std::string name = result.at("machineName").as_string("");
+        if (name.empty()) name = machine_id;
+
+        records.push_back(MergeRecord{std::move(name), offset,
+                                      std::min(static_cast<int>(vec.size()), length),
+                                      std::move(vec)});
+    }
+
+    std::sort(records.begin(), records.end(),
+              [](const MergeRecord& a, const MergeRecord& b) { return a.sort_key < b.sort_key; });
+
+    for (const auto& rec : records) {
         // Grow base to accommodate the output region if needed
-        const int write_len = std::min(static_cast<int>(vec.size()), length);
-        const int needed    = offset + write_len;
+        const int needed = rec.offset + rec.write_len;
         if (needed > static_cast<int>(base.size()))
             base.resize(needed, 0.0);
 
         // Write into region — unconditional (zeros clear stale values)
-        for (int i = 0; i < write_len; ++i)
-            base[offset + i] = vec[i];
+        for (int i = 0; i < rec.write_len; ++i)
+            base[rec.offset + i] = rec.vec[i];
     }
     return base;
 }
