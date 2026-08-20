@@ -717,6 +717,10 @@ void PerceptualSpaceSimulator::configure(std::vector<Vector> inputSequence, Regi
 }
 void PerceptualSpaceSimulator::start() { if (!configured) throw std::runtime_error("Simulation not configured"); running = true; }
 void PerceptualSpaceSimulator::stop() { running = false; }
+const Machine* PerceptualSpaceSimulator::running_machine(const std::string& machineId) const {
+  auto it = machines.find(machineId);
+  return it == machines.end() ? nullptr : &it->second;
+}
 void PerceptualSpaceSimulator::reset() {
   running = false;
   space.reset();

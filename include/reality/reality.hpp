@@ -510,6 +510,15 @@ public:
   size_t event_bus_subscription_count() const;
   void add_machine(const Machine& machine);
   bool remove_machine(const std::string& machineId);
+  // The machine as it is *running*, Reality Event activation included.
+  //
+  // add_machine keeps two copies: one in the server's registry and one here,
+  // and only this one is stepped. Serving machine detail from the registry
+  // therefore reported every RE with its initial isActive no matter how far the
+  // machine had advanced, so activation was unobservable from outside the
+  // process (#37). nullptr when this simulator holds no such machine — a
+  // machine without a perceptualMapping is never added here.
+  const Machine* running_machine(const std::string& machineId) const;
   void configure(std::vector<Vector> inputSequence, RegionMapping inputRegion, long stepDelayMs, std::optional<int> maxSteps = std::nullopt);
   void start();
   void stop();
