@@ -1041,6 +1041,40 @@ private:
     source.sequenceMetadata = Json::Object{{"segments", Json(segments)}};
     source.testSequence = Json::Object{};
 
+    // Leave an existing source alone unless the machine's definition actually
+    // changed. This sync runs from do_push, so it executes on *every push*, and
+    // add_source() replaces by id — which zeroes testStep and resets `active` to
+    // sourceActivateOnLoad. Rebuilding unconditionally therefore destroyed
+    // playback state on every push, and one line produced three defects that
+    // looked unrelated:
+    //
+    //   * the interned sequence never advanced — the cursor was zeroed each
+    //     push, so the source replayed its first vector forever while LSP and
+    //     Scala walked theirs, and the trajectory comparison reported it as
+    //     engine divergence (RealityEngine_CI corpus parity sweep, 2026-08-19)
+    //   * PATCH /api/sources/:id {"active":…} answered 200 with the new value
+    //     and then reported the old one, because the next push overwrote it
+    //   * a source could not be held deactivated for the same reason
+    //
+    // The id derives from the machine, so it stayed stable throughout and made
+    // the rebuild invisible to anything watching ids rather than state.
+    //
+    // Definition changes must still propagate, so the comparison is on what the
+    // machine declares — region and the concatenated input vectors — rather than
+    // on presence alone. A machine whose sequences were edited is rebuilt, and
+    // resetting playback is correct in that case because the old cursor no
+    // longer refers to the same sequence.
+    if (auto existing = engine.get_source(id)) {
+      if (sourceMergeOnly) return 0;
+      if (existing->kind == "test"
+          && existing->region.offset == source.region.offset
+          && existing->region.length == source.region.length
+          && existing->loop == source.loop
+          && existing->inputs == source.inputs) {
+        return 0;
+      }
+    }
+
     engine.add_source(source);
     return 1;
   }
@@ -2575,7 +2609,23 @@ private:
       {"vector", json::numbers(vector)},
       {"matchAlgorithm", to_string(matchAlgorithm)},
       {"matchAlgorithmOverride", to_string(matchAlgorithm == MatchAlgorithm::Equals ? ComparatorType::Equals : ComparatorType::Gte)},
-      {"includeMachineResults", includeMachineResults},
+      // Always true, regardless of what the caller asked to be *shown*.
+      // machineResults is what aggregate_machine_outputs merges into the
+      // perceptual space to form the next InputSpaceVector, so it is an input
+      // to this engine's own state, not merely part of the reply.
+      //
+      // Forwarding the caller's flag here made a push with {"compact": true}
+      // request no machineResults, leaving nothing to merge — so the machine
+      // outputs never reached the next input vector and the trajectory differed
+      // from the same push made non-compact. Scala always requested them and
+      // aggregated; this runtime and LSP did not, so identical corpora diverged
+      // at the first cell two machines' output regions disagreed about
+      // (AgHarvestReadinessAssessor [3967:3971] vs AGX055 [3959:3971], cell
+      // 3969 — RealityEngine_CI corpus parity sweep, 2026-08-19).
+      //
+      // Response verbosity must not change what the engine computes. The reply
+      // is trimmed below instead.
+      {"includeMachineResults", true},
       {"includePerceptualSpace", true},
     };
     try {
@@ -2615,6 +2665,10 @@ private:
         }
       }
       Json dispatch = dispatch_triggers_from_step(parsed);
+      // Trim the reply to what the caller asked for. Done after the state
+      // update and the dispatch pass, so asking for less never changes what the
+      // engine did — only what it reports.
+      if (!includeMachineResults && parsed.is_object()) parsed.object().erase("machineResults");
       Json result = Json::Object{{"success", true}, {"step", parsed}, {"timestamp", static_cast<double>(ts)}, {"globalStep", static_cast<double>(step)}, {"error", nullptr}};
       if (dispatch.is_object()) result.object()["dispatch"] = dispatch;
       broadcast_state();

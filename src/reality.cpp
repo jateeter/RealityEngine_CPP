@@ -1087,9 +1087,31 @@ bool PerceptionEngine::update_sensor_value(const std::string& sensorId, const Ve
   }
   return false;
 }
+std::vector<const SourceConfig*> PerceptionEngine::active_sources_canonical() const {
+  // Two machines may declare the same input region — AGX032 and AGX054 both map
+  // [228:232] — and a source owns its region, so where regions overlap the last
+  // writer wins. `sources` is keyed by source id, which derives from the
+  // runtime-minted machine id, so walking it in key order made that winner
+  // depend on a locally generated string; Scala walked a Map in hash order and
+  // LSP used maphash. Three runtimes assembled different input vectors from
+  // identical corpora (RealityEngine_CI corpus parity sweep, 2026-08-19).
+  //
+  // Sorted by (name, id) — the order already used for the listing endpoints,
+  // and derived from corpus-declared names rather than minted ids.
+  std::vector<const SourceConfig*> active;
+  active.reserve(sources.size());
+  for (const auto& [_, s] : sources) if (s.active) active.push_back(&s);
+  std::sort(active.begin(), active.end(),
+            [](const SourceConfig* a, const SourceConfig* b) {
+              if (a->name != b->name) return a->name < b->name;
+              return a->id < b->id;
+            });
+  return active;
+}
 Vector PerceptionEngine::assemble_vector() const {
   Vector out = persistentVector;
-  for (const auto& [_, s] : sources) if (s.active) {
+  for (const SourceConfig* sp : active_sources_canonical()) {
+    const SourceConfig& s = *sp;
     auto vals = source_values(s);
     const int end = s.region.offset + s.region.length;
     // With growth in place this is unreachable, but a region that still does

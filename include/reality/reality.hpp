@@ -619,6 +619,8 @@ public:
   bool remove_source(const std::string& id);
   std::optional<SourceConfig> get_source(const std::string& id) const;
   std::vector<SourceConfig> get_sources() const;
+  // Active sources in canonical (name, id) order — see assemble_vector.
+  std::vector<const SourceConfig*> active_sources_canonical() const;
   bool update_sensor_value(const std::string& sensorId, const Vector& values);
   Vector assemble_vector() const;
   void update_from_perceptual_space(const Vector& values);
