@@ -330,6 +330,18 @@ public:
       std::shared_lock<std::shared_mutex> lock(registryMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
+      // Prefer the simulator's copy: add_machine registers the machine twice,
+      // here and in the simulator, and only the simulator's is stepped. Serving
+      // this from the registry reported every Reality Event with its initial
+      // isActive however far the machine had advanced, so activation could not
+      // be observed from outside the process — a machine firing on every step
+      // still read as holding only its initial REs (#37).
+      //
+      // The registry copy remains the fallback for a machine the simulator does
+      // not hold, which is any machine without a perceptualMapping.
+      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      if (const Machine* live = simulator.running_machine(req.pathParams.at("id")))
+        return ok(Json::Object{{"machine", live->to_json(true)}});
       return ok(Json::Object{{"machine", it->second.to_json(true)}});
     });
     server.route("GET", "/api/buses/semantic", [this](const http::Request&) {
@@ -583,7 +595,15 @@ public:
       std::shared_lock<std::shared_mutex> registryLock(registryMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
-      Checkpoint cp{make_id("checkpoint"), body.at("label").as_string(), now_ms(), it->second};
+      // Snapshot the machine as it is *running*, not as it was loaded. The
+      // registry copy is never stepped — the simulator holds the one that is —
+      // so checkpointing it captured the machine's initial Reality Event
+      // activation whatever state it had reached, and restoring it could not
+      // return the machine to the step it was captured at (#37).
+      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      const Machine* live = simulator.running_machine(req.pathParams.at("id"));
+      Checkpoint cp{make_id("checkpoint"), body.at("label").as_string(), now_ms(),
+                    live ? *live : it->second};
       {
         std::lock_guard<std::mutex> lock(checkpointMutex);
         checkpoints[it->first][cp.id] = cp;
