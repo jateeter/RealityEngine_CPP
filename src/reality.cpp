@@ -210,6 +210,80 @@ ComparatorType comparator_from_string(const std::string& s) {
   throw std::invalid_argument("Unknown comparator type: " + s);
 }
 
+std::string to_string(OutputMergeTransformation t) {
+  switch (t) {
+    case OutputMergeTransformation::Or:   return "or";
+    case OutputMergeTransformation::And:  return "and";
+    case OutputMergeTransformation::Xor:  return "xor";
+    case OutputMergeTransformation::Nor:  return "nor";
+    case OutputMergeTransformation::Nand: return "nand";
+  }
+  return "or";
+}
+OutputMergeTransformation output_merge_from_string(const std::string& s) {
+  const auto v = lower(s);
+  if (v == "or")   return OutputMergeTransformation::Or;
+  if (v == "and")  return OutputMergeTransformation::And;
+  if (v == "xor")  return OutputMergeTransformation::Xor;
+  if (v == "nor")  return OutputMergeTransformation::Nor;
+  if (v == "nand") return OutputMergeTransformation::Nand;
+  throw std::invalid_argument("Unknown output merge transformation: " + s);
+}
+std::optional<Vector> fold_outputs(const std::vector<Vector>& outputs,
+                                   OutputMergeTransformation t) {
+  // No completed Reality Event means no output. A machine that presents nothing
+  // is not the same as one presenting zeros, and collapsing the two would have
+  // the PE clear a region no machine wrote.
+  if (outputs.empty()) return std::nullopt;
+
+  // Widest contributor wins the width; shorter ones contribute 0 beyond their
+  // end. Every potential output of one machine comes from the same output
+  // region, so they agree in practice — this only keeps a malformed corpus from
+  // truncating a peer's contribution silently.
+  size_t width = 0;
+  for (const auto& o : outputs) width = std::max(width, o.size());
+
+  // Bitwise over {0,1}: the corpus declares binary output vectors and the
+  // transformations are logical. `!= 0.0` rather than `== 1.0` so a value the
+  // arbiter scaled still reads as asserted.
+  auto bit = [](const Vector& v, size_t i) { return i < v.size() && v[i] != 0.0; };
+
+  // An n-input gate, not a chain of two-input ones. The collection carries no
+  // order, so the transformation is applied to the whole of it at once and its
+  // truth table is a function of `k` — how many contributions assert this cell
+  // — and `n`, how many there are.
+  //
+  // Chaining two-input gates would not be equivalent: NOR and NAND are
+  // commutative but not associative, so a pairwise fold of them depends on
+  // ordering. That is a property of the chained circuit, not of the n-input
+  // gate, and it is the reason this is written over counts.
+  //
+  // CONTESTED — not settled, do not build on it. It has been asserted that any
+  // transformation added later must likewise be a function of k and n alone,
+  // i.e. symmetric in its inputs, on the grounds that anything else could
+  // evolve differently on runtimes that enumerate a machine's outputs in
+  // different orders. That generalisation is disputed. What is established is
+  // narrower and sufficient here: these five gates are each symmetric, verified
+  // by exhaustion in RealityEngine_Machines
+  // tests/contracts/owl_semantics_test.py. A future transformation should be
+  // judged on its own terms until the general rule is settled.
+  const size_t n = outputs.size();
+  Vector out(width, 0.0);
+  for (size_t i = 0; i < width; ++i) {
+    size_t k = 0;
+    for (const auto& o : outputs) if (bit(o, i)) ++k;
+    bool asserted = false;
+    switch (t) {
+      case OutputMergeTransformation::Or:   asserted = k >= 1;      break;
+      case OutputMergeTransformation::And:  asserted = k == n;      break;
+      case OutputMergeTransformation::Xor:  asserted = (k % 2) == 1; break;
+      case OutputMergeTransformation::Nor:  asserted = k == 0;      break;
+      case OutputMergeTransformation::Nand: asserted = k < n;       break;
+    }
+    out[i] = asserted ? 1.0 : 0.0;
+  }
+  return out;
+}
 ArbiterRule arbiter_from_string(const std::string& s) {
   const auto v = lower(s);
   if (v == "and") return ArbiterRule::And;
@@ -548,6 +622,8 @@ Json Machine::to_json(bool full) const {
   if (perceptualMapping) mapping = reality::to_json(*perceptualMapping);
   return Json::Object{
     {"id", id}, {"name", name}, {"description", description}, {"matchAlgorithm", to_string(matchAlgorithm)},
+    {"outputMergeTransformation", to_string(outputMergeTransformation)},
+    {"outputMergeLocked", outputMergeLocked},
     {"arbiterRule", to_string(arbiter.get_rule())}, {"sequenceCount", static_cast<double>(sequence_count())},
     {"totalVectors", static_cast<double>(total_vector_count())}, {"sequenceIds", seqIds}, {"sequences", seqs},
     {"metadata", metadata}, {"perceptualMapping", mapping}
@@ -721,6 +797,19 @@ const Machine* PerceptualSpaceSimulator::running_machine(const std::string& mach
   auto it = machines.find(machineId);
   return it == machines.end() ? nullptr : &it->second;
 }
+bool PerceptualSpaceSimulator::set_output_merge_transformation(const std::string& machineId,
+                                                               OutputMergeTransformation t) {
+  auto it = machines.find(machineId);
+  if (it == machines.end()) return false;
+  it->second.outputMergeTransformation = t;
+  return true;
+}
+bool PerceptualSpaceSimulator::set_output_merge_locked(const std::string& machineId, bool locked) {
+  auto it = machines.find(machineId);
+  if (it == machines.end()) return false;
+  it->second.outputMergeLocked = locked;
+  return true;
+}
 void PerceptualSpaceSimulator::reset() {
   running = false;
   space.reset();
@@ -863,16 +952,43 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
   step.stepNumber = stepNumber;
   step.timestamp = now_ms();
   for (auto& result : results) {
-    MachineStepResult msr{
-      result.id,
-      result.name,
-      result.snapshot,
-      result.transition.machineOutput ? std::optional<Vector>(result.transition.machineOutput->vector) : std::nullopt,
-      result.mapping.input,
-      std::nullopt,
-      result.transition
-    };
-    if (msr.outputVector) msr.outputRegion = result.mapping.output;
+    // Presenting the machine's output is the Reality Engine's job and the last
+    // thing it does in the step. Done here, in the serialised build after the
+    // domain-worker futures have joined above — the fold is per machine over
+    // its own collection, so it needs nothing from the parallel phase beyond
+    // the results it already collapsed to.
+    //
+    // `pendingOutputs` is that collection: one entry per completed Reality
+    // Event. `machineOutput` is a single member of it chosen by the arbiter,
+    // and which member that is has differed per runtime — the same corpus
+    // presented C++'s pick to the PE and Scala's to its own, which is the
+    // divergence in RealityEngine_CI#154. The fold replaces the pick.
+    std::vector<Vector> potentialOutputs;
+    potentialOutputs.reserve(result.pendingOutputs.size());
+    for (const auto& po : result.pendingOutputs) potentialOutputs.push_back(po.values);
+    auto machineIt = machines.find(result.id);
+    const OutputMergeTransformation transformation =
+      machineIt != machines.end() ? machineIt->second.outputMergeTransformation
+                                  : OutputMergeTransformation::Or;
+    std::optional<Vector> merged = fold_outputs(potentialOutputs, transformation);
+
+    // Named assignment rather than aggregate initialisation: the field order of
+    // MachineStepResult is not a contract, and a positional list breaks
+    // silently when one is inserted.
+    MachineStepResult msr;
+    msr.machineId        = result.id;
+    msr.machineName      = result.name;
+    msr.inputVector      = result.snapshot;
+    msr.outputVector     = result.transition.machineOutput
+                             ? std::optional<Vector>(result.transition.machineOutput->vector)
+                             : std::nullopt;
+    // outputVector keeps the arbiter's pick so nothing that reads it today
+    // changes; mergedOutputVector is what the PE should consume.
+    msr.mergedOutputVector        = merged;
+    msr.outputMergeTransformation = to_string(transformation);
+    msr.inputRegion      = result.mapping.input;
+    msr.transitionResult = result.transition;
+    if (msr.outputVector || msr.mergedOutputVector) msr.outputRegion = result.mapping.output;
     step.machineResults[result.id] = msr;
   }
 
@@ -1238,6 +1354,12 @@ Machine load_machine_from_json_string(const std::string& raw,
   std::string desc = m.at("description").as_string();
   ArbiterRule arbiter = ArbiterRule::Passthrough;
   if (!m.at("arbiterRule").is_null()) arbiter = arbiter_from_string(m.at("arbiterRule").as_string("PASSTHROUGH"));
+  // Read at intern time so the machine carries it from the moment it is loaded.
+  // Absent means "or", which is what every runtime already does, so the whole
+  // corpus keeps its present behaviour without declaring the field.
+  OutputMergeTransformation outputMerge = OutputMergeTransformation::Or;
+  if (!m.at("outputMergeTransformation").is_null())
+    outputMerge = output_merge_from_string(m.at("outputMergeTransformation").as_string("or"));
   std::optional<PerceptualMapping> mapping;
   const auto& pm = m.at("perceptualMapping");
   if (pm.is_object()) {
@@ -1249,6 +1371,7 @@ Machine load_machine_from_json_string(const std::string& raw,
   }
   Machine machine(name, desc, arbiter, mapping, id);
   if (m.at("matchAlgorithm").is_string()) machine.matchAlgorithm = comparator_from_string(m.at("matchAlgorithm").as_string());
+  machine.outputMergeTransformation = outputMerge;
   if (m.at("metadata").is_object()) machine.metadata = m.at("metadata").object();
   if (m.at("inputSequences").is_array()) machine.metadata["inputSequences"] = m.at("inputSequences");
   for (const auto& sj : m.at("sequences").is_array() ? m.at("sequences").array() : Json::Array{}) {
@@ -1441,7 +1564,7 @@ Json to_json(const TrajectoryEntry& entry) {
 Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace) {
   Json::Object machineResults;
   if (includeMachineResults) {
-    for (const auto& [id, mr] : step.machineResults) machineResults[id] = Json::Object{{"machineId", mr.machineId}, {"machineName", mr.machineName}, {"inputVector", json::numbers(mr.inputVector)}, {"outputVector", mr.outputVector ? Json(json::numbers(*mr.outputVector)) : Json(nullptr)}, {"inputRegion", to_json(mr.inputRegion)}, {"outputRegion", mr.outputRegion ? to_json(*mr.outputRegion) : Json(nullptr)}, {"transitionResult", to_json(mr.transitionResult)}};
+    for (const auto& [id, mr] : step.machineResults) machineResults[id] = Json::Object{{"machineId", mr.machineId}, {"machineName", mr.machineName}, {"inputVector", json::numbers(mr.inputVector)}, {"outputVector", mr.outputVector ? Json(json::numbers(*mr.outputVector)) : Json(nullptr)}, {"mergedOutputVector", mr.mergedOutputVector ? Json(json::numbers(*mr.mergedOutputVector)) : Json(nullptr)}, {"outputMergeTransformation", mr.outputMergeTransformation}, {"inputRegion", to_json(mr.inputRegion)}, {"outputRegion", mr.outputRegion ? to_json(*mr.outputRegion) : Json(nullptr)}, {"transitionResult", to_json(mr.transitionResult)}};
   }
   Json::Array regions;
   for (const auto& r : step.activeRegions) regions.push_back(Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}, {"machineId", r.machineId}, {"type", r.type}});

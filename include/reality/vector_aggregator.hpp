@@ -65,8 +65,18 @@ inline std::vector<double> aggregate_machine_outputs(
         const int length = static_cast<int>(region.at("length").as_number(0));
         if (offset < 0 || length <= 0) continue;
 
-        // outputVector
-        const auto& out_vec = result.at("outputVector");
+        // Prefer mergedOutputVector: the machine's collection of potential
+        // outputs folded under its own outputMergeTransformation. Presenting
+        // that fold is the Reality Engine's job and the last thing it does in
+        // the step, so it is the machine's actual output.
+        //
+        // outputVector is one arbitrarily chosen member of that collection, and
+        // which member differed per runtime — reading it here is what carried
+        // the RE's disagreement into the perceptual space
+        // (RealityEngine_CI#154). Falling back to it keeps this working against
+        // a Reality Engine that has not yet been updated.
+        const auto& merged_vec = result.at("mergedOutputVector");
+        const auto& out_vec = merged_vec.is_array() ? merged_vec : result.at("outputVector");
         if (!out_vec.is_array()) continue;
         std::vector<double> vec = reality::json::to_numbers(out_vec);
         if (vec.empty()) continue;

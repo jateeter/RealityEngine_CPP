@@ -590,6 +590,71 @@ public:
       }
       return ok(arr);
     });
+    // The merge knob, readable always and settable only while unlocked.
+    //
+    // Declared on the machine (`outputMergeTransformation`, default "or") so it
+    // is carried from the moment the machine is interned, and mutable here so a
+    // run can be retuned between steps without reloading the corpus. It is a
+    // training variable; both properties are needed.
+    //
+    // The interlock starts LOCKED. Retuning a training variable by accident
+    // produces a run whose results mean nothing and which nothing distinguishes
+    // from a valid one, so unlocking is a separate, deliberate act.
+    //
+    // Every write applies to the simulator's machine as well as the registry
+    // copy: those are two objects and only the simulator's is stepped, so
+    // setting one alone would leave the knob reading differently from the knob
+    // in force.
+    server.route("GET", "/api/machines/:id/output-merge", [this](const http::Request& req) {
+      std::shared_lock<std::shared_mutex> lock(registryMutex);
+      auto it = machines.find(req.pathParams.at("id"));
+      if (it == machines.end()) return http::error_response("Machine not found", 404);
+      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      const Machine* live = simulator.running_machine(req.pathParams.at("id"));
+      const Machine& m = live ? *live : it->second;
+      Json::Array available;
+      for (const auto& name : {"or", "and", "xor", "nor", "nand"}) available.push_back(std::string(name));
+      return ok(Json::Object{
+        {"machineId", m.id}, {"machineName", m.name},
+        {"outputMergeTransformation", to_string(m.outputMergeTransformation)},
+        {"locked", m.outputMergeLocked},
+        {"available", available}});
+    });
+    server.route("PUT", "/api/machines/:id/output-merge", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      if (!body.at("outputMergeTransformation").is_string())
+        return http::error_response("outputMergeTransformation must be a string", 400);
+      OutputMergeTransformation t;
+      try { t = output_merge_from_string(body.at("outputMergeTransformation").as_string()); }
+      catch (const std::exception& e) { return http::error_response(e.what(), 400); }
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
+      auto it = machines.find(req.pathParams.at("id"));
+      if (it == machines.end()) return http::error_response("Machine not found", 404);
+      // 423 rather than 403: the refusal is about the resource's current state
+      // and is cleared by unlocking, not about who is asking.
+      if (it->second.outputMergeLocked)
+        return http::error_response(
+          "outputMergeTransformation is locked; unlock it before changing a training variable", 423);
+      it->second.outputMergeTransformation = t;
+      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      simulator.set_output_merge_transformation(req.pathParams.at("id"), t);
+      return ok(Json::Object{{"success", true}, {"machineId", it->second.id},
+                             {"outputMergeTransformation", to_string(t)},
+                             {"locked", it->second.outputMergeLocked}});
+    });
+    server.route("PUT", "/api/machines/:id/output-merge/lock", [this](const http::Request& req) {
+      auto body = parse_body(req);
+      if (!body.at("locked").is_bool())
+        return http::error_response("locked must be a boolean", 400);
+      const bool locked = body.at("locked").as_bool(true);
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
+      auto it = machines.find(req.pathParams.at("id"));
+      if (it == machines.end()) return http::error_response("Machine not found", 404);
+      it->second.outputMergeLocked = locked;
+      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      simulator.set_output_merge_locked(req.pathParams.at("id"), locked);
+      return ok(Json::Object{{"success", true}, {"machineId", it->second.id}, {"locked", locked}});
+    });
     server.route("POST", "/api/machines/:id/checkpoints", [this](const http::Request& req) {
       auto body = parse_body(req);
       std::shared_lock<std::shared_mutex> registryLock(registryMutex);

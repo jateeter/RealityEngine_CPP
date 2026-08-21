@@ -25,6 +25,19 @@ std::string make_id(const std::string& prefix);
 enum class ComparatorType { Equals, Threshold, Pattern, Custom, Gte };
 enum class VectorState { Active, Inactive };
 enum class ArbiterRule { And, Or, Passthrough };
+// How a machine folds its collection of potential outputs into the single
+// output presented to the Perception Engine.
+//
+// At the completion boundary of the atomic matching action a machine holds one
+// potential output per completed Reality Event. Presenting that collection is
+// the Reality Engine's job and the last thing it does in the step; this names
+// the deterministic elementwise transformation used to combine them.
+//
+// Declared per machine (`outputMergeTransformation`, default "or") so it is
+// available when the machine is interned, and mutable between steps at runtime.
+// It is a training variable, which is why it belongs to the machine rather than
+// to a deployment.
+enum class OutputMergeTransformation { Or, And, Xor, Nor, Nand };
 enum class SimPattern { Sine, Sawtooth, Square, LinearRamp, RandomWalk, Constant, GaussianNoise, Binary };
 enum class MatchAlgorithm { Gte, Equals };
 
@@ -34,6 +47,13 @@ std::string to_string(SimPattern p);
 std::string to_string(MatchAlgorithm a);
 ComparatorType comparator_from_string(const std::string& s);
 ArbiterRule arbiter_from_string(const std::string& s);
+std::string to_string(OutputMergeTransformation t);
+OutputMergeTransformation output_merge_from_string(const std::string& s);
+// Fold a machine's collection of potential outputs elementwise under `t`.
+// Empty collection yields nullopt: a machine that completed no Reality Event
+// presents no output, which is different from presenting a zero vector.
+std::optional<Vector> fold_outputs(const std::vector<Vector>& outputs,
+                                   OutputMergeTransformation t);
 SimPattern sim_pattern_from_string(const std::string& s);
 MatchAlgorithm match_algorithm_from_string(const std::string& s);
 
@@ -208,6 +228,16 @@ public:
   std::map<std::string, Json> metadata;
   std::optional<PerceptualMapping> perceptualMapping;
   ComparatorType matchAlgorithm = ComparatorType::Gte;
+  OutputMergeTransformation outputMergeTransformation = OutputMergeTransformation::Or;
+  // Interlock on the knob above. Initialised LOCKED: the transformation is a
+  // training variable, and a run that retunes one by accident is a run whose
+  // results mean nothing. Changing it requires unlocking first, deliberately
+  // and as a separate act.
+  //
+  // Runtime state, not a corpus property — a machine's declared transformation
+  // travels with it, but whether this deployment is currently allowed to change
+  // it does not.
+  bool outputMergeLocked = true;
 
   Machine(std::string machineName = "unnamed",
           std::string machineDescription = "",
@@ -358,7 +388,17 @@ struct MachineStepResult {
   std::string machineId;
   std::string machineName;
   Vector inputVector;
+  // A single member of the machine's collection of potential outputs, chosen by
+  // the arbiter. Which member that is has differed per runtime. Kept as-is so
+  // existing consumers are unaffected; new ones should read mergedOutputVector.
   std::optional<Vector> outputVector;
+  // The collection folded under the machine's outputMergeTransformation — what
+  // the Reality Engine presents to the Perception Engine. nullopt when the
+  // machine completed no Reality Event, which is not the same as a zero vector.
+  std::optional<Vector> mergedOutputVector;
+  // The transformation in force for this machine on this step, reported so the
+  // knob can be observed rather than inferred.
+  std::string outputMergeTransformation = "or";
   RegionMapping inputRegion;
   std::optional<RegionMapping> outputRegion;
   MachineTransitionResult transitionResult;
@@ -519,6 +559,10 @@ public:
   // process (#37). nullptr when this simulator holds no such machine — a
   // machine without a perceptualMapping is never added here.
   const Machine* running_machine(const std::string& machineId) const;
+  // Retune the merge knob on the machine this simulator is stepping. The
+  // registry holds a separate copy; both are set so a read of either agrees.
+  bool set_output_merge_transformation(const std::string& machineId, OutputMergeTransformation t);
+  bool set_output_merge_locked(const std::string& machineId, bool locked);
   void configure(std::vector<Vector> inputSequence, RegionMapping inputRegion, long stepDelayMs, std::optional<int> maxSteps = std::nullopt);
   void start();
   void stop();
