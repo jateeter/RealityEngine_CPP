@@ -150,7 +150,7 @@ void test_full_cascade() {
     EXPECT(m051_final->region.offset == 256 && m051_final->region.length == 4,
            "AGX051 region != [256:260)");
     EXPECT(m051_final->values == Vector({1, 0, 0, 0}),             "AGX051 final output != URGENT_MAINT one-hot — got " + vector_to_string(m051_final->values));
-    EXPECT(m051_final->sequenceId == "agx-051-urgent-maint",       "AGX051 fired wrong sequenceId — got " + m051_final->sequenceId);
+    EXPECT(contributed(*m051_final, "agx-051-urgent-maint"),        "AGX051 did not contribute agx-051-urgent-maint");
     EXPECT(m051_final->governance.has_value(),                     "AGX051 mergeBatch has no governance (envelope would be dropped)");
     if (m051_final->governance) {
       EXPECT(m051_final->governance->ragStatusCode == "RED",       "AGX051 governance.rag != RED");
@@ -187,7 +187,7 @@ void test_full_cascade() {
   EXPECT(m055 != nullptr,                                          "stage 2: AGX055 did not fire — bridge contract broken");
   if (m055) {
     EXPECT(m055->region.offset == 3959 && m055->region.length == 12, "AGX055 region != [3959:3971) — projection contract broken");
-    EXPECT(m055->sequenceId == "agx-055-aqua-urgent",              "AGX055 sequenceId != agx-055-aqua-urgent — wrong CES fired");
+    EXPECT(contributed(*m055, "agx-055-aqua-urgent"),              "AGX055 did not contribute agx-055-aqua-urgent — wrong CES fired");
     EXPECT(m055->values == Vector({1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
            "AGX055 output != AQUA_URGENT one-hot — got " + vector_to_string(m055->values));
     EXPECT(m055->governance.has_value(),                           "AGX055 mergeBatch has no governance");
@@ -268,7 +268,7 @@ void test_facility_stable_path() {
   const MergeOperation* m055 = find_merge(s2, agx055.id);
   EXPECT(m055 != nullptr,                                          "stable path step N+1: AGX055 did not fire on FACILITY_STABLE input");
   if (m055) {
-    EXPECT(m055->sequenceId == "agx-055-facility-stable",          "stable path: AGX055 sequenceId != agx-055-facility-stable");
+    EXPECT(contributed(*m055, "agx-055-facility-stable"),          "stable path: AGX055 did not contribute agx-055-facility-stable");
     EXPECT(m055->values == Vector({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}),
            "stable path: AGX055 output != FACILITY_STABLE one-hot — got " + vector_to_string(m055->values));
     EXPECT(m055->governance.has_value() && m055->governance->ragStatusCode == "GREEN",
@@ -309,8 +309,8 @@ void test_cascade_determinism() {
     for (size_t i = 0; i < a[t].mergeBatch.size() && i < b[t].mergeBatch.size(); ++i) {
       EXPECT(a[t].mergeBatch[i].machineId  == b[t].mergeBatch[i].machineId,
              "determinism: stage " + std::to_string(t) + " machineId differs at "  + std::to_string(i));
-      EXPECT(a[t].mergeBatch[i].sequenceId == b[t].mergeBatch[i].sequenceId,
-             "determinism: stage " + std::to_string(t) + " sequenceId differs at " + std::to_string(i));
+      EXPECT(a[t].mergeBatch[i].sequenceIds == b[t].mergeBatch[i].sequenceIds,
+             "determinism: stage " + std::to_string(t) + " sequenceIds differ at " + std::to_string(i));
       EXPECT(a[t].mergeBatch[i].values     == b[t].mergeBatch[i].values,
              "determinism: stage " + std::to_string(t) + " values differ at "      + std::to_string(i));
     }

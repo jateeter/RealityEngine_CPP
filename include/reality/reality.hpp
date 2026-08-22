@@ -3,6 +3,7 @@
 
 #include "reality/json.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <deque>
 #include <filesystem>
@@ -25,6 +26,38 @@ std::string make_id(const std::string& prefix);
 enum class ComparatorType { Equals, Threshold, Pattern, Custom, Gte };
 enum class VectorState { Active, Inactive };
 enum class ArbiterRule { And, Or, Passthrough };
+// How a machine folds its collection of potential outputs into the single
+// output presented to the Perception Engine.
+//
+// At the completion boundary of the atomic matching action a machine holds one
+// potential output per completed Reality Event. Presenting that collection is
+// the Reality Engine's job and the last thing it does in the step; this names
+// the deterministic elementwise transformation used to combine them.
+//
+// Declared per machine (`outputMergeTransformation`, default "or") so it is
+// available when the machine is interned, and mutable between steps at runtime.
+// It is a training variable, which is why it belongs to the machine rather than
+// to a deployment.
+//
+// The first five are Boolean n-input gates over {0,1}. The remaining five are
+// multi-valued: they operate on an ordered chain {0..k} and are the fold a
+// machine whose cells carry a severity ladder actually needs. Folding such a
+// machine with a Boolean gate destroys the ladder — FallDetection ranges over
+// {0,1,2,3,4} and every Boolean gate collapses that to 0 or 1
+// (RealityEngine_CI#158).
+//
+// Meet/Join are the lattice operations, StrongDisjunction/StrongConjunction the
+// Łukasiewicz ⊕/⊙, and DiscreteMedian the majority-consensus filter. All five
+// are closed over the chain, symmetric, and deterministic; Meet, Join and
+// DiscreteMedian additionally return one of their contributors and are
+// idempotent. The Łukasiewicz pair is deliberately NOT idempotent — x ⊕ x
+// saturates and x ⊙ x extinguishes, which is the point of them. Verified by
+// exhaustion in RealityEngine_CI/scripts/experiment-mv-transforms.py, which is
+// the specification all three runtimes implement against.
+enum class OutputMergeTransformation {
+  Or, And, Xor, Nor, Nand,
+  Meet, Join, StrongConjunction, StrongDisjunction, DiscreteMedian
+};
 enum class SimPattern { Sine, Sawtooth, Square, LinearRamp, RandomWalk, Constant, GaussianNoise, Binary };
 enum class MatchAlgorithm { Gte, Equals };
 
@@ -34,6 +67,45 @@ std::string to_string(SimPattern p);
 std::string to_string(MatchAlgorithm a);
 ComparatorType comparator_from_string(const std::string& s);
 ArbiterRule arbiter_from_string(const std::string& s);
+std::string to_string(OutputMergeTransformation t);
+OutputMergeTransformation output_merge_from_string(const std::string& s);
+// There is no safe default, so there is no default: the two Łukasiewicz
+// transformations REFUSE to fold when k is absent, presenting nothing.
+//
+// A Boolean-chain fallback (k = 1) was tried first and is unsound in both
+// directions. ⊕ is min(k, Σx), which clamps: FallDetection's severity ladder
+// [0,1,2,3,4,4,0] folds to 1, silently reintroducing the flattening this whole
+// vocabulary exists to prevent — through the parameter instead of the gate.
+// ⊙ is max(0, Σx − k(n−1)), which does NOT clamp: its closure bound holds only
+// while every x_i ≤ k, so the same ladder at k = 1 yields 8, outside the chain
+// {0,1} and outside the machine's own alphabet {0..4}. Smallest witness:
+// k = 1 over [2,2] gives 3.
+//
+// So a degenerate fallback either clamps its inputs first, destroying the
+// alphabet silently, or does not, violating the closure the ontology asserts.
+// Refusing is the only option that neither lies nor fabricates.
+//
+// This is defence in depth, not the primary guard. A machine should be stopped
+// from selecting ⊕/⊙ without a declared alphabet top at the point it is
+// configured — the loader and PUT /api/machines/:id/output-merge — so the fold
+// never meets the case. It is handled here because a fold that silently did
+// something plausible would be undiscoverable.
+inline constexpr bool kRefuseChainFoldWithoutTop = true;
+
+// Fold a machine's collection of potential outputs elementwise under `t`.
+// Empty collection yields nullopt: a machine that completed no Reality Event
+// presents no output, which is different from presenting a zero vector.
+//
+// `chainTop` is the k of the multi-valued chain {0..k}. It is an explicit
+// parameter because k belongs to the machine's alphabet, not to the fold:
+//   - Or/And/Xor/Nor/Nand and Meet/DiscreteMedian ignore it entirely;
+//   - Join uses it only for an early exit, and is total without it;
+//   - StrongConjunction/StrongDisjunction genuinely need it, and REFUSE —
+//     returning nullopt, presenting nothing — when it is absent. See
+//     kRefuseChainFoldWithoutTop for why no fallback value is sound.
+std::optional<Vector> fold_outputs(const std::vector<Vector>& outputs,
+                                   OutputMergeTransformation t,
+                                   std::optional<int> chainTop = std::nullopt);
 SimPattern sim_pattern_from_string(const std::string& s);
 MatchAlgorithm match_algorithm_from_string(const std::string& s);
 
@@ -48,6 +120,15 @@ struct PerceptualMapping {
   // Option A1 narrow-cell declaration.  Internal engine cells remain
   // double-valued; API compact mode uses this for packed wire payloads.
   std::optional<int> bitsPerElement = std::nullopt;
+  // The top of the machine's output alphabet — k, the chain the multi-valued
+  // transformations fold over. Distinct from bitsPerElement, which states the
+  // representable range and not the alphabet: FallDetection ranges over {0..4}
+  // while declaring 4 bits, so k derived from bitsPerElement would be 15 and put
+  // strong-disjunction at 14, outside the alphabet entirely
+  // (RealityEngine_CI#158). strong-conjunction and strong-disjunction are
+  // undefined without it and refuse rather than guess; every other
+  // transformation ignores it.
+  std::optional<int> outputAlphabetTop = std::nullopt;
 };
 
 struct StorageFootprint {
@@ -208,6 +289,16 @@ public:
   std::map<std::string, Json> metadata;
   std::optional<PerceptualMapping> perceptualMapping;
   ComparatorType matchAlgorithm = ComparatorType::Gte;
+  OutputMergeTransformation outputMergeTransformation = OutputMergeTransformation::Or;
+  // Interlock on the knob above. Initialised LOCKED: the transformation is a
+  // training variable, and a run that retunes one by accident is a run whose
+  // results mean nothing. Changing it requires unlocking first, deliberately
+  // and as a separate act.
+  //
+  // Runtime state, not a corpus property — a machine's declared transformation
+  // travels with it, but whether this deployment is currently allowed to change
+  // it does not.
+  bool outputMergeLocked = true;
 
   Machine(std::string machineName = "unnamed",
           std::string machineDescription = "",
@@ -320,23 +411,66 @@ struct DeprecationMark {
   long ageDays = 0;
 };
 
+// One operation per machine per output region per step — the single
+// contribution the machine presents into arbitration (FOLD_PLACEMENT.md 1).
+//
+// It used to be one operation per *asserted output*, so a machine whose seven
+// CESs completed contributed seven values to the same cell and the cell arbiter
+// resolved contention that belonged to the machine. FallDetection resolved to
+// 2.0 on C++ and LSP and 0.0 on Scala that way — neither the maximum nor the
+// minimum, because the answer depended on which subset fired and how each
+// runtime broke ties among same-machine contributions (RealityEngine_CI#154).
+// Folding first removes the contention rather than resolving it consistently.
 struct MergeOperation {
   RegionMapping region;
   std::string machineId;
-  std::string sequenceId;
-  size_t outputIndex = 0;
+  // The CESs whose completed Reality Events folded into `values` — sorted and
+  // deduplicated. Replaces the scalar sequenceId: one operation now covers the
+  // whole machine, so there is no single firing to name, and collapsing the set
+  // to one arbitrarily chosen member is what the fold exists to stop.
+  std::vector<std::string> sequenceIds;
+  // The collection of potential outputs folded under the machine's
+  // outputMergeTransformation. Never a zero vector standing in for "nothing":
+  // a machine that completed no Reality Event, or whose fold refused, emits no
+  // operation at all.
   Vector values;
   // Same field as MergeOperation.provenance in the AI runtime — emitted in
   // mergeBatch JSON so listeners can render the evidence chain alongside
-  // the asserted output.
+  // the asserted output. Union over the contributors, order-preserved and
+  // deduplicated.
   std::vector<std::string> provenance;
-  // Resolved paging contract.  std::nullopt when the fired output is not
+  // Resolved paging contract, joined over the contributors by severity rank
+  // (FOLD_PLACEMENT.md 3). std::nullopt when no contributor's fired output is
   // covered by a triggerConfig rule — paging is opt-in per (sequenceId, values).
   std::optional<PagingDecision> governance;
-  // Populated when the firing sequence carries deprecatedAt — listeners and
-  // dashboards use this to surface stale CESs without re-deriving from JSON.
+  // Populated when ANY contributing sequence carries deprecatedAt — listeners
+  // and dashboards use this to surface stale CESs without re-deriving from JSON.
   std::optional<DeprecationMark> deprecation;
 };
+
+// The Reality Events a machine completed in one step, and the evidence behind
+// them. Separate from MergeOperation on purpose: an operation exists only when
+// the machine has a value to present, and WHICH CESs completed is a fact about
+// the step that survives the fold declining to produce one.
+//
+// This is what drives the event bus. Driving it off mergeBatch instead made a
+// fold refusal retract the firings along with the value, so a meta machine
+// subscribed to a producer whose fold refused would never see it fire — the
+// producer completed its Reality Event and the subscriber was told nothing.
+struct MachineFirings {
+  std::string machineId;
+  std::vector<std::string> sequenceIds;   // sorted, deduplicated
+  std::vector<std::string> provenance;    // union, order-preserved, deduped
+};
+
+// Did this CES contribute to the folded value? The replacement for the
+// `op.sequenceId == id` test that the scalar field used to allow. Membership,
+// not equality: an operation covers every Reality Event the machine completed
+// this step, so asking whether one of them fired is a set question now.
+inline bool contributed(const MergeOperation& op, const std::string& sequenceId) {
+  return std::find(op.sequenceIds.begin(), op.sequenceIds.end(), sequenceId)
+         != op.sequenceIds.end();
+}
 
 // Secondary write triggered by a primary merge — emitted when a fired
 // (machineId, sequenceId) matches a subscription declared by another
@@ -358,7 +492,17 @@ struct MachineStepResult {
   std::string machineId;
   std::string machineName;
   Vector inputVector;
+  // A single member of the machine's collection of potential outputs, chosen by
+  // the arbiter. Which member that is has differed per runtime. Kept as-is so
+  // existing consumers are unaffected; new ones should read mergedOutputVector.
   std::optional<Vector> outputVector;
+  // The collection folded under the machine's outputMergeTransformation — what
+  // the Reality Engine presents to the Perception Engine. nullopt when the
+  // machine completed no Reality Event, which is not the same as a zero vector.
+  std::optional<Vector> mergedOutputVector;
+  // The transformation in force for this machine on this step, reported so the
+  // knob can be observed rather than inferred.
+  std::string outputMergeTransformation = "or";
   RegionMapping inputRegion;
   std::optional<RegionMapping> outputRegion;
   MachineTransitionResult transitionResult;
@@ -519,6 +663,10 @@ public:
   // process (#37). nullptr when this simulator holds no such machine — a
   // machine without a perceptualMapping is never added here.
   const Machine* running_machine(const std::string& machineId) const;
+  // Retune the merge knob on the machine this simulator is stepping. The
+  // registry holds a separate copy; both are set so a read of either agrees.
+  bool set_output_merge_transformation(const std::string& machineId, OutputMergeTransformation t);
+  bool set_output_merge_locked(const std::string& machineId, bool locked);
   void configure(std::vector<Vector> inputSequence, RegionMapping inputRegion, long stepDelayMs, std::optional<int> maxSteps = std::nullopt);
   void start();
   void stop();
@@ -588,7 +736,7 @@ private:
   mutable Json::Array cachedEdges;
   mutable bool edgesDirty = true;
   void rebuild_edge_cache() const;
-  std::vector<EventBusWrite> apply_event_bus(const std::vector<MergeOperation>& mergeBatch);
+  std::vector<EventBusWrite> apply_event_bus(const std::vector<MachineFirings>& firings);
 };
 
 struct SourceConfig {

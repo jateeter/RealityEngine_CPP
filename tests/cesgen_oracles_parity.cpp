@@ -153,7 +153,7 @@ int main(int argc, char** argv) {
 
       bool hit = false;
       for (const auto& op : last.mergeBatch) {
-        if (op.sequenceId == o.sequenceId
+        if (contributed(op, o.sequenceId)
             && op.region.offset == o.expectedRegion.offset
             && op.region.length == o.expectedRegion.length
             && values_equal(op.values, o.expectedValues)) {

@@ -339,4 +339,21 @@ inline std::vector<double> to_numbers(const Value& v) {
   return out;
 }
 
+// The string counterparts of the two above. Added when mergeBatch entries
+// started carrying a set of contributing sequence ids instead of one, which put
+// the same hand-rolled push_back loop in the RE serialiser, the PE dispatch
+// ledger and the PE trigger envelope.
+inline Value::Array strings(const std::vector<std::string>& xs) {
+  Value::Array arr;
+  for (const auto& x : xs) arr.emplace_back(x);
+  return arr;
+}
+
+inline std::vector<std::string> to_strings(const Value& v) {
+  std::vector<std::string> out;
+  if (!v.is_array()) return out;
+  for (const auto& item : v.array()) if (item.is_string()) out.push_back(item.as_string());
+  return out;
+}
+
 } // namespace reality::json

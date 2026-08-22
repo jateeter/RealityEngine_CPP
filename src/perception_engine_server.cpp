@@ -861,7 +861,12 @@ private:
     std::string mode = "dry-run";
     std::string target;
     std::string machineId;
-    std::string sequenceId;
+    // The CESs that folded into the merge operation this record came from. The
+    // RE stopped emitting a scalar sequenceId when the fold moved into the
+    // machine's atomic step, so a dispatch record names the set of Reality
+    // Events behind the value rather than one arbitrarily chosen member
+    // (FOLD_PLACEMENT.md 7).
+    std::vector<std::string> sequenceIds;
     std::string ragStatusCode;
     std::string processStatus;
     std::string error;
@@ -1507,7 +1512,7 @@ private:
       {"mode", r.mode},
       {"target", r.target},
       {"machineId", r.machineId},
-      {"sequenceId", r.sequenceId},
+      {"sequenceIds", json::strings(r.sequenceIds)},
       {"ragStatusCode", r.ragStatusCode.empty() ? Json(nullptr) : Json(r.ragStatusCode)},
       {"processStatus", r.processStatus.empty() ? Json(nullptr) : Json(r.processStatus)},
       {"attempts", static_cast<double>(r.attempts)},
@@ -3072,9 +3077,10 @@ private:
         {"machineId", op.at("machineId").as_string()},
         {"machineName", machine.at("name").as_string(op.at("machineId").as_string())},
         {"machineCode", md.at("machineCode").as_string()},
-        {"sequenceId", op.at("sequenceId").as_string()},
-        {"sequenceName", op.at("sequenceId").as_string()},
-        {"outputIndex", op.at("outputIndex").is_number() ? op.at("outputIndex") : Json(0)},
+        // The contributing set, not a scalar. `outputIndex` went with the
+        // per-firing merge entry it indexed: one operation now covers the
+        // machine's whole output region (FOLD_PLACEMENT.md 1, 7).
+        {"sequenceIds", op.at("sequenceIds").is_array() ? op.at("sequenceIds") : Json::Array{}},
         {"stepNumber", 0},
         {"perceptualMapping", outputMapping},
         {"provenance", op.at("provenance").is_array() ? op.at("provenance") : Json::Array{}},
@@ -3131,7 +3137,7 @@ private:
       record.status = "recorded";
       record.target = binding.agent;
       record.machineId = machineId;
-      record.sequenceId = op.at("sequenceId").as_string();
+      record.sequenceIds = json::to_strings(op.at("sequenceIds"));
       record.ragStatusCode = op.at("governance").at("ragStatusCode").as_string();
       record.processStatus = op.at("governance").at("processStatus").as_string();
       record.createdAt = now_ms();

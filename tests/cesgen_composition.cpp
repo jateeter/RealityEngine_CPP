@@ -91,7 +91,7 @@ void test_single_producer_does_not_complete(const std::filesystem::path& machine
   bool referralComplete = false;
   for (const auto& op : step.mergeBatch) {
     if (op.machineId == "machine-community-command-agent"
-        && op.sequenceId == "referral-completion") { referralComplete = true; break; }
+        && contributed(op, "referral-completion")) { referralComplete = true; break; }
   }
   EXPECT(!referralComplete, "referral-completion must not fire with only 1 milestone");
 }
@@ -133,7 +133,7 @@ void test_all_three_fire_completes_workflow(const std::filesystem::path& machine
   bool found = false;
   for (const auto& op : step.mergeBatch) {
     if (op.machineId == "machine-community-command-agent"
-        && op.sequenceId == "referral-completion") {
+        && contributed(op, "referral-completion")) {
       found = true;
       EXPECT((op.values == Vector{1.0, 0.0, 0.0, 0.0}), "REFERRAL_COMPLETE values");
       EXPECT(op.region.offset == 5503 && op.region.length == 4, "agent output region");
