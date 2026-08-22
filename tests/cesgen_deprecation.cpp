@@ -72,7 +72,7 @@ void test_engine_stamps_deprecation(const std::filesystem::path& machinesDir) {
 
   const MergeOperation* fired = nullptr;
   for (const auto& op : step.mergeBatch) {
-    if (op.sequenceId == "rs-reset-sequence") { fired = &op; break; }
+    if (contributed(op, "rs-reset-sequence")) { fired = &op; break; }
   }
   EXPECT(fired != nullptr, "rs-reset-sequence mergeBatch entry");
   if (fired) {
@@ -96,7 +96,7 @@ void test_non_deprecated_has_no_stamp(const std::filesystem::path& machinesDir) 
 
   const MergeOperation* setOp = nullptr;
   for (const auto& op : step.mergeBatch) {
-    if (op.sequenceId == "rs-set-sequence") { setOp = &op; break; }
+    if (contributed(op, "rs-set-sequence")) { setOp = &op; break; }
   }
   EXPECT(setOp != nullptr, "rs-set-sequence mergeBatch entry");
   if (setOp) {

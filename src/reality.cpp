@@ -217,6 +217,11 @@ std::string to_string(OutputMergeTransformation t) {
     case OutputMergeTransformation::Xor:  return "xor";
     case OutputMergeTransformation::Nor:  return "nor";
     case OutputMergeTransformation::Nand: return "nand";
+    case OutputMergeTransformation::Meet:              return "meet";
+    case OutputMergeTransformation::Join:              return "join";
+    case OutputMergeTransformation::StrongConjunction: return "strong-conjunction";
+    case OutputMergeTransformation::StrongDisjunction: return "strong-disjunction";
+    case OutputMergeTransformation::DiscreteMedian:    return "discrete-median";
   }
   return "or";
 }
@@ -227,10 +232,50 @@ OutputMergeTransformation output_merge_from_string(const std::string& s) {
   if (v == "xor")  return OutputMergeTransformation::Xor;
   if (v == "nor")  return OutputMergeTransformation::Nor;
   if (v == "nand") return OutputMergeTransformation::Nand;
+  if (v == "meet")               return OutputMergeTransformation::Meet;
+  if (v == "join")               return OutputMergeTransformation::Join;
+  if (v == "strong-conjunction") return OutputMergeTransformation::StrongConjunction;
+  if (v == "strong-disjunction") return OutputMergeTransformation::StrongDisjunction;
+  if (v == "discrete-median")    return OutputMergeTransformation::DiscreteMedian;
   throw std::invalid_argument("Unknown output merge transformation: " + s);
 }
+
+namespace {
+
+// Saturation ceiling for a single contributed cell. The multi-valued folds sum
+// over the collection in a 64-bit accumulator; clamping each term here means no
+// corpus, however malformed, can overflow it. A machine would need more than
+// 2^23 simultaneous potential outputs to reach the bound even at the ceiling,
+// and `pendingOutputs` is bounded by the machine's completed Reality Events.
+constexpr long long kMvValueCeiling = 1LL << 40;
+
+// Read cell `i` of a contribution as a chain member.
+//
+// Engine cells are double; chain members are conceptually non-negative
+// integers. The conversion is spelled out rather than left to a cast because a
+// cast truncates, and truncation makes the fold a function of floating-point
+// representation error: an arbiter-scaled 2.9999999996 would fold as 2 on one
+// runtime and 3 on another that accumulated the scaling differently. llround is
+// used rather than rint/nearbyint because those honour the dynamic rounding
+// mode, which is process state the fold must not depend on.
+//
+// Beyond the end of a short contribution the value is 0 — the same implicit-zero
+// rule the Boolean path uses. Negatives and NaN floor at the chain bottom; the
+// `!(x > 0.0)` form catches NaN, which every ordered comparison would let
+// through.
+inline long long mv_value(const Vector& v, size_t i) {
+  if (i >= v.size()) return 0;
+  const double x = v[i];
+  if (!(x > 0.0)) return 0;
+  const long long n = std::llround(x);
+  return n < kMvValueCeiling ? n : kMvValueCeiling;
+}
+
+}  // namespace
+
 std::optional<Vector> fold_outputs(const std::vector<Vector>& outputs,
-                                   OutputMergeTransformation t) {
+                                   OutputMergeTransformation t,
+                                   std::optional<int> chainTop) {
   // No completed Reality Event means no output. A machine that presents nothing
   // is not the same as one presenting zeros, and collapsing the two would have
   // the PE clear a region no machine wrote.
@@ -269,18 +314,164 @@ std::optional<Vector> fold_outputs(const std::vector<Vector>& outputs,
   // judged on its own terms until the general rule is settled.
   const size_t n = outputs.size();
   Vector out(width, 0.0);
-  for (size_t i = 0; i < width; ++i) {
-    size_t k = 0;
-    for (const auto& o : outputs) if (bit(o, i)) ++k;
-    bool asserted = false;
-    switch (t) {
-      case OutputMergeTransformation::Or:   asserted = k >= 1;      break;
-      case OutputMergeTransformation::And:  asserted = k == n;      break;
-      case OutputMergeTransformation::Xor:  asserted = (k % 2) == 1; break;
-      case OutputMergeTransformation::Nor:  asserted = k == 0;      break;
-      case OutputMergeTransformation::Nand: asserted = k < n;       break;
-    }
-    out[i] = asserted ? 1.0 : 0.0;
+
+  switch (t) {
+    case OutputMergeTransformation::Or:
+    case OutputMergeTransformation::And:
+    case OutputMergeTransformation::Xor:
+    case OutputMergeTransformation::Nor:
+    case OutputMergeTransformation::Nand:
+      for (size_t i = 0; i < width; ++i) {
+        size_t k = 0;
+        for (const auto& o : outputs) if (bit(o, i)) ++k;
+        bool asserted = false;
+        switch (t) {
+          case OutputMergeTransformation::Or:   asserted = k >= 1;      break;
+          case OutputMergeTransformation::And:  asserted = k == n;      break;
+          case OutputMergeTransformation::Xor:  asserted = (k % 2) == 1; break;
+          case OutputMergeTransformation::Nor:  asserted = k == 0;      break;
+          case OutputMergeTransformation::Nand: asserted = k < n;       break;
+          default: break;  // unreachable; the outer switch already selected
+        }
+        out[i] = asserted ? 1.0 : 0.0;
+      }
+      return out;
+    default:
+      break;
+  }
+
+  // ── multi-valued fold over the chain {0..k} ────────────────────────────────
+  //
+  // Same n-input, order-free contract as the Boolean path above: each of these
+  // is symmetric, so the collection's enumeration order — which differs between
+  // runtimes — cannot reach the result. Verified by exhaustion against
+  // RealityEngine_CI/scripts/experiment-mv-transforms.py.
+  //
+  // Everything loop-invariant is computed here rather than per cell, and each
+  // transform below is a single pass over the collection with its early exit
+  // written into the loop condition. Complexity is stated per transform; all
+  // are O(width · n) overall with no allocation inside the cell loop.
+  //
+  // `bit()` is deliberately not used: these read magnitudes, not assertions.
+  // ⊕ and ⊙ are undefined without a chain top and refuse rather than guess one;
+  // see kRefuseChainFoldWithoutTop. Checked before any work so the refusal
+  // costs nothing in the hot path.
+  if (kRefuseChainFoldWithoutTop && !chainTop.has_value() &&
+      (t == OutputMergeTransformation::StrongConjunction ||
+       t == OutputMergeTransformation::StrongDisjunction)) {
+    return std::nullopt;
+  }
+  // Meet and DiscreteMedian never read k. Join reads it only as an early-exit
+  // bound and is total without one, so an unbounded sentinel is safe for it.
+  const long long k = chainTop.value_or(0);
+  const bool bounded = chainTop.has_value();
+
+  // Loop-invariants hoisted out of the cell loop. The strong-conjunction
+  // threshold k(n−1) depends only on the collection size, and the median's
+  // selection index only on n — recomputing either per cell would be width
+  // times more arithmetic for the same answer.
+  const long long conjunctionThreshold = k * (static_cast<long long>(n) - 1);
+  const size_t medianIndex = (n - 1) / 2;
+
+  // The median's scratch buffer, allocated once for the whole fold and refilled
+  // per cell. std::nth_element permutes what it selects over, so it needs a
+  // mutable copy; taking that copy inside the cell loop would put an allocation
+  // in the hot path of every cell of every machine of every step.
+  std::vector<long long> scratch;
+  if (t == OutputMergeTransformation::DiscreteMedian) scratch.resize(n);
+
+  switch (t) {
+    // meet — min. O(n) per cell, single pass, early exit at the chain bottom,
+    // which absorbs: no later contribution can lift a 0.
+    case OutputMergeTransformation::Meet:
+      for (size_t i = 0; i < width; ++i) {
+        long long acc = mv_value(outputs[0], i);
+        for (size_t j = 1; j < n && acc > 0; ++j) {
+          const long long v = mv_value(outputs[j], i);
+          if (v < acc) acc = v;
+        }
+        out[i] = static_cast<double>(acc);
+      }
+      break;
+
+    // join — max. O(n) per cell, single pass. The early exit needs a declared
+    // chain top; without one join is still total, it just runs to the end. The
+    // `bounded` test sits behind the improvement test so it costs nothing on
+    // the cells that never rise.
+    case OutputMergeTransformation::Join:
+      // Each read is CLAMPED to k when k is known, and the clamp is
+      // load-bearing rather than cosmetic. Without it the early exit makes join
+      // order-dependent for a contribution above the chain: an earlier
+      // out-of-chain value stops the scan at its own magnitude and a later one
+      // is never compared, so [1,3,5] at k=3 answered 3 while [5,3,1] answered
+      // 5 — the same collection, two results, which is precisely the property
+      // this fold exists to guarantee. The on-chain sweep cannot see it, since
+      // there the early exit can only fire on a genuine maximum.
+      //
+      // A contribution above k is a malformed corpus; reading it as k neither
+      // fabricates a rung nor lets arrival order decide (RealityEngine_CI#158).
+      for (size_t i = 0; i < width; ++i) {
+        long long acc = mv_value(outputs[0], i);
+        if (bounded && acc > k) acc = k;
+        for (size_t j = 1; j < n; ++j) {
+          long long v = mv_value(outputs[j], i);
+          if (bounded && v > k) v = k;
+          if (v > acc) {
+            acc = v;
+            if (bounded && acc >= k) break;
+          }
+        }
+        out[i] = static_cast<double>(acc);
+      }
+      break;
+
+    // strong-conjunction ⊙ — max(0, Σx − k(n−1)). O(n) per cell, single pass
+    // sum. No early exit is available and none is missing: every term is
+    // non-negative and only raises the sum, so no prefix can decide the result
+    // before the last contribution is read.
+    case OutputMergeTransformation::StrongConjunction:
+      for (size_t i = 0; i < width; ++i) {
+        long long total = 0;
+        for (size_t j = 0; j < n; ++j) total += mv_value(outputs[j], i);
+        out[i] = static_cast<double>(
+          total > conjunctionThreshold ? total - conjunctionThreshold : 0);
+      }
+      break;
+
+    // strong-disjunction ⊕ — min(k, Σx). O(n) per cell, single pass sum with an
+    // early exit once k is reached: the sum saturates there and the remaining
+    // contributions cannot move it back down.
+    case OutputMergeTransformation::StrongDisjunction:
+      for (size_t i = 0; i < width; ++i) {
+        long long total = 0;
+        for (size_t j = 0; j < n; ++j) {
+          total += mv_value(outputs[j], i);
+          if (total >= k) { total = k; break; }
+        }
+        out[i] = static_cast<double>(total);
+      }
+      break;
+
+    // discrete-median — O(n) selection per cell via nth_element, not an
+    // O(n log n) sort: only the middle element is needed, so ordering the rest
+    // is work thrown away.
+    //
+    // For even n this is floor(median), which over integers is exactly the
+    // lower of the two middle elements — so the step is a selection and never a
+    // division. That is a determinism property as much as an efficiency one: an
+    // integer selection cannot differ across runtimes the way a float division
+    // rounding at the last bit could.
+    case OutputMergeTransformation::DiscreteMedian:
+      for (size_t i = 0; i < width; ++i) {
+        for (size_t j = 0; j < n; ++j) scratch[j] = mv_value(outputs[j], i);
+        const auto mid = scratch.begin() + static_cast<std::ptrdiff_t>(medianIndex);
+        std::nth_element(scratch.begin(), mid, scratch.end());
+        out[i] = static_cast<double>(scratch[medianIndex]);
+      }
+      break;
+
+    default:
+      break;  // unreachable; the Boolean gates returned above
   }
   return out;
 }
@@ -756,19 +947,47 @@ size_t PerceptualSpaceSimulator::event_bus_subscription_count() const {
   for (const auto& [_, list] : eventBusSubscriptions) n += list.size();
   return n;
 }
-std::vector<EventBusWrite> PerceptualSpaceSimulator::apply_event_bus(const std::vector<MergeOperation>& mergeBatch) {
+std::vector<EventBusWrite> PerceptualSpaceSimulator::apply_event_bus(const std::vector<MachineFirings>& firings) {
   if (eventBusSubscriptions.empty()) return {};
   std::vector<EventBusWrite> writes;
   std::set<std::string> seen;
-  for (const auto& op : mergeBatch) {
-    auto it = eventBusSubscriptions.find(op.machineId + "|" + op.sequenceId);
-    if (it == eventBusSubscriptions.end()) continue;
-    for (const auto& sub : it->second) {
-      std::string dedup = sub.subscriberMachineId + "|" + std::to_string(sub.bitOffset)
-                        + "|" + op.machineId + "|" + op.sequenceId;
-      if (!seen.insert(dedup).second) continue;
-      writes.push_back({op.machineId, op.sequenceId, sub.subscriberMachineId, sub.bitOffset, 1.0, op.provenance});
-      latchedEventBits.insert(sub.bitOffset);
+  // Driven by the machines' FIRINGS, not by mergeBatch, and iterating the
+  // contributing set rather than a scalar (FOLD_PLACEMENT.md 5).
+  //
+  // Two separate corrections live in that sentence. Subscriptions are keyed on
+  // machineId + "|" + sequenceId, so a folded operation with no single
+  // sequenceId would either match nothing — meta and compose machines never
+  // firing again — or match one arbitrarily chosen member, which is the same
+  // arbitrary pick the fold was introduced to remove.
+  //
+  // And the source has to be the firings rather than the batch, because §2 lets
+  // a fold REFUSE: the Łukasiewicz pair without a declared chain top yields no
+  // value, so the machine contributes no operation. Reading the bus off
+  // mergeBatch would let that refusal retract the machine's firings along with
+  // its value, and §5 requires every subscription that would have fired to still
+  // fire. A refusal withdraws the value, not the Reality Events — which CESs
+  // completed is independent of whether the fold could present their fold.
+  //
+  // The dedup key already carried the sequence, so it needed no change: every
+  // (producer machine, producer sequence) subscription that fired before still
+  // fires, once. This is the one consumer whose behaviour must be IDENTICAL
+  // rather than merely analogous, because these writes go into the perceptual
+  // space.
+  for (const auto& f : firings) {
+    for (const auto& sequenceId : f.sequenceIds) {
+      auto it = eventBusSubscriptions.find(f.machineId + "|" + sequenceId);
+      if (it == eventBusSubscriptions.end()) continue;
+      for (const auto& sub : it->second) {
+        std::string dedup = sub.subscriberMachineId + "|" + std::to_string(sub.bitOffset)
+                          + "|" + f.machineId + "|" + sequenceId;
+        if (!seen.insert(dedup).second) continue;
+        // provenance is the machine's union rather than this sequence's own
+        // chain: the folded record does not keep them apart, and for a single
+        // contributor — which is every subscription in the corpus today — the
+        // union IS that sequence's chain.
+        writes.push_back({f.machineId, sequenceId, sub.subscriberMachineId, sub.bitOffset, 1.0, f.provenance});
+        latchedEventBits.insert(sub.bitOffset);
+      }
     }
   }
   std::sort(writes.begin(), writes.end(), [](const EventBusWrite& a, const EventBusWrite& b) {
@@ -862,6 +1081,18 @@ TrajectoryEntry sparse_trajectory(int stepNumber, const Vector& dense) {
   }
   return entry;
 }
+
+// Render a contributing set as one attribution string. A single-element set
+// renders as the bare id, which is what keeps the overwhelmingly common
+// one-CES-fired case byte-identical on every surface that reads it.
+std::string join_ids(const std::vector<std::string>& ids) {
+  std::string out;
+  for (const auto& id : ids) {
+    if (!out.empty()) out += ",";
+    out += id;
+  }
+  return out;
+}
 } // namespace
 
 SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optional<ComparatorType> overrideType) {
@@ -951,18 +1182,31 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
   SimulationStep step;
   step.stepNumber = stepNumber;
   step.timestamp = now_ms();
+  // Every machine's completed Reality Events, gathered alongside the merge
+  // batch and kept separate from it. The event bus reads this rather than the
+  // batch, so a machine whose fold refuses still fires its subscribers.
+  std::vector<MachineFirings> stepFirings;
+  stepFirings.reserve(results.size());
   for (auto& result : results) {
     // Presenting the machine's output is the Reality Engine's job and the last
-    // thing it does in the step. Done here, in the serialised build after the
-    // domain-worker futures have joined above — the fold is per machine over
-    // its own collection, so it needs nothing from the parallel phase beyond
-    // the results it already collapsed to.
+    // thing it does in a machine's atomic step. Done here, in the serialised
+    // build after the domain-worker futures have joined above — the fold is per
+    // machine over its own collection, so it needs nothing from the parallel
+    // phase beyond the results it already collapsed to.
     //
     // `pendingOutputs` is that collection: one entry per completed Reality
     // Event. `machineOutput` is a single member of it chosen by the arbiter,
     // and which member that is has differed per runtime — the same corpus
     // presented C++'s pick to the PE and Scala's to its own, which is the
     // divergence in RealityEngine_CI#154. The fold replaces the pick.
+    //
+    // The fold used to sit BESIDE this position rather than in it: its result
+    // was reported as mergedOutputVector and the arbiter still resolved the
+    // unfolded collection, so a machine with seven completed Reality Events
+    // pushed seven values at the same cell and the cell arbiter settled
+    // contention that belonged to the machine. It is computed once here and
+    // used twice — the value the PE reads and the value the machine contributes
+    // are now one computation, not two things to keep consistent.
     std::vector<Vector> potentialOutputs;
     potentialOutputs.reserve(result.pendingOutputs.size());
     for (const auto& po : result.pendingOutputs) potentialOutputs.push_back(po.values);
@@ -970,7 +1214,18 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     const OutputMergeTransformation transformation =
       machineIt != machines.end() ? machineIt->second.outputMergeTransformation
                                   : OutputMergeTransformation::Or;
-    std::optional<Vector> merged = fold_outputs(potentialOutputs, transformation);
+    // The chain top is the machine's declared perceptualMapping.outputAlphabetTop.
+    // It cannot be derived: `bitsPerElement` is the representable range rather
+    // than the chain, so reading k from it would be a guess — FallDetection
+    // ranges over {0..4} while declaring 4 bits, which would put strong
+    // disjunction at 14 (RealityEngine_CI#158). fold_outputs REFUSES for the
+    // Łukasiewicz pair without one — see kRefuseChainFoldWithoutTop — and a
+    // refusal is handled below as the machine presenting nothing. Every other
+    // transformation ignores it, which is why the two corpus machines that
+    // declare a chain fold (both "join") need no top.
+    const std::optional<int> chainTop = result.mapping.outputAlphabetTop;
+    std::optional<Vector> merged =
+      fold_outputs(potentialOutputs, transformation, chainTop);
 
     // Named assignment rather than aggregate initialisation: the field order of
     // MachineStepResult is not a contract, and a positional list breaks
@@ -983,56 +1238,155 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
                              ? std::optional<Vector>(result.transition.machineOutput->vector)
                              : std::nullopt;
     // outputVector keeps the arbiter's pick so nothing that reads it today
-    // changes; mergedOutputVector is what the PE should consume.
+    // changes; mergedOutputVector is what the PE should consume — and it is now
+    // the same vector that reaches arbitration, byte for byte.
     msr.mergedOutputVector        = merged;
     msr.outputMergeTransformation = to_string(transformation);
     msr.inputRegion      = result.mapping.input;
     msr.transitionResult = result.transition;
     if (msr.outputVector || msr.mergedOutputVector) msr.outputRegion = result.mapping.output;
     step.machineResults[result.id] = msr;
-  }
 
-  // Canonical merge ordering — sort by (machineId, sequenceId, outputIndex)
-  // so AI and C++ produce identical mergeBatch sequences for the same input.
-  for (const auto& result : results) {
-    auto machineIt = machines.find(result.id);
+    // Which Reality Events completed, and the evidence behind them. Computed
+    // BEFORE the fold's outcome is consulted, and recorded even when the fold
+    // declines to produce a value: the event bus is keyed on which CESs
+    // completed, and that is a fact about the machine's step rather than a
+    // property of the value it managed to present.
+    //
+    // provenance is the union over the contributors in the order the collection
+    // enumerates them, deduplicated, so the evidence chain stays readable.
+    // First-seen order rather than sorted: within one sequence the chain is the
+    // order the Reality Event actually walked, and sorting it would destroy that.
+    MachineFirings firings;
+    firings.machineId = result.id;
+    std::set<std::string> seenProvenance;
     for (const auto& po : result.pendingOutputs) {
-      MergeOperation op{result.mapping.output, result.id, po.sequenceId, po.outputIndex, po.values, po.provenance, std::nullopt, std::nullopt};
-      // Stamp the governance contract resolved from the machine's
-      // triggerConfig + governance metadata.  Listeners read it from the
-      // same record as the asserted values; the CES JSON is the sole
-      // source of truth for paging.
-      if (machineIt != machines.end()) {
-        op.governance = resolve_governance(machineIt->second, po.sequenceId, po.values);
-        if (op.governance) {
-          coverage.record_paging_decision(
-              op.governance->ownerTeam.empty()     ? "unrouted" : op.governance->ownerTeam,
-              op.governance->processStatus.empty() ? "unknown"  : op.governance->processStatus,
-              op.governance->ragStatusCode.empty() ? "unknown"  : op.governance->ragStatusCode,
-              op.machineId);
-        }
-        // Deprecation stamp — find the firing sequence in the machine and
-        // attach its lifecycle block when deprecated.  Mirrors the AI runtime.
-        for (const auto& seq : machineIt->second.all_sequences()) {
-          if (seq.id == po.sequenceId && seq.is_deprecated()) {
-            DeprecationMark mark;
-            mark.since      = seq.deprecatedAt;
-            mark.replacedBy = seq.replacedBy;
-            mark.ageDays    = seq.days_since_deprecation();
-            op.deprecation  = std::move(mark);
-            coverage.record_deprecated_fire(op.machineId, machineIt->second.name, po.sequenceId, seq.replacedBy);
-            break;
-          }
+      firings.sequenceIds.push_back(po.sequenceId);
+      for (const auto& vid : po.provenance)
+        if (seenProvenance.insert(vid).second) firings.provenance.push_back(vid);
+    }
+    // sequenceIds — sorted and deduplicated (FOLD_PLACEMENT.md 1). The source
+    // order is already ascending because MachineTransitionResult::sequenceResults
+    // is a std::map, but this is the contract and it is stated rather than
+    // inherited: a sequence that asserted several outputs appears once, and the
+    // sort is what makes the tie-breaks below "lexicographically smallest"
+    // rather than "first enumerated".
+    std::sort(firings.sequenceIds.begin(), firings.sequenceIds.end());
+    firings.sequenceIds.erase(std::unique(firings.sequenceIds.begin(), firings.sequenceIds.end()),
+                              firings.sequenceIds.end());
+    if (!firings.sequenceIds.empty()) stepFirings.push_back(firings);
+
+    // No completed Reality Event means no operation, exactly as before. A fold
+    // that REFUSED means the same for the VALUE: the machine presents nothing,
+    // and nothing is not a zero vector. Contributing zeros here would have the
+    // arbiter resolve a region no machine wrote, which is the failure the
+    // nullopt return of fold_outputs exists to prevent (FOLD_PLACEMENT.md 2).
+    // The firings above are already recorded, so the refusal costs the machine
+    // its contribution and not its subscribers.
+    if (!merged) continue;
+
+    // Named assignment for the same reason as above — and with more force here,
+    // because the positional list this replaced silently mis-assigned the
+    // moment the record's shape changed.
+    MergeOperation op;
+    op.region      = result.mapping.output;
+    op.machineId   = result.id;
+    op.values      = *merged;
+    op.sequenceIds = firings.sequenceIds;
+    op.provenance  = firings.provenance;
+
+    if (machineIt != machines.end()) {
+      // Governance — the join over the contributors (FOLD_PLACEMENT.md 3).
+      //
+      // Resolution stays PER CONTRIBUTING SEQUENCE, against that sequence's own
+      // asserted values, exactly as before the move. A triggerConfig rule is
+      // written for one CES's output and need not match the fold, so resolving
+      // against the folded vector would change the matching semantics, and that
+      // is not part of this move.
+      //
+      // The winner is the highest severity_rank — the chain already in
+      // arbiter.cpp, GREEN/absent 0 < AMBER 1 < RED 2 < lifeSafety 3 — with ties
+      // going to the lexicographically smallest sequenceId. Taking the join is
+      // safety-preserving: a RED-governed firing cannot be hidden by a GREEN one
+      // that folded beside it, which is precisely what SEVERITY arbitration
+      // guaranteed while the machine's own contributions still reached the
+      // arbiter separately. 135 of 1328 corpus machines have an outputMatches
+      // pattern mapping to more than one RAG code, so the join is load-bearing
+      // rather than decorative.
+      //
+      // The winner's PagingDecision travels WHOLE. Composing one from the
+      // ragStatusCode of one rule and the ownerTeam of another would describe no
+      // rule that exists, and it is a real on-call rota that reads ownerTeam.
+      int bestRank = -1;
+      for (const auto& po : result.pendingOutputs) {
+        auto decision = resolve_governance(machineIt->second, po.sequenceId, po.values);
+        if (!decision) continue;
+        const int rank = severity_rank(decision->ragStatusCode);
+        if (rank > bestRank ||
+            (rank == bestRank && po.sequenceId < op.governance->sequenceId)) {
+          bestRank      = rank;
+          op.governance = std::move(decision);
         }
       }
-      step.mergeBatch.push_back(std::move(op));
+      // Coverage records the joined decision ONCE per operation. Its totals drop
+      // from per-firing to per-machine-per-step; dashboards reading those
+      // counters step down with it, and that is the shape of the move rather
+      // than a regression.
+      if (op.governance) {
+        coverage.record_paging_decision(
+            op.governance->ownerTeam.empty()     ? "unrouted" : op.governance->ownerTeam,
+            op.governance->processStatus.empty() ? "unknown"  : op.governance->processStatus,
+            op.governance->ragStatusCode.empty() ? "unknown"  : op.governance->ragStatusCode,
+            op.machineId);
+      }
+      // Deprecation — the mark is attached when ANY contributor is deprecated,
+      // reporting the lexicographically smallest deprecated sequence so it is
+      // deterministic (FOLD_PLACEMENT.md 4).
+      //
+      // The COUNTER is separate and runs over pendingOutputs, one entry per
+      // asserted output, so a sequence asserting twice in a step counts twice.
+      // That preserves the pre-move count exactly, which is what 4 intended;
+      // counting over the deduplicated sequenceIds instead would have quietly
+      // reduced ces_deprecated_fires_total for any machine whose deprecated
+      // sequence asserts more than once (amendment A4 — LSP read it this way,
+      // C++ and Scala changed to match).
+      for (const auto& po : result.pendingOutputs) {
+        for (const auto& seq : machineIt->second.all_sequences()) {
+          if (seq.id != po.sequenceId || !seq.is_deprecated()) continue;
+          coverage.record_deprecated_fire(op.machineId, machineIt->second.name, po.sequenceId,
+                                          seq.replacedBy);
+          break;
+        }
+      }
+      // The mark itself collapses to one, over the sorted deduplicated set.
+      for (const auto& sequenceId : op.sequenceIds) {
+        bool marked = false;
+        for (const auto& seq : machineIt->second.all_sequences()) {
+          if (seq.id != sequenceId || !seq.is_deprecated()) continue;
+          DeprecationMark mark;
+          mark.since      = seq.deprecatedAt;
+          mark.replacedBy = seq.replacedBy;
+          mark.ageDays    = seq.days_since_deprecation();
+          op.deprecation  = std::move(mark);
+          marked = true;
+          break;
+        }
+        if (marked) break;
+      }
     }
+    step.mergeBatch.push_back(std::move(op));
   }
-  std::sort(step.mergeBatch.begin(), step.mergeBatch.end(), [](const MergeOperation& a, const MergeOperation& b) {
-    if (a.machineId != b.machineId) return a.machineId < b.machineId;
-    if (a.sequenceId != b.sequenceId) return a.sequenceId < b.sequenceId;
-    return a.outputIndex < b.outputIndex;
-  });
+
+  // Canonical merge ordering — by machineId alone, which is total now that the
+  // batch carries one operation per machine. sequenceId and outputIndex were the
+  // secondary keys that made the old per-firing batch orderable; with one entry
+  // per machine they are constant within a machine and no longer sort keys at
+  // all (FOLD_PLACEMENT.md 6). The ordering exists so every runtime emits the
+  // same mergeBatch sequence for the same input.
+  std::sort(step.mergeBatch.begin(), step.mergeBatch.end(),
+            [](const MergeOperation& a, const MergeOperation& b) {
+              return a.machineId < b.machineId;
+            });
   // GATHER -> RESOLVE -> COMMIT (ARBITER_CONTRACT.md 2).
   //
   // The batch above is canonically sorted, which made the previous
@@ -1052,8 +1406,18 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
         c.value          = merge.values[static_cast<size_t>(i)];
         c.provider       = "machine";
         c.originId       = merge.machineId;
-        c.cesId          = merge.sequenceId;
-        c.outputVectorId = std::to_string(merge.outputIndex);
+        // The whole contributing set, comma-joined — a one-element set renders
+        // as the bare sequence id, so a machine that fired one CES reaches the
+        // arbiter and /api/arbitration looking exactly as it did before the fold
+        // moved (FOLD_PLACEMENT.md 8). cesId is attribution here, not identity:
+        // the arbiter now sees one machine contribution per cell, so it has
+        // nothing left to tie-break within a machine.
+        c.cesId          = join_ids(merge.sequenceIds);
+        // The machine contributes exactly one operation, so the index within its
+        // contributions is always the first. Kept as "0" rather than emptied
+        // because /api/arbitration serialises it and an emptied field would
+        // change the wire for every machine in the corpus.
+        c.outputVectorId = "0";
         if (merge.governance) c.ragStatusCode = merge.governance->ragStatusCode;
         byCell[c.cell].push_back(std::move(c));
       }
@@ -1078,7 +1442,7 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
   // Phase 4 — apply compose/meta-CES event-bus subscriptions, latching
   // 1.0 bits at the offsets every subscriber asked for.  These writes
   // make producer "fired" signals visible to meta-machines on the next step.
-  step.eventBus = apply_event_bus(step.mergeBatch);
+  step.eventBus = apply_event_bus(stepFirings);
   step.perceptualSpace = space.vector();
   for (const auto& [id, msr] : step.machineResults) {
     step.activeRegions.push_back({msr.inputRegion.offset, msr.inputRegion.length, id, "input"});
@@ -1363,10 +1727,19 @@ Machine load_machine_from_json_string(const std::string& raw,
   std::optional<PerceptualMapping> mapping;
   const auto& pm = m.at("perceptualMapping");
   if (pm.is_object()) {
-    mapping = PerceptualMapping{parse_region(pm.at("input")), parse_region(pm.at("output")), std::nullopt};
+    mapping = PerceptualMapping{parse_region(pm.at("input")), parse_region(pm.at("output")),
+                                std::nullopt, std::nullopt};
     if (pm.at("bitsPerElement").is_number()) {
       int bits = static_cast<int>(pm.at("bitsPerElement").as_number());
       if (is_allowed_bits_per_element(bits)) mapping->bitsPerElement = bits;
+    }
+    // The chain top for the multi-valued fold — machine.schema.json requires it
+    // of any machine selecting strong-conjunction or strong-disjunction, and
+    // ignores it otherwise. Minimum 1: a chain {0..0} has one rung and folds to
+    // nothing useful, and a negative top is not a chain at all.
+    if (pm.at("outputAlphabetTop").is_number()) {
+      int top = static_cast<int>(pm.at("outputAlphabetTop").as_number());
+      if (top >= 1) mapping->outputAlphabetTop = top;
     }
   }
   Machine machine(name, desc, arbiter, mapping, id);
@@ -1438,6 +1811,10 @@ Json to_json(const RegionMapping& r) { return Json::Object{{"offset", static_cas
 Json to_json(const PerceptualMapping& m) {
   Json::Object out{{"input", to_json(m.input)}, {"output", to_json(m.output)}};
   if (m.bitsPerElement) out["bitsPerElement"] = static_cast<double>(*m.bitsPerElement);
+  // Emitted only when declared, exactly as bitsPerElement is: a machine that
+  // does not declare a chain top must not grow a field on /api/machines, which
+  // is under byte comparison against LSP and Scala.
+  if (m.outputAlphabetTop) out["outputAlphabetTop"] = static_cast<double>(*m.outputAlphabetTop);
   return out;
 }
 
@@ -1572,11 +1949,15 @@ Json to_json(const SimulationStep& step, bool includeMachineResults, bool includ
   for (const auto& op : step.mergeBatch) {
     Json::Array provArr;
     for (const auto& vid : op.provenance) provArr.emplace_back(vid);
+    // `sequenceIds` (array) replaces `sequenceId` (string), and `outputIndex`
+    // is gone with the per-firing entry it indexed (FOLD_PLACEMENT.md 7). RE and
+    // PE move together: a PE reading `sequenceId` off a new RE gets nothing, and
+    // the reverse — a new PE reading an old RE — is worse, because a missing
+    // array reads as "no contributors" rather than as an error.
     Json::Object obj{
       {"region", to_json(op.region)},
       {"machineId", op.machineId},
-      {"sequenceId", op.sequenceId},
-      {"outputIndex", static_cast<double>(op.outputIndex)},
+      {"sequenceIds", json::strings(op.sequenceIds)},
       {"values", json::numbers(op.values)},
       {"provenance", provArr}
     };

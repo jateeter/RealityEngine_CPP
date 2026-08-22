@@ -71,7 +71,7 @@ void test_fall_confirmed_red(const std::filesystem::path& machinesDir) {
 
   bool found = false;
   for (const auto& op : last.mergeBatch) {
-    if (op.sequenceId == "fall-confirmed"
+    if (contributed(op, "fall-confirmed")
         && op.values.size() == 2 && op.values[0] == 4 && op.values[1] == 3) {
       found = true;
       std::vector<std::string> expected{"fall-conf-v1","fall-conf-v2","fall-conf-v3","fall-conf-v4","fall-conf-v5","fall-conf-v6"};
@@ -95,7 +95,7 @@ void test_fall_slow_collapse(const std::filesystem::path& machinesDir) {
 
   bool found = false;
   for (const auto& op : last.mergeBatch) {
-    if (op.sequenceId == "fall-slow-collapse"
+    if (contributed(op, "fall-slow-collapse")
         && op.values.size() == 2 && op.values[0] == 4 && op.values[1] == 2) {
       found = true;
       std::vector<std::string> expected{"fall-slow-v1","fall-slow-v2","fall-slow-v3"};
@@ -116,7 +116,7 @@ void test_rsflipflop_initial(const std::filesystem::path& machinesDir) {
   auto step = sim.process_immediate(dense(off, {1, 0}));
   bool found = false;
   for (const auto& op : step.mergeBatch) {
-    if (op.sequenceId == "rs-set-sequence") {
+    if (contributed(op, "rs-set-sequence")) {
       found = true;
       EXPECT((op.values == Vector{1.0, 0.0}), "rs-set values mismatch");
       EXPECT(op.provenance.size() == 1 && op.provenance[0] == "rs-event-10",
@@ -139,7 +139,7 @@ void test_provenance_non_empty_property(const std::filesystem::path& machinesDir
   EXPECT(!step.mergeBatch.empty(), "expected at least one mergeBatch entry");
   for (const auto& op : step.mergeBatch) {
     EXPECT(!op.provenance.empty(),
-           "mergeBatch entry for " + op.machineId + "/" + op.sequenceId + " has empty provenance");
+           "mergeBatch entry for " + op.machineId + " has empty provenance");
   }
 }
 

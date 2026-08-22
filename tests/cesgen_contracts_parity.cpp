@@ -57,8 +57,20 @@ std::string project_step(const SimulationStep& s) {
     for (const auto& vid : op.provenance) prov.emplace_back(vid);
     Json::Object o;
     o["region"]      = Json::Object{{"offset", static_cast<double>(op.region.offset)}, {"length", static_cast<double>(op.region.length)}};
-    o["sequenceId"]  = op.sequenceId;
-    o["outputIndex"] = static_cast<double>(op.outputIndex);
+    // contracts.json was recorded before the fold moved into the machine's
+    // atomic step, so it carries one entry per asserted output with a scalar
+    // sequenceId and an outputIndex. A machine with ONE contributing sequence
+    // projects to exactly that — sequenceIds[0] and index 0 — which is the
+    // byte-identity property FOLD_PLACEMENT.md 8 asserts, and it is why the
+    // recorded baseline still checks the overwhelming majority of the corpus.
+    //
+    // A machine with several contributing sequences will NOT match: it used to
+    // produce one recorded entry per firing and now produces one folded entry.
+    // Those contracts have to be re-recorded against the moved fold; a mismatch
+    // there is the move being visible, not the engine being wrong.
+    o["sequenceId"]  = op.sequenceIds.size() == 1 ? op.sequenceIds.front()
+                                                  : json::stringify(json::strings(op.sequenceIds));
+    o["outputIndex"] = 0.0;
     Json::Array vals; for (double v : op.values) vals.emplace_back(v);
     o["values"]      = vals;
     o["provenance"]  = prov;

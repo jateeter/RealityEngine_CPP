@@ -135,7 +135,7 @@ void test_mergebatch_stamp(const std::filesystem::path& machinesDir) {
 
   const MergeOperation* nominal = nullptr;
   for (const auto& op : step.mergeBatch) {
-    if (op.sequenceId == "fall-nominal") { nominal = &op; break; }
+    if (contributed(op, "fall-nominal")) { nominal = &op; break; }
   }
   EXPECT(nominal != nullptr, "fall-nominal mergeBatch entry");
   if (nominal) {

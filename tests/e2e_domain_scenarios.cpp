@@ -14,7 +14,7 @@
 //     bumps the simulator dimension and the mapping_version counter.
 //   * Cross-domain step — three machines in three domains all fire in a single
 //     processImmediate() call and produce three mergeBatch entries sorted by
-//     (machineId, sequenceId, outputIndex).
+//     machineId (one merge operation per machine after the fold move).
 //   * Determinism — running the same scenario twice produces a byte-identical
 //     mergeBatch (sequence ordering rule holds across runs).
 
@@ -178,15 +178,13 @@ void test_three_domains_in_one_step() {
 
   EXPECT(step.mergeBatch.size() == 3, "three-domain step should produce 3 mergeBatch entries, got " + std::to_string(step.mergeBatch.size()));
 
-  // mergeBatch sorted by (machineId, sequenceId, outputIndex).
+  // mergeBatch sorted by machineId, which is a total order now that the batch
+  // carries one operation per machine (FOLD_PLACEMENT.md 6). Strictly less
+  // rather than less-or-equal: a repeated machineId would mean the fold failed
+  // to collapse a machine's contributions to one.
   for (size_t i = 1; i < step.mergeBatch.size(); ++i) {
-    const auto& a = step.mergeBatch[i - 1];
-    const auto& b = step.mergeBatch[i];
-    bool ordered =
-        a.machineId < b.machineId ||
-        (a.machineId == b.machineId && a.sequenceId < b.sequenceId) ||
-        (a.machineId == b.machineId && a.sequenceId == b.sequenceId && a.outputIndex < b.outputIndex);
-    EXPECT(ordered, "three-domain mergeBatch not sorted at index " + std::to_string(i));
+    EXPECT(step.mergeBatch[i - 1].machineId < step.mergeBatch[i].machineId,
+           "three-domain mergeBatch not sorted at index " + std::to_string(i));
   }
 }
 
@@ -203,8 +201,7 @@ void test_determinism() {
   EXPECT(a.mergeBatch.size() == b.mergeBatch.size(), "determinism: mergeBatch size mismatch");
   for (size_t i = 0; i < a.mergeBatch.size() && i < b.mergeBatch.size(); ++i) {
     EXPECT(a.mergeBatch[i].machineId  == b.mergeBatch[i].machineId,  "determinism: machineId mismatch at " + std::to_string(i));
-    EXPECT(a.mergeBatch[i].sequenceId == b.mergeBatch[i].sequenceId, "determinism: sequenceId mismatch at " + std::to_string(i));
-    EXPECT(a.mergeBatch[i].outputIndex == b.mergeBatch[i].outputIndex, "determinism: outputIndex mismatch");
+    EXPECT(a.mergeBatch[i].sequenceIds == b.mergeBatch[i].sequenceIds, "determinism: sequenceIds mismatch at " + std::to_string(i));
     EXPECT(a.mergeBatch[i].region.offset == b.mergeBatch[i].region.offset, "determinism: region offset mismatch");
     EXPECT(a.mergeBatch[i].values == b.mergeBatch[i].values, "determinism: values mismatch");
   }

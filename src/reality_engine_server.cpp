@@ -613,7 +613,14 @@ public:
       const Machine* live = simulator.running_machine(req.pathParams.at("id"));
       const Machine& m = live ? *live : it->second;
       Json::Array available;
-      for (const auto& name : {"or", "and", "xor", "nor", "nand"}) available.push_back(std::string(name));
+      // Boolean gates first, then the multi-valued chain folds. Order is the
+      // enum's, so this list and `output_merge_from_string` stay readable
+      // against each other — a name here that the parser rejects is a 400 the
+      // UI offered.
+      for (const auto& name : {"or", "and", "xor", "nor", "nand",
+                               "meet", "join", "strong-conjunction",
+                               "strong-disjunction", "discrete-median"})
+        available.push_back(std::string(name));
       return ok(Json::Object{
         {"machineId", m.id}, {"machineName", m.name},
         {"outputMergeTransformation", to_string(m.outputMergeTransformation)},
