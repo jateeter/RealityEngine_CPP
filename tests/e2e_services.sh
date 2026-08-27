@@ -183,6 +183,45 @@ assert_test_source_count() {
   fi
 }
 
+assert_source_active() {
+  local payload="$1"
+  local source_id="$2"
+  local expected="$3"
+  local context="$4"
+  printf "%s" "$payload" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+wanted, expected, context = sys.argv[1], sys.argv[2] == "true", sys.argv[3]
+for source in data.get("sources", []):
+    if source.get("id") == wanted:
+        actual = source.get("active")
+        if actual is not expected:
+            raise SystemExit(f"{context}: expected {wanted} active={expected}, got {actual!r}")
+        break
+else:
+    raise SystemExit(f"{context}: {wanted} is not in the declared set")
+' "$source_id" "$expected" "$context"
+}
+
+assert_source_inactive() {
+  local payload="$1"
+  local source_id="$2"
+  printf "%s" "$payload" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+wanted = sys.argv[1]
+for source in data.get("sources", []):
+    if source.get("id") == wanted:
+        if source.get("active") is not False:
+            raise SystemExit(f"expected {wanted} to report active:false after reset: {source!r}")
+        if not source.get("lastValue"):
+            raise SystemExit(f"reset discarded lastValue on {wanted}: {source!r}")
+        break
+else:
+    raise SystemExit(f"reset dropped source {wanted} from the declared set")
+' "$source_id"
+}
+
 assert_completion_success() {
   local payload="$1"
   python3 -c '
@@ -507,5 +546,28 @@ curl -sf -X POST "${DECL_PE_URL}/api/sources/bootstrap-from-machines" >/dev/null
 declared_sources="$(curl -sf "${DECL_PE_URL}/api/sources")"
 assert_machine_test_sources "$declared_sources" "$expected_test_sources"
 echo "RealityEngine_CPP source declaration e2e tests passed"
+
+# Reset acceptance (#41): a sensor fed a value with a short TTL, left to expire,
+# must report active:false after the reset — and must still be declared, with
+# its last value intact.
+#
+# Registration asks for active:true and must not get it: a sensor's activity is
+# traceable to an ingress event, and none has happened yet.
+curl -sf -X POST "${DECL_PE_URL}/api/sources" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"e2e-expiring-sensor","type":"sensor","name":"E2E Expiring Sensor","sensorId":"e2e.expiring","active":true,"region":{"offset":4800,"length":2},"ttlMs":200}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor" false "declared but never fed"
+curl -sf -X POST "${DECL_PE_URL}/api/sensors/e2e.expiring" \
+  -H "Content-Type: application/json" \
+  -d '{"values":[1,0]}' >/dev/null
+# The value earns it.
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor" true "after ingress"
+sleep 0.6
+curl -sf -X POST "${DECL_PE_URL}/api/reset" -H "Content-Type: application/json" -d '{}' >/dev/null
+assert_source_inactive "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor"
+
+# Reset is membership-neutral: the declared corpus set survives it untouched.
+assert_machine_test_sources "$(curl -sf "${DECL_PE_URL}/api/sources")" "$expected_test_sources"
+echo "RealityEngine_CPP reset validation e2e tests passed"
 
 echo "RealityEngine_CPP service e2e tests passed"

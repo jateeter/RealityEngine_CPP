@@ -159,7 +159,11 @@ SourceConfig sensor_source(const LocalAISensorSpec& spec) {
   s.kind = "sensor";
   s.name = spec.name;
   s.region = spec.region;
-  s.active = true;
+  // Declared, not activated. This is registration — the localAI integration
+  // saying which sensors exist — and no value has arrived yet, so the source is
+  // inactive until one does. add_source() enforces the same rule, but stating
+  // it here keeps the registration path honest on its own terms.
+  s.active = false;
   s.sensorId = spec.sensorId;
   s.ttlMs = spec.ttlMs;
   s.origin = "localai";
@@ -2154,8 +2158,11 @@ private:
         source.name = "mqtt:" + topic;
         source.sensorId = sensorId;
         source.region = { offset, length };
-        source.active = true;
         source.ttlMs = ttlMs > 0 ? ttlMs : 30000;
+        // Auto-provisioned while delivering a value, so it comes out active —
+        // but by earning it below, not by asserting it here. add_source()
+        // derives the flag from lastValue/lastUpdated, which is what keeps the
+        // MQTT path from being a second origin of activity.
         source.lastValue = values;
         source.lastUpdated = now_ms();
         source.origin = "mqtt";
@@ -2193,7 +2200,9 @@ private:
             static_cast<int>(body.at("region").at("offset").as_number()),
             static_cast<int>(body.at("region").at("length").as_number()),
           };
-          source.active = body.at("active").as_bool(true);
+          // No `active` from the body: the value arriving in this same request
+          // is what makes the source live, and add_source() derives the flag
+          // from it.
           source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
           source.lastValue = values;
           source.lastUpdated = now_ms();
@@ -2210,7 +2219,7 @@ private:
           static_cast<int>(body.at("region").at("offset").as_number()),
           static_cast<int>(body.at("region").at("length").as_number()),
         };
-        source.active = true;
+        // Same as above — activity comes from the value, not from this line.
         source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
         source.lastValue = values;
         source.lastUpdated = now_ms();

@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <map>
 #include <optional>
 #include <string>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 using namespace reality;
@@ -436,6 +438,217 @@ static void verify_refusal_still_fires_the_event_bus() {
   assert(step.perceptualSpace[31] == 1.0);
 }
 
+// ── PE reset: validate activity, never assign it ─────────────────────────────
+//
+// RealityEngine_CPP#41. The rules, which must match the other three PE
+// runtimes byte for byte on the reported `active` flag:
+//
+//   sensor    — active iff holding a value inside its TTL
+//   test      — active iff its interned sequence is non-empty, rewound to 0
+//   simulated — active; it generates from the zeroed globalStep
+//
+// The acceptance case in the issue is the first one below: register a sensor,
+// feed a value with a short TTL, wait out the TTL, reset, and the source must
+// report inactive.
+
+static SourceConfig make_sensor(const std::string& id, const std::string& sensorId,
+                                RegionMapping region, long ttlMs) {
+  SourceConfig s;
+  s.kind = "sensor";
+  s.id = id;
+  s.name = id;
+  s.sensorId = sensorId;
+  s.region = region;
+  s.ttlMs = ttlMs;
+  s.active = true;
+  return s;
+}
+
+static void verify_reset_validates_sensor_activity() {
+  PerceptionEngine pe;
+
+  // Fed, then expired. The assembled vector was always right — an expired
+  // sensor contributes zeros at assembly — but the reported flag stayed true.
+  pe.add_source(make_sensor("sensor-expired", "sensor.expired", {8, 2}, /*ttlMs=*/25));
+  // Fed, still inside a generous TTL.
+  pe.add_source(make_sensor("sensor-live", "sensor.live", {12, 2}, /*ttlMs=*/60000));
+  // Registered but never fed. Declared, inactive, waiting for its first value.
+  pe.add_source(make_sensor("sensor-silent", "sensor.silent", {16, 2}, /*ttlMs=*/60000));
+
+  assert(pe.update_sensor_value("sensor.expired", {1.0, 0.0}));
+  assert(pe.update_sensor_value("sensor.live", {0.5, 0.25}));
+
+  // Wait the short TTL out. 25ms with a 60ms sleep leaves ample margin under a
+  // loaded scheduler without making the suite slow.
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+
+  pe.reset();
+
+  auto expired = pe.get_source("sensor-expired");
+  assert(expired.has_value());
+  assert(!expired->active);
+  // Reset rewinds the run; it does not discard what an integration fed in.
+  // Clearing these would erase the evidence the flag was computed from and
+  // would lose a reading whose TTL had not in fact expired.
+  assert(expired->lastValue == Vector({1.0, 0.0}));
+  assert(expired->lastUpdated.has_value());
+
+  auto live = pe.get_source("sensor-live");
+  assert(live.has_value());
+  assert(live->active);
+  assert(live->lastValue == Vector({0.5, 0.25}));
+
+  auto silent = pe.get_source("sensor-silent");
+  assert(silent.has_value());
+  assert(!silent->active);
+  assert(!silent->lastUpdated.has_value());
+
+  // The reported state and the assembled contribution now agree: the expired
+  // sensor is absent from both.
+  Vector assembled = pe.assemble_vector();
+  assert(assembled[8] == 0.0 && assembled[9] == 0.0);
+  assert(assembled[12] == 0.5 && assembled[13] == 0.25);
+}
+
+static void verify_reset_validates_test_and_simulated_activity() {
+  PerceptionEngine pe;
+
+  SourceConfig played;
+  played.kind = "test";
+  played.id = "test-played-out";
+  played.name = "played out";
+  played.region = {20, 2};
+  played.inputs = {{1.0, 0.0}};
+  played.loop = false;
+  played.active = true;
+  pe.add_source(played);
+
+  SourceConfig empty;
+  empty.kind = "test";
+  empty.id = "test-empty";
+  empty.name = "no interned sequence";
+  empty.region = {24, 2};
+  empty.active = true;
+  pe.add_source(empty);
+
+  // Explicitly paused before the reset. An operator-deactivated source is run
+  // state, not configuration, so the reset clears the pause and the rules alone
+  // decide the flag — no "preserve if manually deactivated" carry-forward.
+  SourceConfig sim;
+  sim.kind = "simulated";
+  sim.id = "sim-1";
+  sim.name = "simulated";
+  sim.region = {28, 2};
+  sim.pattern = SimPattern::Sine;
+  sim.active = false;
+  pe.add_source(sim);
+
+  SourceConfig paused;
+  paused.kind = "test";
+  paused.id = "test-paused";
+  paused.name = "paused by operator";
+  paused.region = {44, 2};
+  paused.inputs = {{0.0, 1.0}};
+  paused.active = false;
+  pe.add_source(paused);
+
+  // Run the non-looping test source off the end of its sequence — advance()
+  // deactivates it there — and move globalStep off zero.
+  pe.advance();
+  assert(!pe.get_source("test-played-out")->active);
+  assert(pe.globalStep == 1);
+
+  pe.reset();
+
+  assert(pe.globalStep == 0);
+  // Rewound to step 0 with a vector to supply there, so it is live again and
+  // replays from the top.
+  assert(pe.get_source("test-played-out")->active);
+  assert(pe.assemble_vector()[20] == 1.0);
+  // A test source with nothing interned supplies nothing. Reporting it active
+  // would be assignment, which is the behaviour the contract replaces.
+  assert(!pe.get_source("test-empty")->active);
+  // A simulated source always has a value to generate from the zeroed step —
+  // including one that was explicitly paused before the reset.
+  assert(pe.get_source("sim-1")->active);
+  // Same for a paused test source that still has a sequence to replay.
+  assert(pe.get_source("test-paused")->active);
+}
+
+static void verify_reset_is_membership_neutral() {
+  PerceptionEngine pe;
+  pe.add_source(make_sensor("sensor-kept", "sensor.kept", {32, 2}, /*ttlMs=*/60000));
+  SourceConfig t;
+  t.kind = "test";
+  t.id = "test-kept";
+  t.name = "kept";
+  t.region = {36, 2};
+  t.inputs = {{1.0, 1.0}};
+  pe.add_source(t);
+
+  const size_t before = pe.get_sources().size();
+  pe.reset();
+  // Reset never manufactures or drops a source (RealityEngine_CI#163 point 4).
+  assert(pe.get_sources().size() == before);
+  assert(pe.get_source("sensor-kept").has_value());
+  assert(pe.get_source("test-kept").has_value());
+}
+
+static void verify_only_ingress_originates_sensor_activity() {
+  // An integration source's active state is always traceable to an ingress
+  // event and expires with that value's TTL. Registration declares the source
+  // inactive no matter what flag it asks for, so no registration path can
+  // advertise a sensor that has never reported.
+  PerceptionEngine pe;
+
+  SourceConfig declared = make_sensor("sensor-declared", "sensor.declared", {60, 2}, /*ttlMs=*/60000);
+  assert(declared.active);  // the caller asked for active
+  auto added = pe.add_source(declared);
+  assert(!added.active);
+  assert(!pe.get_source("sensor-declared")->active);
+
+  // Every observation point agrees, through register and reset.
+  pe.reset();
+  assert(!pe.get_source("sensor-declared")->active);
+  // And it is still declared — inactive is not absent.
+  assert(pe.get_source("sensor-declared").has_value());
+
+  // A path that constructs the source while delivering a value still comes out
+  // active, because the value is in hand before add_source sees it. This is the
+  // MQTT auto-provision and signal-ingest shape.
+  SourceConfig provisioned = make_sensor("sensor-provisioned", "sensor.provisioned", {64, 2}, /*ttlMs=*/60000);
+  provisioned.lastValue = {1.0, 0.5};
+  provisioned.lastUpdated = now_ms();
+  assert(pe.add_source(provisioned).active);
+
+  // A stale value does not confer activity either — it expires with its TTL.
+  SourceConfig stale = make_sensor("sensor-stale", "sensor.stale", {68, 2}, /*ttlMs=*/10);
+  stale.lastValue = {1.0, 1.0};
+  stale.lastUpdated = now_ms() - 5000;
+  assert(!pe.add_source(stale).active);
+}
+
+static void verify_sensor_value_earns_activity() {
+  // The other half of validating activity: once reset correctly reports an
+  // expired sensor inactive, a later reading has to bring it back. Activity is
+  // earned by the first value (RealityEngine_CI#163 point 2b), and every sensor
+  // ingress in the PE server funnels through update_sensor_value, so that is
+  // where it is earned. Without this a reset sensor would be skipped by
+  // assemble_vector() forever — a worse defect than the reported-state one.
+  PerceptionEngine pe;
+  pe.add_source(make_sensor("sensor-revived", "sensor.revived", {40, 2}, /*ttlMs=*/25));
+  assert(pe.update_sensor_value("sensor.revived", {1.0, 1.0}));
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+  pe.reset();
+  assert(!pe.get_source("sensor-revived")->active);
+
+  assert(pe.update_sensor_value("sensor.revived", {0.75, 0.25}));
+  assert(pe.get_source("sensor-revived")->active);
+  Vector assembled = pe.assemble_vector();
+  assert(assembled[40] == 0.75);
+  assert(assembled[41] == 0.25);
+}
+
 int main() {
   {
     RealityVector v({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, "v");
@@ -651,6 +864,20 @@ int main() {
     assert(assembled[52] == 0.4);
     assert(assembled[53] == 0.8);
   }
+
+  // ── reset validates activity, it does not assign it ────────────────────────
+  //
+  // RealityEngine_CPP#41 / RealityEngine_CI#163 point 3. reset() used to force
+  // `active = true` on every test source and leave every other kind alone, so a
+  // sensor whose TTL had expired before the reset was still reported active
+  // after it. `active` is on the byte-compared source payload, so the reported
+  // state has to be recomputed from the rules for each kind against the run
+  // state the reset just cleared.
+  verify_reset_validates_sensor_activity();
+  verify_reset_validates_test_and_simulated_activity();
+  verify_reset_is_membership_neutral();
+  verify_only_ingress_originates_sensor_activity();
+  verify_sensor_value_earns_activity();
 
   {
     Vector cells{0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 2.0, 3.0, 2.0};

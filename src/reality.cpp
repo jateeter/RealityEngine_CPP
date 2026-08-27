@@ -1529,8 +1529,38 @@ void PerceptionEngine::ensure_capacity(int requiredEnd, const std::string& conte
             << " for " << context << std::endl;
 }
 
+// Whether a sensor source is holding a value the assembler would actually
+// write — the same window source_values() applies. add_source() and reset()
+// report through this predicate rather than restating it, so the `active` flag
+// on GET /api/sources and the contribution to the assembled vector cannot
+// disagree about the same sensor (RealityEngine_CPP#41).
+//
+// `now` is a parameter rather than a call inside: reset() validates every
+// source against a single clock reading, so two sensors with identical
+// lastUpdated and ttlMs cannot land on opposite sides of the window because
+// the loop crossed a millisecond boundary between them.
+static bool sensor_value_is_live(const SourceConfig& s, long long now) {
+  return s.lastUpdated.has_value() && now - *s.lastUpdated <= s.ttlMs;
+}
+
 SourceConfig PerceptionEngine::add_source(SourceConfig source) {
   if (source.id.empty()) source.id = make_id("source");
+  // An integration source's activity is always traceable to an ingress event.
+  // Registration declares it — completely, and inactive (RealityEngine_CI#163
+  // point 2a); activity is earned by the first value (point 2b). So no
+  // registration path may originate activity for a sensor, and the flag it
+  // asks for is not consulted: it is derived from whether a value is actually
+  // in hand and inside its TTL.
+  //
+  // Enforced here because every construction path funnels through add_source —
+  // the localAI sensor specs, the MQTT bridge's auto-provision, the
+  // signal/HealthKit/CareKit/completion ingest paths, POST /api/sources and
+  // PATCH /api/sources/:id. Several of those used to hand in `active = true`
+  // inline at registration, which advertised a sensor that had never reported
+  // as live. The ingest paths that construct a source while delivering a value
+  // still come out active, because they set lastValue/lastUpdated first and so
+  // satisfy the predicate.
+  if (source.kind == "sensor") source.active = sensor_value_is_live(source, now_ms());
   // Grow to cover the source's region.  Without this the source is stored,
   // counted and returned by /api/pe/sources, then silently dropped by
   // assemble_vector — machines whose perceptualMapping.input starts past the
@@ -1567,6 +1597,15 @@ bool PerceptionEngine::update_sensor_value(const std::string& sensorId, const Ve
   for (auto& [_, s] : sources) if (s.kind == "sensor" && s.sensorId == sensorId) {
     s.lastValue = values;
     s.lastUpdated = now_ms();
+    // A value earns activity (RealityEngine_CI#163 point 2b). Every sensor
+    // ingress — POST /api/sensors/:id, POST /api/signals, the MQTT bridge, and
+    // the HealthKit/CareKit/completion adapters that route through
+    // ingest_signal — arrives here, so this is the one place activity has to be
+    // earned. Without it, a sensor validated inactive by reset() (expired TTL)
+    // would stay outside active_sources_canonical() even after a fresh reading,
+    // and assemble_vector() would keep writing zeros for a sensor that is
+    // currently reporting.
+    s.active = true;
     return true;
   }
   return false;
@@ -1636,11 +1675,49 @@ void PerceptionEngine::advance() {
   }
 }
 void PerceptionEngine::reset() {
+  // Run state first: cursors, the global step and the persistent vector.
   globalStep = 0;
   persistentVector.assign(static_cast<size_t>(dimension), 0.0);
   for (auto& [id, s] : sources) {
-    if (s.kind == "test") { testStep[id] = 0; s.active = true; }
+    if (s.kind == "test") testStep[id] = 0;
     if (s.pattern == SimPattern::RandomWalk) walkState[id] = Vector(static_cast<size_t>(s.region.length), s.dcOffset);
+  }
+  // Then validate activity — do not assign it (RealityEngine_CI#163 point 3,
+  // RealityEngine_CPP#41). This used to force `active = true` on every test
+  // source and leave every other kind alone, which meant a sensor whose TTL
+  // had expired before the reset was still advertised as active afterwards.
+  // The assembled vector was right — an expired sensor already contributes
+  // zeros — but `active` is part of the byte-compared source payload, so the
+  // reported state described a source that contributes nothing as live.
+  //
+  // Recomputed from the rules for each kind, against the run state just
+  // cleared. `lastValue` and `lastUpdated` are deliberately left in place:
+  // reset rewinds the run, it does not discard what an integration has fed in,
+  // and a sensor still inside its TTL stays active across a reset.
+  //
+  // Membership is untouched here by design — reset never adds or removes a
+  // source (RealityEngine_CI#163 point 4).
+  //
+  // The prior flag is deliberately not consulted. An operator-deactivated
+  // source is run state, not configuration, and reset clears run state — so an
+  // explicit pause does not survive it. Recomputing from the rules alone is
+  // also what keeps the four runtimes byte-identical on this field; a
+  // "preserve if manually deactivated" special case is exactly the kind of
+  // local nuance that shows up as parity drift.
+  const long long validationTime = now_ms();
+  for (auto& [id, s] : sources) {
+    if (s.kind == "test") {
+      // Rewound to step 0, so it is live exactly when it has a vector to
+      // supply there. A test source with no interned inputs supplies nothing
+      // and must not claim otherwise.
+      s.active = !s.inputs.empty();
+    } else if (s.kind == "sensor") {
+      s.active = sensor_value_is_live(s, validationTime);
+    } else {
+      // Simulated: generates from the zeroed globalStep, so it always has a
+      // value to contribute.
+      s.active = true;
+    }
   }
 }
 Vector PerceptionEngine::source_values(const SourceConfig& s) const {
@@ -1650,7 +1727,7 @@ Vector PerceptionEngine::source_values(const SourceConfig& s) const {
     return step < static_cast<int>(s.inputs.size()) ? s.inputs[static_cast<size_t>(step)] : Vector(static_cast<size_t>(s.region.length), 0.0);
   }
   if (s.kind == "sensor") {
-    if (!s.lastUpdated || now_ms() - *s.lastUpdated > s.ttlMs) return Vector(static_cast<size_t>(s.region.length), 0.0);
+    if (!sensor_value_is_live(s, now_ms())) return Vector(static_cast<size_t>(s.region.length), 0.0);
     Vector out(static_cast<size_t>(s.region.length), 0.0);
     for (size_t i = 0; i < out.size() && i < s.lastValue.size(); ++i) out[i] = s.lastValue[i];
     return out;

@@ -315,6 +315,22 @@ lane, so the contract is observable rather than aspirational.
 | PATCH | `/api/config` | ✓ | ✓ | ✓ |
 | POST | `/api/reset` | ✓ | ✓ | ✓ |
 
+`POST /api/reset` is presence plus a post-state, not presence alone. Per
+`RealityEngine_CI#163` points 3 and 4:
+
+- **Run state is cleared.** `globalStep` returns to 0, the persistent vector is
+  zeroed, test cursors rewind to step 0, RandomWalk state is re-seeded, and the
+  route clears `lastPush`.
+- **Membership is untouched.** Reset never manufactures a source and never
+  re-derives the set from boot configuration or the corpus. Doing so would drop
+  every integration registered dynamically since boot.
+- **Activity is validated, not assigned.** Each source's `active` is recomputed
+  from the rules for its kind, against the run state just cleared — sensor:
+  active iff holding a value inside its TTL; test: active iff its interned
+  sequence is non-empty; simulated: active. The prior flag is not consulted, so
+  an operator-deactivated source is re-armed if it validates active: a pause is
+  run state, and reset clears run state. `lastValue` and `lastUpdated` survive.
+
 ### Sources & Sensors
 
 | Method | Path | CPP | LSP | Scala |
@@ -337,6 +353,11 @@ The corpus test integration registers at boot when `PE_SOURCE_BOOTSTRAP` is set
 (`auto`, or any truthy value; mirrors `startUniverse.sh --pe-source-bootstrap`),
 and dynamically via `POST /api/sources/bootstrap-from-machines`. Unset, the
 runtime boots having registered nothing and therefore declares zero sources.
+
+Activity is earned, and only by ingress. A sensor source is active iff it holds
+a value inside its TTL: registration declares it inactive whatever flag the
+caller asks for, the first value makes it active, and the TTL lapsing —
+observed at the next reset — makes it inactive again.
 
 ### Signals
 
