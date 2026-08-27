@@ -40,6 +40,11 @@ Use `make all`, not `make build`.
 
 - The machine corpus should usually load from `../RealityEngine_Machines/machines`.
 - Startup, corpus loading, and PE source state are common causes of parity drift.
+- PE source membership changes only on register/deregister. The corpus test
+  integration registers at boot when `PE_SOURCE_BOOTSTRAP` is set (`auto` or a
+  truthy value) and dynamically via `POST /api/sources/bootstrap-from-machines`;
+  unset, the PE boots with zero declared sources. Reads, pushes and resets never
+  declare sources. See `SURFACE_SPEC.md`, "Configuration & Reset".
 - Keep `/api/machines`, `/api/engine/active`, `/api/perceive`, `/api/pe/*`, and MQTT behavior aligned with LSP and Scala.
 - OpenClaw/ACP environment defaults should match the root application map.
 

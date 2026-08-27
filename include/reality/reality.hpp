@@ -835,6 +835,11 @@ Json to_json(const SimulationStep& step, bool includeMachineResults);
 Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace);
 Json to_json(const TrajectoryEntry& entry);
 Json to_json(const SourceConfig& source);
+// The reported `active` is stored AND validated at every read
+// (RealityEngine_CI#175), so serializing a source needs a clock. Pass `now`
+// when serializing more than one source, so a whole payload is validated
+// against a single reading; the one-argument form takes its own.
+Json to_json(const SourceConfig& source, long long now);
 Json worker_pool_metrics_json();
 Json to_json(const PagingDecision& d);
 

@@ -60,6 +60,21 @@ bool truthy_env(const char* value) {
   return v == "1" || v == "true" || v == "TRUE" || v == "yes" || v == "YES";
 }
 
+// PE_SOURCE_BOOTSTRAP — whether the corpus test integration registers itself at
+// boot. Mirrors startUniverse.sh's --pe-source-bootstrap=auto|off, so "auto" is
+// accepted alongside the usual truthy spellings.
+//
+// Default off. Declaring the corpus source set is a registration event
+// (RealityEngine_CI#163 point 1), and an unconfigured runtime has registered
+// nothing, so it declares nothing — the same post-boot state LSP has. A caller
+// that wants the set registers it, either by setting this or by calling
+// POST /api/sources/bootstrap-from-machines.
+bool source_bootstrap_env(const char* value) {
+  if (!value) return false;
+  std::string v(value);
+  return truthy_env(value) || v == "auto" || v == "AUTO" || v == "on" || v == "ON";
+}
+
 Json parse_body(const http::Request& req) {
   return req.body.empty() ? Json::Object{} : json::parse(req.body);
 }
@@ -144,7 +159,11 @@ SourceConfig sensor_source(const LocalAISensorSpec& spec) {
   s.kind = "sensor";
   s.name = spec.name;
   s.region = spec.region;
-  s.active = true;
+  // Declared, not activated. This is registration — the localAI integration
+  // saying which sensors exist — and no value has arrived yet, so the source is
+  // inactive until one does. add_source() enforces the same rule, but stating
+  // it here keeps the registration path honest on its own terms.
+  s.active = false;
   s.sensorId = spec.sensorId;
   s.ttlMs = spec.ttlMs;
   s.origin = "localai";
@@ -418,6 +437,7 @@ public:
     // longer exists. PE_SOURCE_MERGE=true restores the skip.
     if (const char* merge = std::getenv("PE_SOURCE_MERGE")) sourceMergeOnly = truthy_env(merge);
     if (const char* act = std::getenv("PE_SOURCE_ACTIVATE_ON_LOAD")) sourceActivateOnLoad = truthy_env(act);
+    if (const char* boot = std::getenv("PE_SOURCE_BOOTSTRAP")) sourceBootstrapOnStart = source_bootstrap_env(boot);
     if (const char* enabled = std::getenv("TRIGGERS_ENABLED")) triggerDispatchEnabled = truthy_env(enabled);
     if (const char* mode = std::getenv("TRIGGER_DISPATCH_MODE")) triggerDispatchMode = mode;
     if (triggerDispatchMode.empty()) triggerDispatchMode = "dry-run";
@@ -425,7 +445,15 @@ public:
     if (triggerGraphQLEndpoint.empty()) triggerGraphQLEndpoint = localAIBaseUrl + "/graphql";
     load_integration_registry();
     configure_ollama_from_environment();
-    sync_test_sources_from_reality();
+    // The catalog is a read-through cache of the RE's machine list, used by
+    // trigger dispatch to resolve a merge op's machine. Caching it changes no
+    // source membership, so it is refreshed unconditionally.
+    refresh_machine_catalog();
+    // Declaration, on the other hand, is the corpus test integration
+    // registering. It happens here only when the bootstrap flag says the
+    // integration is configured; otherwise the runtime boots with zero
+    // declared sources and waits for POST /api/sources/bootstrap-from-machines.
+    if (sourceBootstrapOnStart) bootstrap_test_sources_from_reality();
     if (bootstrapLocalAI) {
       try {
         bootstrap_localai();
@@ -485,8 +513,9 @@ public:
     server.route("GET", "/api/health", [](const http::Request&) {
       return ok(Json::Object{{"status", "healthy"}});
     });
+    // Reads report state; they do not declare sources. See the note on
+    // GET /api/sources below.
     server.route("GET", "/api/state", [this](const http::Request&) {
-      sync_test_sources_from_reality();
       std::lock_guard<std::mutex> lock(stateMutex);
       return ok(engine.state_json(lastPush, autoRunning, autoIntervalMs));
     });
@@ -771,11 +800,32 @@ public:
       broadcast_state();
       return ok(Json::Object{{"success", true}});
     });
+    // Declaration is not read-triggered (RealityEngine_CPP#40,
+    // RealityEngine_CI#163 point 2a). This route used to run
+    // sync_test_sources_from_reality() first, which materialised one test
+    // source per RE machine as a side effect of being asked what sources
+    // existed — so the answer depended on when something last read rather than
+    // on what had been registered:
+    //
+    //   * the runtime declared 807 sources at boot under
+    //     --pe-source-bootstrap=off, where the flag means the corpus test
+    //     integration never registered and the count is zero
+    //   * a reset-then-arm sweep reported 1, 809, 639 and 544 sources needing
+    //     activation across four structurally identical operations, because
+    //     the sync ran between them at read time and overwrote what
+    //     PerceptionEngine::reset() had just computed
+    //
+    // Membership changes on register/deregister only. The corpus test
+    // integration registers at boot when PE_SOURCE_BOOTSTRAP says so, or
+    // dynamically via POST /api/sources/bootstrap-from-machines.
     server.route("GET", "/api/sources", [this](const http::Request&) {
-      sync_test_sources_from_reality();
       Json::Array arr;
       std::lock_guard<std::mutex> lock(stateMutex);
-      for (const auto& s : engine.get_sources()) arr.push_back(to_json(s));
+      // One clock reading for the listing (RealityEngine_CI#175): the reported
+      // `active` is stored AND validated, and every source in one payload is
+      // validated against the same instant.
+      const long long now = now_ms();
+      for (const auto& s : engine.get_sources()) arr.push_back(to_json(s, now));
       return ok(Json::Object{{"sources", arr}});
     });
     server.route("POST", "/api/sources", [this](const http::Request& req) {
@@ -832,7 +882,10 @@ public:
     server.route("GET", "/api/machines", [this](const http::Request&) {
       try {
         std::string raw = http::get(realityEngineUrl + "/api/machines");
-        sync_test_sources_from_machine_list(json::parse(raw));
+        // Refresh the catalog cache only. This proxy used to declare a test
+        // source per machine on the way through, which is the same
+        // read-triggered declaration removed from GET /api/sources.
+        cache_machine_catalog(json::parse(raw));
         return http::json_response(raw);
       } catch (const std::exception& e) {
         return http::error_response(e.what(), 502);
@@ -1099,8 +1152,15 @@ private:
     }
   }
 
-  size_t sync_test_sources_from_machine_list(const Json& data) {
-    return bootstrap_test_sources_from_machine_list(data).created;
+  // Read-through refresh of the machine catalog. Caches values, never
+  // membership (RealityEngine_CI#163 point 5), so it is safe on a read or push
+  // path. Failures are silent: a stale catalog degrades trigger resolution,
+  // it does not break the request that happened to trigger the refresh.
+  void refresh_machine_catalog() {
+    try {
+      cache_machine_catalog(json::parse(http::get(realityEngineUrl + "/api/machines")));
+    } catch (...) {
+    }
   }
 
   BootstrapSummary bootstrap_test_sources_from_machine_list(const Json& data) {
@@ -1114,10 +1174,6 @@ private:
       if (added == 0) summary.skipped++;
     }
     return summary;
-  }
-
-  size_t sync_test_sources_from_reality() {
-    return bootstrap_test_sources_from_reality().created;
   }
 
   BootstrapSummary bootstrap_test_sources_from_reality() {
@@ -2029,13 +2085,14 @@ private:
     Json::Array skippedSensors;
     {
       std::lock_guard<std::mutex> lock(stateMutex);
+      const long long now = now_ms();
       for (const auto& spec : localai_sensor_specs()) {
         if (sensor_exists(spec.sensorId)) {
           skippedSensors.emplace_back(spec.sensorId);
           continue;
         }
         auto src = engine.add_source(sensor_source(spec));
-        registeredSensors.push_back(to_json(src));
+        registeredSensors.push_back(to_json(src, now));
       }
     }
 
@@ -2106,8 +2163,11 @@ private:
         source.name = "mqtt:" + topic;
         source.sensorId = sensorId;
         source.region = { offset, length };
-        source.active = true;
         source.ttlMs = ttlMs > 0 ? ttlMs : 30000;
+        // Auto-provisioned while delivering a value, so it comes out active —
+        // but by earning it below, not by asserting it here. add_source()
+        // derives the flag from lastValue/lastUpdated, which is what keeps the
+        // MQTT path from being a second origin of activity.
         source.lastValue = values;
         source.lastUpdated = now_ms();
         source.origin = "mqtt";
@@ -2145,7 +2205,9 @@ private:
             static_cast<int>(body.at("region").at("offset").as_number()),
             static_cast<int>(body.at("region").at("length").as_number()),
           };
-          source.active = body.at("active").as_bool(true);
+          // No `active` from the body: the value arriving in this same request
+          // is what makes the source live, and add_source() derives the flag
+          // from it.
           source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
           source.lastValue = values;
           source.lastUpdated = now_ms();
@@ -2162,7 +2224,7 @@ private:
           static_cast<int>(body.at("region").at("offset").as_number()),
           static_cast<int>(body.at("region").at("length").as_number()),
         };
-        source.active = true;
+        // Same as above — activity comes from the value, not from this line.
         source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
         source.lastValue = values;
         source.lastUpdated = now_ms();
@@ -2535,7 +2597,13 @@ private:
   }
 
   http::Response do_push(bool includeMachineResults = true, bool async = false) {
-    sync_test_sources_from_reality();
+    // Catalog only. A push used to run the full corpus sync here, so every
+    // push could add sources and — before the definition-change guard added
+    // for #35 — rebuild the existing ones, zeroing their playback cursors. The
+    // guard stays where it is; this call site simply no longer touches
+    // membership. Trigger dispatch still needs a current machine catalog to
+    // resolve each merge op, so that half of the old fetch remains.
+    refresh_machine_catalog();
     bool expected = false;
     if (!pushInFlight.compare_exchange_strong(expected, true)) {
       {
@@ -3256,6 +3324,9 @@ private:
   bool sourceMergeOnly = false;
   // Activate machine sources on load. Off by default; PE_SOURCE_ACTIVATE_ON_LOAD.
   bool sourceActivateOnLoad = false;
+  // Register the corpus test integration at boot. Off by default;
+  // PE_SOURCE_BOOTSTRAP=auto (or a truthy value) turns it on.
+  bool sourceBootstrapOnStart = false;
   bool triggerDispatchEnabled = false;
   std::string triggerDispatchMode = "dry-run";
   std::string triggerGraphQLEndpoint;

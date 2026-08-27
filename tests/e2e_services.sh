@@ -8,6 +8,9 @@ cd "$ROOT_DIR"
 REALITY_ENGINE_E2E_PORT="${REALITY_ENGINE_E2E_PORT:-5401}"
 PERCEPTION_ENGINE_E2E_PORT="${PERCEPTION_ENGINE_E2E_PORT:-5400}"
 OPENAI_STUB_E2E_PORT="${OPENAI_STUB_E2E_PORT:-5412}"
+# Second PE instance, booted with no source-bootstrap flag, used by the
+# declaration checks at the end of this script (RealityEngine_CPP#40).
+DECLARATION_PE_E2E_PORT="${DECLARATION_PE_E2E_PORT:-5413}"
 VECTOR_DIMENSION="${VECTOR_DIMENSION:-7680}"
 MACHINES_DIR="${MACHINES_DIR:-../RealityEngine_Machines/machines}"
 LOCAL_AI_API_URL="${LOCAL_AI_API_URL:-http://localhost:4000}"
@@ -15,9 +18,14 @@ LOCAL_AI_MACHINES_DIR="${LOCAL_AI_MACHINES_DIR:-../localAIStack/data/machines}"
 
 REALITY_PID=""
 PERCEPTION_PID=""
+DECLARATION_PE_PID=""
 OPENAI_STUB_PID=""
 
 cleanup() {
+  if [ -n "$DECLARATION_PE_PID" ] && kill -0 "$DECLARATION_PE_PID" >/dev/null 2>&1; then
+    kill "$DECLARATION_PE_PID" >/dev/null 2>&1 || true
+    wait "$DECLARATION_PE_PID" >/dev/null 2>&1 || true
+  fi
   if [ -n "$OPENAI_STUB_PID" ] && kill -0 "$OPENAI_STUB_PID" >/dev/null 2>&1; then
     kill "$OPENAI_STUB_PID" >/dev/null 2>&1 || true
     wait "$OPENAI_STUB_PID" >/dev/null 2>&1 || true
@@ -153,6 +161,65 @@ for source in test_sources:
 if missing:
     raise SystemExit("test sources missing full representation: " + ", ".join(missing[:20]))
 ' "$expected"
+}
+
+count_test_sources() {
+  python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+print(len([s for s in data.get("sources", []) if s.get("type") == "test"]))
+'
+}
+
+assert_test_source_count() {
+  local payload="$1"
+  local expected="$2"
+  local context="$3"
+  local actual
+  actual="$(printf "%s" "$payload" | count_test_sources)"
+  if [ "$actual" != "$expected" ]; then
+    echo "${context}: expected ${expected} test source(s), got ${actual}" >&2
+    exit 1
+  fi
+}
+
+assert_source_active() {
+  local payload="$1"
+  local source_id="$2"
+  local expected="$3"
+  local context="$4"
+  printf "%s" "$payload" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+wanted, expected, context = sys.argv[1], sys.argv[2] == "true", sys.argv[3]
+for source in data.get("sources", []):
+    if source.get("id") == wanted:
+        actual = source.get("active")
+        if actual is not expected:
+            raise SystemExit(f"{context}: expected {wanted} active={expected}, got {actual!r}")
+        break
+else:
+    raise SystemExit(f"{context}: {wanted} is not in the declared set")
+' "$source_id" "$expected" "$context"
+}
+
+assert_source_inactive() {
+  local payload="$1"
+  local source_id="$2"
+  printf "%s" "$payload" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+wanted = sys.argv[1]
+for source in data.get("sources", []):
+    if source.get("id") == wanted:
+        if source.get("active") is not False:
+            raise SystemExit(f"expected {wanted} to report active:false after reset: {source!r}")
+        if not source.get("lastValue"):
+            raise SystemExit(f"reset discarded lastValue on {wanted}: {source!r}")
+        break
+else:
+    raise SystemExit(f"reset dropped source {wanted} from the declared set")
+' "$source_id"
 }
 
 assert_completion_success() {
@@ -345,8 +412,14 @@ curl -sf -X POST "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/perceive" \
   -H "Content-Type: application/json" \
   -d "$perceive_payload" >/dev/null
 
+# PE_SOURCE_BOOTSTRAP=auto registers the corpus test integration at boot, which
+# is what makes the source assertion below meaningful: the set is declared by a
+# registration event, not materialised by the read that follows it
+# (RealityEngine_CPP#40). The declaration checks at the end of this script boot
+# a second PE without the flag and assert the complementary case.
 INTEGRATIONS_CONFIG="config/integrations.example.json" \
   TRIGGERS_ENABLED=true \
+  PE_SOURCE_BOOTSTRAP=auto \
   OPENAI_BASE_URL="http://localhost:${OPENAI_STUB_E2E_PORT}/v1" \
   OPENAI_API_KEY="sk-e2e-stub" \
   bin/perception_engine_server "$PERCEPTION_ENGINE_E2E_PORT" "http://localhost:${REALITY_ENGINE_E2E_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" >/tmp/perception_engine_e2e.log 2>&1 &
@@ -436,5 +509,99 @@ if [[ "$options_status" != *" 204 "* && "$options_status" != *" 200 "* ]]; then
   echo "CORS: OPTIONS /api/engine/stats returned unexpected status: ${options_status}" >&2; exit 1
 fi
 echo "RealityEngine_CPP CORS e2e tests passed"
+
+# ── source declaration & reset validation ─────────────────────────────────────
+#
+# RealityEngine_CPP#40 and #41, against the settled contract in
+# RealityEngine_CI#163. A second PE is booted with no PE_SOURCE_BOOTSTRAP, i.e.
+# with the corpus test integration unregistered, so the declared set starts
+# empty. It runs last and on its own port because it pushes and resets, and
+# neither should be able to disturb the assertions above.
+DECL_PE_URL="http://localhost:${DECLARATION_PE_E2E_PORT}"
+bin/perception_engine_server "$DECLARATION_PE_E2E_PORT" "http://localhost:${REALITY_ENGINE_E2E_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" >/tmp/perception_engine_declaration_e2e.log 2>&1 &
+DECLARATION_PE_PID="$!"
+wait_for_http "${DECL_PE_URL}/api/health" "Perception Engine (declaration)"
+
+# Nothing registered, so nothing declared. This used to report one test source
+# per RE machine, because the read itself materialised them.
+assert_test_source_count "$(curl -sf "${DECL_PE_URL}/api/sources")" 0 "boot with bootstrap off"
+
+# Reads report state; they do not declare. Repeating them must not move the
+# count off zero — the four-run drift in #40 (1, 809, 639, 544 sources needing
+# activation across identical operations) was read timing, not state.
+curl -sf "${DECL_PE_URL}/api/state" >/dev/null
+curl -sf "${DECL_PE_URL}/api/machines" >/dev/null
+curl -sf "${DECL_PE_URL}/api/sources" >/dev/null
+assert_test_source_count "$(curl -sf "${DECL_PE_URL}/api/sources")" 0 "after reads"
+
+# Nor does a push. The corpus sync used to run on every push, which is what
+# #35's definition-change guard was added to contain; the guard stays, but the
+# push path no longer touches membership at all.
+curl -sf -X POST "${DECL_PE_URL}/api/push" -H "Content-Type: application/json" -d '{"compact":true}' >/dev/null
+assert_test_source_count "$(curl -sf "${DECL_PE_URL}/api/sources")" 0 "after push"
+
+# Registering the integration dynamically declares the set, immediately and
+# completely.
+curl -sf -X POST "${DECL_PE_URL}/api/sources/bootstrap-from-machines" >/dev/null
+declared_sources="$(curl -sf "${DECL_PE_URL}/api/sources")"
+assert_machine_test_sources "$declared_sources" "$expected_test_sources"
+echo "RealityEngine_CPP source declaration e2e tests passed"
+
+# Reset acceptance (#41): a sensor fed a value with a short TTL, left to expire,
+# must report active:false after the reset — and must still be declared, with
+# its last value intact.
+#
+# Registration asks for active:true and must not get it: a sensor's activity is
+# traceable to an ingress event, and none has happened yet.
+curl -sf -X POST "${DECL_PE_URL}/api/sources" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"e2e-expiring-sensor","type":"sensor","name":"E2E Expiring Sensor","sensorId":"e2e.expiring","active":true,"region":{"offset":4800,"length":2},"ttlMs":200}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor" false "declared but never fed"
+curl -sf -X POST "${DECL_PE_URL}/api/sensors/e2e.expiring" \
+  -H "Content-Type: application/json" \
+  -d '{"values":[1,0]}' >/dev/null
+# The value earns it.
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor" true "after ingress"
+sleep 0.6
+curl -sf -X POST "${DECL_PE_URL}/api/reset" -H "Content-Type: application/json" -d '{}' >/dev/null
+assert_source_inactive "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor"
+
+# Reset is membership-neutral: the declared corpus set survives it untouched.
+assert_machine_test_sources "$(curl -sf "${DECL_PE_URL}/api/sources")" "$expected_test_sources"
+echo "RealityEngine_CPP reset validation e2e tests passed"
+
+# Continuous expiry (RealityEngine_CI#175): the reported flag is stored AND
+# validated at every read, so a lapsed TTL shows up on the next GET with no
+# reset anywhere in between. Under the old behaviour this sensor kept reporting
+# active until something happened to reset it.
+curl -sf -X POST "${DECL_PE_URL}/api/sources" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"e2e-continuous-sensor","type":"sensor","name":"E2E Continuous Sensor","sensorId":"e2e.continuous","region":{"offset":4804,"length":2},"ttlMs":200}' >/dev/null
+curl -sf -X POST "${DECL_PE_URL}/api/sensors/e2e.continuous" \
+  -H "Content-Type: application/json" \
+  -d '{"values":[1,0]}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-continuous-sensor" true "fed, inside its TTL"
+sleep 0.6
+# No reset here — that is the whole point.
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-continuous-sensor" false "TTL lapsed, no reset"
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/state")" "e2e-continuous-sensor" false "TTL lapsed, /api/state"
+# Reading did not write: a fresh value revives the source with no reset needed.
+curl -sf -X POST "${DECL_PE_URL}/api/sensors/e2e.continuous" \
+  -H "Content-Type: application/json" \
+  -d '{"values":[0.5,0.5]}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-continuous-sensor" true "revived by a fresh reading"
+
+# An explicitly paused source stays inactive: validation can only ever take
+# activity away, never grant it. A test source with an interned sequence
+# validates active, so the only thing holding it inactive is the stored flag.
+curl -sf -X POST "${DECL_PE_URL}/api/sources" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"e2e-pausable-test","type":"test","name":"E2E Pausable Test","region":{"offset":4808,"length":2},"loop":true,"inputs":[[1,0],[0,1]]}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-pausable-test" true "test source with a sequence"
+curl -sf -X PATCH "${DECL_PE_URL}/api/sources/e2e-pausable-test" \
+  -H "Content-Type: application/json" \
+  -d '{"active":false}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-pausable-test" false "paused with its sequence intact"
+echo "RealityEngine_CPP continuous expiry e2e tests passed"
 
 echo "RealityEngine_CPP service e2e tests passed"
