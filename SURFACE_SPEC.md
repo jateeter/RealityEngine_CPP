@@ -326,6 +326,18 @@ lane, so the contract is observable rather than aspirational.
 | POST | `/api/sources/bootstrap-from-machines` | ✓ | ✓ | ✓ |
 | POST | `/api/sensors/:sensorId` | ✓ | ✓ | ✓ |
 
+Sources are declared by integrations, and declaration is never a side effect of
+a read. An integration registers either at boot from configuration or
+dynamically at runtime; the event is the same either way, and it declares the
+full source set immediately, completely and inactive, so `GET /api/sources`
+reflects it before any traffic arrives. Membership changes only on
+register/deregister — reads, pushes and resets do not move it.
+
+The corpus test integration registers at boot when `PE_SOURCE_BOOTSTRAP` is set
+(`auto`, or any truthy value; mirrors `startUniverse.sh --pe-source-bootstrap`),
+and dynamically via `POST /api/sources/bootstrap-from-machines`. Unset, the
+runtime boots having registered nothing and therefore declares zero sources.
+
 ### Signals
 
 | Method | Path | CPP | LSP | Scala |

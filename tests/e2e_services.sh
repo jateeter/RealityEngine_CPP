@@ -8,6 +8,9 @@ cd "$ROOT_DIR"
 REALITY_ENGINE_E2E_PORT="${REALITY_ENGINE_E2E_PORT:-5401}"
 PERCEPTION_ENGINE_E2E_PORT="${PERCEPTION_ENGINE_E2E_PORT:-5400}"
 OPENAI_STUB_E2E_PORT="${OPENAI_STUB_E2E_PORT:-5412}"
+# Second PE instance, booted with no source-bootstrap flag, used by the
+# declaration checks at the end of this script (RealityEngine_CPP#40).
+DECLARATION_PE_E2E_PORT="${DECLARATION_PE_E2E_PORT:-5413}"
 VECTOR_DIMENSION="${VECTOR_DIMENSION:-7680}"
 MACHINES_DIR="${MACHINES_DIR:-../RealityEngine_Machines/machines}"
 LOCAL_AI_API_URL="${LOCAL_AI_API_URL:-http://localhost:4000}"
@@ -15,9 +18,14 @@ LOCAL_AI_MACHINES_DIR="${LOCAL_AI_MACHINES_DIR:-../localAIStack/data/machines}"
 
 REALITY_PID=""
 PERCEPTION_PID=""
+DECLARATION_PE_PID=""
 OPENAI_STUB_PID=""
 
 cleanup() {
+  if [ -n "$DECLARATION_PE_PID" ] && kill -0 "$DECLARATION_PE_PID" >/dev/null 2>&1; then
+    kill "$DECLARATION_PE_PID" >/dev/null 2>&1 || true
+    wait "$DECLARATION_PE_PID" >/dev/null 2>&1 || true
+  fi
   if [ -n "$OPENAI_STUB_PID" ] && kill -0 "$OPENAI_STUB_PID" >/dev/null 2>&1; then
     kill "$OPENAI_STUB_PID" >/dev/null 2>&1 || true
     wait "$OPENAI_STUB_PID" >/dev/null 2>&1 || true
@@ -153,6 +161,26 @@ for source in test_sources:
 if missing:
     raise SystemExit("test sources missing full representation: " + ", ".join(missing[:20]))
 ' "$expected"
+}
+
+count_test_sources() {
+  python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+print(len([s for s in data.get("sources", []) if s.get("type") == "test"]))
+'
+}
+
+assert_test_source_count() {
+  local payload="$1"
+  local expected="$2"
+  local context="$3"
+  local actual
+  actual="$(printf "%s" "$payload" | count_test_sources)"
+  if [ "$actual" != "$expected" ]; then
+    echo "${context}: expected ${expected} test source(s), got ${actual}" >&2
+    exit 1
+  fi
 }
 
 assert_completion_success() {
@@ -345,8 +373,14 @@ curl -sf -X POST "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/perceive" \
   -H "Content-Type: application/json" \
   -d "$perceive_payload" >/dev/null
 
+# PE_SOURCE_BOOTSTRAP=auto registers the corpus test integration at boot, which
+# is what makes the source assertion below meaningful: the set is declared by a
+# registration event, not materialised by the read that follows it
+# (RealityEngine_CPP#40). The declaration checks at the end of this script boot
+# a second PE without the flag and assert the complementary case.
 INTEGRATIONS_CONFIG="config/integrations.example.json" \
   TRIGGERS_ENABLED=true \
+  PE_SOURCE_BOOTSTRAP=auto \
   OPENAI_BASE_URL="http://localhost:${OPENAI_STUB_E2E_PORT}/v1" \
   OPENAI_API_KEY="sk-e2e-stub" \
   bin/perception_engine_server "$PERCEPTION_ENGINE_E2E_PORT" "http://localhost:${REALITY_ENGINE_E2E_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" >/tmp/perception_engine_e2e.log 2>&1 &
@@ -436,5 +470,42 @@ if [[ "$options_status" != *" 204 "* && "$options_status" != *" 200 "* ]]; then
   echo "CORS: OPTIONS /api/engine/stats returned unexpected status: ${options_status}" >&2; exit 1
 fi
 echo "RealityEngine_CPP CORS e2e tests passed"
+
+# ── source declaration & reset validation ─────────────────────────────────────
+#
+# RealityEngine_CPP#40 and #41, against the settled contract in
+# RealityEngine_CI#163. A second PE is booted with no PE_SOURCE_BOOTSTRAP, i.e.
+# with the corpus test integration unregistered, so the declared set starts
+# empty. It runs last and on its own port because it pushes and resets, and
+# neither should be able to disturb the assertions above.
+DECL_PE_URL="http://localhost:${DECLARATION_PE_E2E_PORT}"
+bin/perception_engine_server "$DECLARATION_PE_E2E_PORT" "http://localhost:${REALITY_ENGINE_E2E_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" >/tmp/perception_engine_declaration_e2e.log 2>&1 &
+DECLARATION_PE_PID="$!"
+wait_for_http "${DECL_PE_URL}/api/health" "Perception Engine (declaration)"
+
+# Nothing registered, so nothing declared. This used to report one test source
+# per RE machine, because the read itself materialised them.
+assert_test_source_count "$(curl -sf "${DECL_PE_URL}/api/sources")" 0 "boot with bootstrap off"
+
+# Reads report state; they do not declare. Repeating them must not move the
+# count off zero — the four-run drift in #40 (1, 809, 639, 544 sources needing
+# activation across identical operations) was read timing, not state.
+curl -sf "${DECL_PE_URL}/api/state" >/dev/null
+curl -sf "${DECL_PE_URL}/api/machines" >/dev/null
+curl -sf "${DECL_PE_URL}/api/sources" >/dev/null
+assert_test_source_count "$(curl -sf "${DECL_PE_URL}/api/sources")" 0 "after reads"
+
+# Nor does a push. The corpus sync used to run on every push, which is what
+# #35's definition-change guard was added to contain; the guard stays, but the
+# push path no longer touches membership at all.
+curl -sf -X POST "${DECL_PE_URL}/api/push" -H "Content-Type: application/json" -d '{"compact":true}' >/dev/null
+assert_test_source_count "$(curl -sf "${DECL_PE_URL}/api/sources")" 0 "after push"
+
+# Registering the integration dynamically declares the set, immediately and
+# completely.
+curl -sf -X POST "${DECL_PE_URL}/api/sources/bootstrap-from-machines" >/dev/null
+declared_sources="$(curl -sf "${DECL_PE_URL}/api/sources")"
+assert_machine_test_sources "$declared_sources" "$expected_test_sources"
+echo "RealityEngine_CPP source declaration e2e tests passed"
 
 echo "RealityEngine_CPP service e2e tests passed"
