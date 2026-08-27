@@ -1543,6 +1543,42 @@ static bool sensor_value_is_live(const SourceConfig& s, long long now) {
   return s.lastUpdated.has_value() && now - *s.lastUpdated <= s.ttlMs;
 }
 
+// The activity a read reports, for every read (RealityEngine_CI#175):
+//
+//     reported_active = stored_active AND validated_active(kind)
+//
+// Expiry is continuous, not an event that happens at reset. reset() computes
+// the same validation and stores it, but between two resets a sensor's TTL can
+// lapse at any moment, and the flag reported by GET /api/sources or GET
+// /api/state has to lapse with it rather than wait for the next reset to
+// notice. LSP has always reported the conjunction from `source-json`; this is
+// the runtimes converging on it.
+//
+// Both conjuncts carry weight, and neither is redundant:
+//
+//   * stored_active keeps an explicitly paused source reading inactive, and
+//     preserves the ingress invariant from #41 — a sensor that has never been
+//     fed has stored_active = false and cannot be talked into activity by a
+//     validation pass.
+//   * validated_active stops a stale stored flag being advertised as live.
+//
+// Validation can only ever take activity away, never grant it, which is why
+// this is a conjunction and not a recomputation.
+//
+// `now` is a parameter for the same reason it is on sensor_value_is_live: a
+// serialization pass validates every source against one clock reading, so two
+// sensors with identical lastUpdated and ttlMs cannot serialize differently
+// because the loop crossed a millisecond boundary between them.
+static bool source_reported_active(const SourceConfig& s, long long now) {
+  if (!s.active) return false;
+  // sensor — holds a value inside its TTL.
+  if (s.kind == "sensor") return sensor_value_is_live(s, now);
+  // test — has an interned sequence to supply from.
+  if (s.kind == "test") return !s.inputs.empty();
+  // simulated — always generates a value.
+  return true;
+}
+
 SourceConfig PerceptionEngine::add_source(SourceConfig source) {
   if (source.id.empty()) source.id = make_id("source");
   // An integration source's activity is always traceable to an ingress event.
@@ -1758,8 +1794,11 @@ Vector PerceptionEngine::source_values(const SourceConfig& s) const {
 }
 Json PerceptionEngine::state_json(std::optional<long long> lastPush, bool autoRunning, long autoIntervalMs) const {
   // Via get_sources() so /api/pe/state and /api/pe/sources agree on order.
+  // One clock reading for the pass (RealityEngine_CI#175): two sensors with the
+  // same lastUpdated and ttlMs must report the same activity in one payload.
   Json::Array srcs;
-  for (const auto& s : get_sources()) srcs.push_back(to_json(s));
+  const long long now = now_ms();
+  for (const auto& s : get_sources()) srcs.push_back(to_json(s, now));
   return Json::Object{{"sources", srcs}, {"assembledVector", json::numbers(assemble_vector())}, {"globalStep", static_cast<double>(globalStep)}, {"auto", Json::Object{{"running", autoRunning}, {"intervalMs", static_cast<double>(autoIntervalMs)}}}, {"lastPush", lastPush ? Json(static_cast<double>(*lastPush)) : Json(nullptr)}, {"matchAlgorithm", to_string(matchAlgorithm)}, {"perceptionDimension", static_cast<double>(dimension)}};
 }
 
@@ -2085,8 +2124,13 @@ Json to_json(const SimulationStep& step, bool includeMachineResults) {
 Json to_json(const SimulationStep& step) {
   return to_json(step, true);
 }
-Json to_json(const SourceConfig& s) {
-  Json::Object o{{"id", s.id}, {"name", s.name}, {"region", to_json(s.region)}, {"active", s.active}, {"type", s.kind}};
+// Serialization is a read: it reports the validated flag and never writes it
+// back. A source whose TTL lapsed reads inactive here while `s.active` stays
+// as stored, so asking what the sources are cannot change what they are — and
+// a later reading through update_sensor_value() brings the source straight
+// back without needing a reset to undo a serialization side effect.
+Json to_json(const SourceConfig& s, long long now) {
+  Json::Object o{{"id", s.id}, {"name", s.name}, {"region", to_json(s.region)}, {"active", source_reported_active(s, now)}, {"type", s.kind}};
   if (s.kind == "test") {
     Json::Array inputs;
     for (const auto& v : s.inputs) inputs.push_back(json::numbers(v));
@@ -2099,6 +2143,10 @@ Json to_json(const SourceConfig& s) {
   }
   return o;
 }
+// Single-source convenience. A pass over more than one source must take its own
+// clock reading and hand it in, so the whole payload is validated against one
+// instant.
+Json to_json(const SourceConfig& s) { return to_json(s, now_ms()); }
 
 namespace {
 std::string prom_escape(const std::string& s) {

@@ -821,7 +821,11 @@ public:
     server.route("GET", "/api/sources", [this](const http::Request&) {
       Json::Array arr;
       std::lock_guard<std::mutex> lock(stateMutex);
-      for (const auto& s : engine.get_sources()) arr.push_back(to_json(s));
+      // One clock reading for the listing (RealityEngine_CI#175): the reported
+      // `active` is stored AND validated, and every source in one payload is
+      // validated against the same instant.
+      const long long now = now_ms();
+      for (const auto& s : engine.get_sources()) arr.push_back(to_json(s, now));
       return ok(Json::Object{{"sources", arr}});
     });
     server.route("POST", "/api/sources", [this](const http::Request& req) {
@@ -2081,13 +2085,14 @@ private:
     Json::Array skippedSensors;
     {
       std::lock_guard<std::mutex> lock(stateMutex);
+      const long long now = now_ms();
       for (const auto& spec : localai_sensor_specs()) {
         if (sensor_exists(spec.sensorId)) {
           skippedSensors.emplace_back(spec.sensorId);
           continue;
         }
         auto src = engine.add_source(sensor_source(spec));
-        registeredSensors.push_back(to_json(src));
+        registeredSensors.push_back(to_json(src, now));
       }
     }
 

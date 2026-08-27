@@ -570,4 +570,38 @@ assert_source_inactive "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-
 assert_machine_test_sources "$(curl -sf "${DECL_PE_URL}/api/sources")" "$expected_test_sources"
 echo "RealityEngine_CPP reset validation e2e tests passed"
 
+# Continuous expiry (RealityEngine_CI#175): the reported flag is stored AND
+# validated at every read, so a lapsed TTL shows up on the next GET with no
+# reset anywhere in between. Under the old behaviour this sensor kept reporting
+# active until something happened to reset it.
+curl -sf -X POST "${DECL_PE_URL}/api/sources" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"e2e-continuous-sensor","type":"sensor","name":"E2E Continuous Sensor","sensorId":"e2e.continuous","region":{"offset":4804,"length":2},"ttlMs":200}' >/dev/null
+curl -sf -X POST "${DECL_PE_URL}/api/sensors/e2e.continuous" \
+  -H "Content-Type: application/json" \
+  -d '{"values":[1,0]}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-continuous-sensor" true "fed, inside its TTL"
+sleep 0.6
+# No reset here — that is the whole point.
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-continuous-sensor" false "TTL lapsed, no reset"
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/state")" "e2e-continuous-sensor" false "TTL lapsed, /api/state"
+# Reading did not write: a fresh value revives the source with no reset needed.
+curl -sf -X POST "${DECL_PE_URL}/api/sensors/e2e.continuous" \
+  -H "Content-Type: application/json" \
+  -d '{"values":[0.5,0.5]}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-continuous-sensor" true "revived by a fresh reading"
+
+# An explicitly paused source stays inactive: validation can only ever take
+# activity away, never grant it. A test source with an interned sequence
+# validates active, so the only thing holding it inactive is the stored flag.
+curl -sf -X POST "${DECL_PE_URL}/api/sources" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"e2e-pausable-test","type":"test","name":"E2E Pausable Test","region":{"offset":4808,"length":2},"loop":true,"inputs":[[1,0],[0,1]]}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-pausable-test" true "test source with a sequence"
+curl -sf -X PATCH "${DECL_PE_URL}/api/sources/e2e-pausable-test" \
+  -H "Content-Type: application/json" \
+  -d '{"active":false}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-pausable-test" false "paused with its sequence intact"
+echo "RealityEngine_CPP continuous expiry e2e tests passed"
+
 echo "RealityEngine_CPP service e2e tests passed"

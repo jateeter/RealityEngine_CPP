@@ -649,6 +649,170 @@ static void verify_sensor_value_earns_activity() {
   assert(assembled[41] == 0.25);
 }
 
+// ── activity expires continuously, not at reset ──────────────────────────────
+//
+// RealityEngine_CI#175. #41 made reset() validate the stored flag; this makes
+// every read report the validated value:
+//
+//     reported_active = stored_active AND validated_active(kind)
+//
+// with validated_active the same per-kind predicate reset applies. A sensor's
+// TTL can lapse at any point between two resets, and the reported flag has to
+// lapse with it rather than wait for a reset to notice.
+//
+// Both conjuncts are checked below, because dropping either one is a live
+// failure mode: without stored_active a paused source would be resurrected by
+// validation; without validated_active a stale flag would still read live.
+
+// One source, serialized against a caller-supplied instant. Everything the rule
+// depends on is in the struct, so the whole conjunction can be exercised
+// without touching the wall clock — no sleeps, no margins, no flake.
+static bool serialized_active_at(const SourceConfig& s, long long now) {
+  return to_json(s, now).at("active").as_bool();
+}
+
+static void verify_serialization_reports_stored_and_validated() {
+  // A sensor fed at t=1000 with a 500ms TTL. Live through t=1500, stale after.
+  SourceConfig sensor = make_sensor("sensor-clocked", "sensor.clocked", {80, 2}, /*ttlMs=*/500);
+  sensor.lastValue = {1.0, 1.0};
+  sensor.lastUpdated = 1000;
+  sensor.active = true;
+
+  assert(serialized_active_at(sensor, 1200));
+  assert(serialized_active_at(sensor, 1500));   // the boundary is inside the window
+  assert(!serialized_active_at(sensor, 1501));  // ...and one tick past it is not
+  assert(!serialized_active_at(sensor, 9000));
+
+  // Serialization is a read. Reporting the source inactive must not write that
+  // back — otherwise asking what the sources are would change what they are,
+  // and the next reading would land on a source someone else had deactivated.
+  assert(sensor.active);
+  assert(sensor.lastUpdated == 1000);
+  assert(sensor.lastValue == Vector({1.0, 1.0}));
+
+  // stored_active is the other conjunct: an explicitly paused sensor reads
+  // inactive even while its value is well inside the TTL. Validation can only
+  // take activity away, never grant it.
+  SourceConfig paused = sensor;
+  paused.id = "sensor-paused";
+  paused.active = false;
+  assert(!serialized_active_at(paused, 1200));
+
+  // The same invariant #41 established at every other observation point: a
+  // sensor that has never been fed cannot be talked into activity by a
+  // validation pass, whatever the stored flag says.
+  SourceConfig silent = make_sensor("sensor-unfed", "sensor.unfed", {84, 2}, /*ttlMs=*/60000);
+  silent.active = true;
+  assert(!serialized_active_at(silent, 1200));
+
+  // test — validated on having an interned sequence to supply from.
+  SourceConfig withInputs;
+  withInputs.kind = "test";
+  withInputs.id = "test-serialized";
+  withInputs.name = "test-serialized";
+  withInputs.region = {88, 2};
+  withInputs.inputs = {{1.0, 0.0}};
+  withInputs.active = true;
+  assert(serialized_active_at(withInputs, 1200));
+
+  SourceConfig emptyInputs = withInputs;
+  emptyInputs.id = "test-serialized-empty";
+  emptyInputs.inputs.clear();
+  assert(!serialized_active_at(emptyInputs, 1200));
+
+  SourceConfig pausedTest = withInputs;
+  pausedTest.id = "test-serialized-paused";
+  pausedTest.active = false;
+  assert(!serialized_active_at(pausedTest, 1200));
+
+  // simulated — always has a value to generate, so the stored flag alone
+  // decides.
+  SourceConfig sim;
+  sim.kind = "simulated";
+  sim.id = "sim-serialized";
+  sim.name = "sim-serialized";
+  sim.region = {92, 2};
+  sim.pattern = SimPattern::Sine;
+  sim.active = true;
+  assert(serialized_active_at(sim, 9000));
+  sim.active = false;
+  assert(!serialized_active_at(sim, 9000));
+}
+
+static Json find_serialized_source(const Json& state, const std::string& id) {
+  for (const auto& s : state.at("sources").array())
+    if (s.at("id").as_string() == id) return s;
+  assert(false && "source missing from the serialized state");
+  return Json(nullptr);
+}
+
+static void verify_state_reports_expiry_without_a_reset() {
+  // The case the issue is about: nothing resets, and the TTL lapses anyway.
+  // Under the old behaviour the stale sensor kept reporting active until the
+  // next reset happened to recompute it.
+  PerceptionEngine pe;
+  pe.add_source(make_sensor("sensor-lapsing", "sensor.lapsing", {96, 2}, /*ttlMs=*/25));
+  pe.add_source(make_sensor("sensor-holding", "sensor.holding", {100, 2}, /*ttlMs=*/60000));
+  assert(pe.update_sensor_value("sensor.lapsing", {1.0, 0.0}));
+  assert(pe.update_sensor_value("sensor.holding", {0.5, 0.25}));
+
+  Json before = pe.state_json(std::nullopt, false, 0);
+  assert(find_serialized_source(before, "sensor-lapsing").at("active").as_bool());
+  assert(find_serialized_source(before, "sensor-holding").at("active").as_bool());
+
+  // 25ms TTL, 60ms sleep — ample margin under a loaded scheduler without making
+  // the suite slow. No reset between the two reads.
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+
+  Json after = pe.state_json(std::nullopt, false, 0);
+  assert(!find_serialized_source(after, "sensor-lapsing").at("active").as_bool());
+  // The fresh one is unaffected — expiry is per source, not a blanket sweep.
+  assert(find_serialized_source(after, "sensor-holding").at("active").as_bool());
+
+  // Reading did not write. The stored flag is still what ingress set, so the
+  // last value is intact and a new reading revives the source directly.
+  assert(pe.get_source("sensor-lapsing")->active);
+  assert(pe.get_source("sensor-lapsing")->lastValue == Vector({1.0, 0.0}));
+  assert(pe.update_sensor_value("sensor.lapsing", {0.75, 0.75}));
+  Json revived = pe.state_json(std::nullopt, false, 0);
+  assert(find_serialized_source(revived, "sensor-lapsing").at("active").as_bool());
+
+  // The reported flag and the assembled contribution agree throughout: the
+  // sensor that read inactive was already contributing zeros.
+  assert(pe.assemble_vector()[96] == 0.75);
+}
+
+static void verify_exhausted_test_source_serializes_inactive() {
+  // A non-looping test source that has played out. advance() clears the stored
+  // flag, and validated_active is true — its sequence is still interned — so
+  // this only reads inactive because the reported value is a conjunction.
+  // Validating alone, without the stored conjunct, would report it live again.
+  PerceptionEngine pe;
+  SourceConfig played;
+  played.kind = "test";
+  played.id = "test-exhausted";
+  played.name = "test-exhausted";
+  played.region = {104, 2};
+  played.inputs = {{1.0, 0.0}};
+  played.loop = false;
+  played.active = true;
+  pe.add_source(played);
+
+  assert(find_serialized_source(pe.state_json(std::nullopt, false, 0), "test-exhausted")
+           .at("active").as_bool());
+
+  pe.advance();  // steps off the end of a one-entry sequence
+
+  Json exhausted = find_serialized_source(pe.state_json(std::nullopt, false, 0), "test-exhausted");
+  assert(!exhausted.at("active").as_bool());
+  // Still declared, with its sequence intact — inactive is not absent, and a
+  // reset can rewind it to the top and validate it live again.
+  assert(exhausted.at("inputs").array().size() == 1);
+  pe.reset();
+  assert(find_serialized_source(pe.state_json(std::nullopt, false, 0), "test-exhausted")
+           .at("active").as_bool());
+}
+
 int main() {
   {
     RealityVector v({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, "v");
@@ -878,6 +1042,15 @@ int main() {
   verify_reset_is_membership_neutral();
   verify_only_ingress_originates_sensor_activity();
   verify_sensor_value_earns_activity();
+
+  // ── activity expires continuously, not only at reset ───────────────────────
+  //
+  // RealityEngine_CI#175. Every read reports stored AND validated, so a sensor
+  // whose TTL lapses between two resets reads inactive at the next read rather
+  // than staying advertised as live until something happens to reset it.
+  verify_serialization_reports_stored_and_validated();
+  verify_state_reports_expiry_without_a_reset();
+  verify_exhausted_test_source_serializes_inactive();
 
   {
     Vector cells{0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 2.0, 3.0, 2.0};
