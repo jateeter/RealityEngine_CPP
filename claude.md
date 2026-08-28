@@ -40,11 +40,23 @@ Use `make all`, not `make build`.
 
 - The machine corpus should usually load from `../RealityEngine_Machines/machines`.
 - Startup, corpus loading, and PE source state are common causes of parity drift.
-- PE source membership changes only on register/deregister. The corpus test
-  integration registers at boot when `PE_SOURCE_BOOTSTRAP` is set (`auto` or a
-  truthy value) and dynamically via `POST /api/sources/bootstrap-from-machines`;
-  unset, the PE boots with zero declared sources. Reads, pushes and resets never
-  declare sources. See `SURFACE_SPEC.md`, "Configuration & Reset".
+- **Machine ingestion interns a test source, by default.** A machine's
+  `inputSequences` become a test source over that machine's own input region as
+  part of ingesting it — this happens unless explicitly suppressed. Those
+  sources are what compose the ISRE seed queue the engines are driven with, so a
+  runtime holding a corpus but no test sources has nothing to be presented with.
+  `PE_SOURCE_BOOTSTRAP=off` (or `0`/`false`/`no`) suppresses the boot intern;
+  unset or truthy means intern. `POST /api/sources/bootstrap-from-machines` is
+  the dynamic path and is unaffected either way.
+  See `RealityEngine_CI/SURFACE_SPEC.md`, "Machine ingestion".
+
+  This file previously said the opposite — that unset meant zero declared
+  sources. That was wrong, and #40 implemented against it before #46 corrected
+  the default. Machine-derived test sources are the one kind that does not wait
+  for an external integration to register: they arrive with the machines.
+- PE source membership otherwise changes only on register/deregister. External
+  integrations — MQTT, ACP, MCP, HealthKit, localAI — register on their own
+  terms. Reads, pushes and resets never declare sources.
 - Keep `/api/machines`, `/api/engine/active`, `/api/perceive`, `/api/pe/*`, and MQTT behavior aligned with LSP and Scala.
 - OpenClaw/ACP environment defaults should match the root application map.
 
