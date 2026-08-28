@@ -845,7 +845,16 @@ public:
       SourceConfig src;
       {
         std::lock_guard<std::mutex> lock(stateMutex);
-        src = engine.add_source(source_from_json(parse_body(req)));
+        const Json body = parse_body(req);
+        src = engine.add_source(source_from_json(body));
+        // Reachable here too: source_from_json parses lastValue for sensors, so
+        // a create that carries a live value derives active and drops the
+        // caller's explicit false.
+        if (asks_for_deactivation(body)) {
+          engine.deactivate_source(src.id);
+          auto paused = engine.get_source(src.id);
+          if (paused) src = *paused;
+        }
       }
       broadcast_state();
       return ok(Json::Object{{"source", to_json(src)}});
@@ -856,10 +865,16 @@ public:
         std::lock_guard<std::mutex> lock(stateMutex);
         auto existing = engine.get_source(req.pathParams.at("id"));
         if (!existing) return http::error_response("Source not found", 404);
+        const Json body = parse_body(req);
         engine.remove_source(req.pathParams.at("id"));
-        auto updated = merge_source_patch(*existing, parse_body(req));
+        auto updated = merge_source_patch(*existing, body);
         updated.id = req.pathParams.at("id");
         added = engine.add_source(updated);
+        if (asks_for_deactivation(body)) {
+          engine.deactivate_source(updated.id);
+          auto paused = engine.get_source(updated.id);
+          if (paused) added = *paused;
+        }
       }
       broadcast_state();
       return ok(Json::Object{{"source", to_json(added)}});
@@ -971,6 +986,19 @@ private:
       if (s.kind == "sensor" && s.sensorId == sensorId) return s;
     }
     return std::nullopt;
+  }
+
+  // Activation is earned; deactivation is not (#43). add_source derives a
+  // sensor's stored flag from value liveness and ignores the flag the caller
+  // asked for, which is right for activation — no caller may assert a sensor
+  // into activity it has not earned. It also silently dropped an explicit
+  // `"active": false`, leaving a live sensor with no way to be paused.
+  //
+  // Only the clear is honoured, so the invariant is untouched in the direction
+  // that matters. Distinguishing "asked for false" from "field absent" needs
+  // the body, not the merged SourceConfig, which is why this reads the JSON.
+  static bool asks_for_deactivation(const Json& body) {
+    return body.at("active").is_bool() && !body.at("active").as_bool(true);
   }
 
   static SourceConfig merge_source_patch(SourceConfig source, const Json& patch) {

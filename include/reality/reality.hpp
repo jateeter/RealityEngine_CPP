@@ -773,6 +773,9 @@ public:
   long long globalStep = 0;
 
   SourceConfig add_source(SourceConfig source);
+  // Clear a source's stored active flag. Activation is earned through ingress;
+  // deactivation is an operator action and is honoured directly (#43).
+  bool deactivate_source(const std::string& id);
   bool remove_source(const std::string& id);
   std::optional<SourceConfig> get_source(const std::string& id) const;
   std::vector<SourceConfig> get_sources() const;
