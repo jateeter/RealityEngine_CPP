@@ -1579,6 +1579,27 @@ static bool source_reported_active(const SourceConfig& s, long long now) {
   return true;
 }
 
+bool PerceptionEngine::deactivate_source(const std::string& id) {
+  // Activation is earned; deactivation is not. add_source derives a sensor's
+  // stored flag from value liveness and ignores the flag a caller asks for,
+  // which is right for activation — no registration path may assert a sensor
+  // into activity it has not earned (RealityEngine_CI#163 point 2b).
+  //
+  // Applied to deactivation too, it disconnected the one lever an operator has.
+  // `reported_active = stored_active AND validated_active(kind)` (#175):
+  // validation can only take activity away, so `stored_active` is what lets a
+  // human take it away deliberately. For sensors that lever did nothing — a
+  // live sensor could not be paused over HTTP at all (#43).
+  //
+  // The two directions are not symmetric and do not need the same rule.
+  // Clearing the flag asserts nothing about ingress: the source keeps its
+  // value, keeps its TTL, and the next value re-earns activity through
+  // update_sensor_value. It says only "do not use this right now".
+  auto it = sources.find(id);
+  if (it == sources.end()) return false;
+  it->second.active = false;
+  return true;
+}
 SourceConfig PerceptionEngine::add_source(SourceConfig source) {
   if (source.id.empty()) source.id = make_id("source");
   // An integration source's activity is always traceable to an ingress event.

@@ -628,6 +628,51 @@ static void verify_only_ingress_originates_sensor_activity() {
   assert(!pe.add_source(stale).active);
 }
 
+static void verify_sensor_can_be_paused() {
+  // The asymmetry (#43). add_source derives a sensor's flag from value liveness
+  // and ignores the flag the caller asked for, which is correct for activation
+  // — see verify_ingress_invariant above. Applied to deactivation too, it left
+  // a live sensor with no way to be paused: PATCH /api/sources/:id round-trips
+  // through add_source, so `{"active": false}` returned 200 and changed nothing.
+  //
+  // Activation is earned; deactivation is not. Only one direction needs the
+  // invariant.
+  PerceptionEngine pe;
+  pe.add_source(make_sensor("sensor-pausable", "sensor.pausable", {72, 2}, /*ttlMs=*/60000));
+  assert(pe.update_sensor_value("sensor.pausable", {1.0, 0.5}));
+  assert(pe.get_source("sensor-pausable")->active);
+
+  assert(pe.deactivate_source("sensor-pausable"));
+  assert(!pe.get_source("sensor-pausable")->active);
+
+  // Pausing asserts nothing about ingress, so the value and its TTL survive.
+  // The source is still declared, still holds what it last reported, and is
+  // simply not contributing.
+  auto paused = pe.get_source("sensor-pausable");
+  assert(paused.has_value());
+  assert(paused->lastValue.size() == 2);
+  Vector assembled = pe.assemble_vector();
+  assert(assembled[72] == 0.0);
+  assert(assembled[73] == 0.0);
+
+  // A pause is a stored-flag decision and reset recomputes from rules alone, so
+  // it does not survive one. `reported = stored AND validated` and the value is
+  // still live, so reset re-validates it back to active. That is the settled
+  // contract (RealityEngine_CI#163 point 3): reset validates activity, never
+  // assigns it, and does not preserve an explicit pause.
+  pe.reset();
+  assert(pe.get_source("sensor-pausable")->active);
+
+  // The next value re-earns activity through the ordinary ingress path.
+  assert(pe.deactivate_source("sensor-pausable"));
+  assert(!pe.get_source("sensor-pausable")->active);
+  assert(pe.update_sensor_value("sensor.pausable", {0.25, 0.75}));
+  assert(pe.get_source("sensor-pausable")->active);
+
+  // Unknown ids are reported, not silently accepted.
+  assert(!pe.deactivate_source("sensor-not-here"));
+}
+
 static void verify_sensor_value_earns_activity() {
   // The other half of validating activity: once reset correctly reports an
   // expired sensor inactive, a later reading has to bring it back. Activity is
@@ -1041,6 +1086,7 @@ int main() {
   verify_reset_validates_test_and_simulated_activity();
   verify_reset_is_membership_neutral();
   verify_only_ingress_originates_sensor_activity();
+  verify_sensor_can_be_paused();
   verify_sensor_value_earns_activity();
 
   // ── activity expires continuously, not only at reset ───────────────────────

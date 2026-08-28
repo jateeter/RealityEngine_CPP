@@ -513,11 +513,18 @@ echo "RealityEngine_CPP CORS e2e tests passed"
 # ── source declaration & reset validation ─────────────────────────────────────
 #
 # RealityEngine_CPP#40 and #41, against the settled contract in
-# RealityEngine_CI#163. A second PE is booted with no PE_SOURCE_BOOTSTRAP, i.e.
-# with the corpus test integration unregistered, so the declared set starts
-# empty. It runs last and on its own port because it pushes and resets, and
-# neither should be able to disturb the assertions above.
+# RealityEngine_CI#163. A second PE is booted with the corpus test integration
+# unregistered, so the declared set starts empty. It runs last and on its own
+# port because it pushes and resets, and neither should be able to disturb the
+# assertions above.
+#
+# PE_SOURCE_BOOTSTRAP=off is passed explicitly. This block used to pass no flag
+# at all and rely on the default being off; #46 inverted that default to on, so
+# "no flag" started meaning "intern the corpus" and this asserted 0 against
+# 1328. The intent was always "bootstrap off", so it now says so rather than
+# depending on which way the default currently points.
 DECL_PE_URL="http://localhost:${DECLARATION_PE_E2E_PORT}"
+PE_SOURCE_BOOTSTRAP=off \
 bin/perception_engine_server "$DECLARATION_PE_E2E_PORT" "http://localhost:${REALITY_ENGINE_E2E_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" >/tmp/perception_engine_declaration_e2e.log 2>&1 &
 DECLARATION_PE_PID="$!"
 wait_for_http "${DECL_PE_URL}/api/health" "Perception Engine (declaration)"
@@ -565,6 +572,40 @@ assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-se
 sleep 0.6
 curl -sf -X POST "${DECL_PE_URL}/api/reset" -H "Content-Type: application/json" -d '{}' >/dev/null
 assert_source_inactive "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor"
+
+# Activation is earned; deactivation is not (#43). The defect was in the route
+# wiring, not the engine: PATCH round-trips through add_source, which derives a
+# sensor's flag from value liveness, so the pause was computed away and the
+# caller got 200 with no change. That is only visible over HTTP.
+curl -sf -X POST "${DECL_PE_URL}/api/sensors/e2e.expiring" \
+  -H "Content-Type: application/json" \
+  -d '{"values":[1,0]}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor" true "re-fed before pause"
+
+curl -sf -X PATCH "${DECL_PE_URL}/api/sources/e2e-expiring-sensor" \
+  -H "Content-Type: application/json" -d '{"active":false}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor" false "paused over HTTP"
+
+# The other direction stays closed: asking to be active does not make it so.
+# This sensor's TTL is 200ms and it has not been fed since, so the only thing
+# that could turn it active is the caller asserting it.
+sleep 0.4
+curl -sf -X PATCH "${DECL_PE_URL}/api/sources/e2e-expiring-sensor" \
+  -H "Content-Type: application/json" -d '{"active":true}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor" false "asserting active is still refused"
+
+# And ingress still re-earns it, so a pause is not a trap.
+curl -sf -X POST "${DECL_PE_URL}/api/sensors/e2e.expiring" \
+  -H "Content-Type: application/json" \
+  -d '{"values":[0,1]}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-expiring-sensor" true "re-earned after pause"
+
+# Same asymmetry on create: source_from_json parses lastValue for sensors, so a
+# POST carrying a live value derives active and used to drop the explicit false.
+curl -sf -X POST "${DECL_PE_URL}/api/sources" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"e2e-created-paused","type":"sensor","name":"E2E Created Paused","sensorId":"e2e.created.paused","active":false,"lastValue":[1,0],"lastUpdated":'"$(python3 -c 'import time;print(int(time.time()*1000))')"',"region":{"offset":4808,"length":2},"ttlMs":60000}' >/dev/null
+assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-created-paused" false "created paused with a live value"
 
 # Reset is membership-neutral: the declared corpus set survives it untouched.
 assert_machine_test_sources "$(curl -sf "${DECL_PE_URL}/api/sources")" "$expected_test_sources"
