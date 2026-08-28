@@ -40,27 +40,28 @@ Use `make all`, not `make build`.
 
 - The machine corpus should usually load from `../RealityEngine_Machines/machines`.
 - Startup, corpus loading, and PE source state are common causes of parity drift.
-- **Machine ingestion interns a test source, by default.** A machine's
-  `inputSequences` become a test source over that machine's own input region as
-  part of ingesting it — this happens unless explicitly suppressed. Those
-  sources are what compose the ISRE seed queue the engines are driven with, so a
-  runtime holding a corpus but no test sources has nothing to be presented with.
-  `PE_SOURCE_BOOTSTRAP=off` (or `0`/`false`/`no`) suppresses the boot intern;
-  unset or truthy means intern. `POST /api/sources/bootstrap-from-machines` is
-  the dynamic path and is unaffected either way.
-  See `RealityEngine_CI/SURFACE_SPEC.md`, "Machine ingestion".
-
-  This file previously said the opposite — that unset meant zero declared
-  sources. That was wrong, and #40 implemented against it before #46 corrected
-  the default. Machine-derived test sources are the one kind that does not wait
-  for an external integration to register: they arrive with the machines.
-- PE source membership otherwise changes only on register/deregister. External
-  integrations — MQTT, ACP, MCP, HealthKit, localAI — register on their own
-  terms. Reads, pushes and resets never declare sources.
+- **Machine ingestion and PE source membership** are governed by the canonical
+  contract, not by this file. See "## Machine ingestion" below.
 - Keep `/api/machines`, `/api/engine/active`, `/api/perceive`, `/api/pe/*`, and MQTT behavior aligned with LSP and Scala.
 - OpenClaw/ACP environment defaults should match the root application map.
 
-## LSP Support
+## Machine ingestion
+
+Governed by the canonical contract, which lives in `RealityEngine_CI` and
+nowhere else:
+
+    RealityEngine_CI/SURFACE_SPEC.md  §  Machine ingestion
+
+Do not restate it here. It defines what ingesting a machine interns, how
+`PE_SOURCE_BOOTSTRAP` gates it, and how those sources compose `ISRESeed(n)` —
+and it governs this repository's implementation of all three.
+
+Implemented in `perception_engine_server.cpp`: `source_bootstrap_env` parses the
+flag, `bootstrap_test_sources_from_reality` interns at boot. Note #40 asked for
+the opposite default and was implemented before #46 inverted it — the flag
+handling and the read-path removal from #40 both stand; only the default moved.
+
+## Editor tooling
 
 Use `clangd` for C++20. The Makefile is the build source of truth. Generate `compile_commands.json` only when needed for navigation, and keep generated files uncommitted unless requested.
 
