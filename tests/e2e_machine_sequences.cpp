@@ -2,6 +2,7 @@
 #include "reality/reality.hpp"
 
 #include <cmath>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -165,11 +166,36 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  // Recursive, because the corpus is path-aware. `machines/` holds only `core/`
+  // and `domains/<name>/` — no top-level *.json at all — so a non-recursive
+  // iterator found nothing here and the suite asserted against an empty corpus
+  // (#42). Every engine loader already traverses recursively
+  // (reality.cpp:1924, reality_engine_server.cpp:34); these tests did not
+  // follow when the corpus moved into subdirectories.
   std::vector<std::filesystem::path> files;
-  for (const auto& entry : std::filesystem::directory_iterator(machinesDir)) {
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(machinesDir)) {
     if (entry.path().extension() == ".json") files.push_back(entry.path());
   }
   std::sort(files.begin(), files.end());
+
+  // Discovery is asserted here rather than only through the exercise counts at
+  // the end. Those catch a corpus that is entirely missing, which is how #42
+  // surfaced; they do not catch a traversal that reaches some of it. Requiring
+  // a find below the root fails a regression to a non-recursive iterator
+  // directly, and says which of the two went wrong.
+  if (files.empty()) {
+    std::cerr << "No machine JSON found under " << machinesDir << "\n";
+    return 2;
+  }
+  const bool foundBelowRoot = std::any_of(
+      files.begin(), files.end(),
+      [&](const std::filesystem::path& p) { return p.parent_path() != machinesDir; });
+  if (!foundBelowRoot) {
+    std::cerr << "Corpus traversal found no machines below " << machinesDir
+              << " — the corpus is organised into domain subdirectories, so this"
+                 " means the walk is not recursive\n";
+    return 2;
+  }
 
   int machinesLoaded = 0;
   int sequencesRun = 0;
