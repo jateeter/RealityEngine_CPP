@@ -64,15 +64,28 @@ bool truthy_env(const char* value) {
 // boot. Mirrors startUniverse.sh's --pe-source-bootstrap=auto|off, so "auto" is
 // accepted alongside the usual truthy spellings.
 //
-// Default off. Declaring the corpus source set is a registration event
-// (RealityEngine_CI#163 point 1), and an unconfigured runtime has registered
-// nothing, so it declares nothing — the same post-boot state LSP has. A caller
-// that wants the set registers it, either by setting this or by calling
-// POST /api/sources/bootstrap-from-machines.
+// **Default on.** Interning a machine's `inputSequences` as a test source over
+// its own region is part of ingesting the machine, not an optional extra: those
+// sources are what compose the ISRE seed queue the engines are driven with. A
+// runtime holding a corpus but no test sources has nothing to be presented
+// with, and a parity comparison against it measures a synthetic stimulus rather
+// than the corpus's own.
+//
+// An earlier revision defaulted this off, reasoning that declaration is a
+// registration event and an unconfigured runtime has registered nothing. That
+// reasoning holds for *integrations* — MQTT, ACP, HealthKit — which are
+// external and must opt in. The corpus test sources are not an external
+// integration; they arrive with the machines.
+//
+// Set it to `off` to suppress boot-time interning, which is what a harness
+// driving its own per-iteration bootstrap wants (test-corpus-parity-loop.sh).
+// POST /api/sources/bootstrap-from-machines is unaffected either way.
 bool source_bootstrap_env(const char* value) {
-  if (!value) return false;
+  if (!value) return true;
   std::string v(value);
-  return truthy_env(value) || v == "auto" || v == "AUTO" || v == "on" || v == "ON";
+  if (v == "off" || v == "OFF" || v == "0" || v == "false" || v == "FALSE"
+      || v == "no" || v == "NO") return false;
+  return true;
 }
 
 Json parse_body(const http::Request& req) {
@@ -3324,9 +3337,10 @@ private:
   bool sourceMergeOnly = false;
   // Activate machine sources on load. Off by default; PE_SOURCE_ACTIVATE_ON_LOAD.
   bool sourceActivateOnLoad = false;
-  // Register the corpus test integration at boot. Off by default;
-  // PE_SOURCE_BOOTSTRAP=auto (or a truthy value) turns it on.
-  bool sourceBootstrapOnStart = false;
+  // Intern the corpus test sources at boot — part of ingesting the machines,
+  // and the material the ISRE seed queue is composed from. On by default;
+  // PE_SOURCE_BOOTSTRAP=off suppresses it.
+  bool sourceBootstrapOnStart = true;
   bool triggerDispatchEnabled = false;
   std::string triggerDispatchMode = "dry-run";
   std::string triggerGraphQLEndpoint;
