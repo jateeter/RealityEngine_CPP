@@ -21,7 +21,6 @@ This is the maintained documentation set for RealityEngine_CPP.
 
 | Repository | Role |
 | --- | --- |
-| [RealityEngine_AI](../../RealityEngine_AI) | Locked historical reference; replaced by RealityEngine_Scala and not an active runtime target or corpus source. |
 | [RealityEngine_CPP](..) | Native C++ RE/PE runtime. |
 | [RealityEngine_LSP](../../RealityEngine_LSP) | Common Lisp RE/PE runtime. |
 | [RealityEngine_Scala](../../RealityEngine_Scala) | Scala RE/PE runtime surface. |

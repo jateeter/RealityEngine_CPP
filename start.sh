@@ -213,7 +213,7 @@ else
   else
     cat <<EOF
 
-RealityEngine_CPP uses the same unified Qdrant instance as RealityEngine_AI and localAIStack.
+RealityEngine_CPP uses the same unified Qdrant instance as localAIStack.
 Start localAIStack first, then retry:
 
   cd ../localAIStack && ./scripts/start.sh

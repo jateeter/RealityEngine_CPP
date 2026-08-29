@@ -4,7 +4,7 @@ Native C++ implementation of the Reality Engine and Perception Engine
 services.  Black-box equivalent to [`RealityEngine_LSP`](../RealityEngine_LSP)
 (Common Lisp) and [`RealityEngine_Scala`](../RealityEngine_Scala) on the same
 machine JSON corpus, governance contracts, MQTT mapping registry, and
-Prometheus metrics shape. [`RealityEngine_AI`](../RealityEngine_AI) is locked
+Prometheus metrics shape. The deprecated TypeScript prototype is frozen
 and replaced by [`RealityEngine_Scala`](../RealityEngine_Scala) for active
 runtime reference work.
 
@@ -12,7 +12,6 @@ Sibling repositories in the local suite:
 
 | Repository | Role |
 | --- | --- |
-| [`RealityEngine_AI`](../RealityEngine_AI) | Locked historical reference; replaced by `RealityEngine_Scala`, and not an active runtime target or corpus source. |
 | [`RealityEngine_CPP`](../RealityEngine_CPP) | Native C++ RE/PE runtime. |
 | [`RealityEngine_LSP`](../RealityEngine_LSP) | Common Lisp RE/PE runtime. |
 | [`RealityEngine_Scala`](../RealityEngine_Scala) | Scala RE/PE runtime surface. |

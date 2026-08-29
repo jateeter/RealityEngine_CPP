@@ -7,7 +7,7 @@ This repo provides native operational scripts:
 
 They are intentionally aligned with `localAIStack` and the active runtime
 deployment model. `RealityEngine_Scala` replaces the locked historical
-`RealityEngine_AI` runtime for active reference work.
+runtimes for active reference work.
 
 ## Start
 

@@ -1845,7 +1845,7 @@ Machine load_machine_from_json_string(const std::string& raw,
     if (major != 1)
       throw std::runtime_error("Incompatible machine JSON version: " + ver + " (current: 1.0.0)");
   }
-  // STA strict-load gate — mirrors RealityEngine_AI's MachineLoader.loadFromJSON
+  // STA strict-load gate — mirrors the historical MachineLoader.loadFromJSON
   // option of the same name.  Runs before any RealityVector is constructed so
   // a violating life-safety machine cannot reach the engine.
   if (opts.strictSta) sta::assert_sta_for_life_safety(root);

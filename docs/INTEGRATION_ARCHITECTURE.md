@@ -1,7 +1,7 @@
 # Integration Architecture
 
 This document defines the provider-neutral integration model for the active
-RealityEngine runtimes. `RealityEngine_AI` is locked and used only as a
+RealityEngine runtimes. The deprecated TypeScript prototype is frozen and used only as a
 historical reference; `RealityEngine_Scala` replaces it for active runtime
 reference work. `RealityEngine_Machines` owns the active corpus, contracts,
 oracles, and trigger examples.

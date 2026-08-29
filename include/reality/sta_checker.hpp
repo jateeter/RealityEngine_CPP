@@ -1,7 +1,7 @@
 #pragma once
 
 // STA (Single Transition Assumption) checker — C++ twin of
-// RealityEngine_AI/src/services/StaChecker.ts.
+// the historical services/StaChecker.ts.
 //
 // Operates on the raw machine JSON (not the loaded Machine class) so the
 // analyzer can run before load_machine_from_json_string hands the object
