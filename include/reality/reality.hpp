@@ -677,6 +677,13 @@ public:
   // process (#37). nullptr when this simulator holds no such machine — a
   // machine without a perceptualMapping is never added here.
   const Machine* running_machine(const std::string& machineId) const;
+  // The operational machine corpus — every machine this simulator is stepping.
+  //
+  // The server keeps a second registry of machines as declared, which is never
+  // stepped. Anything answering "what is the engine running" must come from
+  // here; the registry answers "what was loaded", which is a different question
+  // and has repeatedly been served in place of this one (#37, #58).
+  const std::map<std::string, Machine>& running_machines() const;
   // Retune the merge knob on the machine this simulator is stepping. The
   // registry holds a separate copy; both are set so a read of either agrees.
   bool set_output_merge_transformation(const std::string& machineId, OutputMergeTransformation t);
