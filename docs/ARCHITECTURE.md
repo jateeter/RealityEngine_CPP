@@ -31,7 +31,7 @@ flowchart LR
 | --- | --- | --- |
 | `RealityVector` | `reality::RealityVector` | Comparator matching and output assertions. |
 | `CriticalEventSequence` | `reality::CriticalEventSequence` | Deferred activation over active graph nodes. |
-| `OutputArbiter` | `reality::OutputArbiter` | `AND`, `OR`, and `PASSTHROUGH` output decisions. |
+| `OutputArbiter` | `reality::OutputArbiter` | Machine output arbiter — rules and default in `RealityEngine_CI/ARBITER_ARCHITECTURE.md`. |
 | `Machine` | `reality::Machine` | Runs CES graphs and emits machine transition results. |
 | `PerceptionEngine` | `reality::PerceptionEngine` | Extracts machine input and merges machine output. |
 | `PerceptualSpaceSimulator` | `reality::PerceptualSpaceSimulator` | Snapshot -> process -> deterministic merge loop. |
