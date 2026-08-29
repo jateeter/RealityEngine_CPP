@@ -1090,6 +1090,12 @@ private:
 
   void add_machine(const Machine& m) {
     machines[m.id] = m;
+    // The registry holds the machine as declared, and it stays that way: only
+    // the simulator's copy is stepped by the PE->RE->PE path, so only it may
+    // transition. Without this, any endpoint calling process_input on a
+    // registry machine advanced a copy nothing else observes and forked the two
+    // silently for the life of the process.
+    machines[m.id].transitionsInhibited = true;
     if (m.perceptualMapping) {
       try { simulator.add_machine(m); } catch (...) {}
     }
