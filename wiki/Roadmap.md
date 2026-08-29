@@ -16,5 +16,5 @@ and API compatibility.
 
 ## Compatibility Principle
 
-`RealityEngine_AI` remains the reference model. Changes to behavior or API shape
+`RealityEngine_Machines` remains the corpus of record. Changes to behavior or API shape
 should be reflected in E2E corpus tests where possible.

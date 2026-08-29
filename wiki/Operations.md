@@ -18,7 +18,7 @@ Use:
 - Expected Qdrant collections are present when Qdrant is reachable.
 - Reality Engine health endpoint responds.
 - Reality Engine has loaded at least one machine from
-  `../RealityEngine_AI/examples/machines`.
+  `../RealityEngine_Machines/machines`.
 - Perception Engine health endpoint responds.
 
 ## Shutdown
@@ -36,7 +36,7 @@ Common overrides:
 REALITY_ENGINE_PORT=5301
 PERCEPTION_ENGINE_PORT=5300
 VECTOR_DIMENSION=768
-MACHINES_DIR=../RealityEngine_AI/examples/machines
+MACHINES_DIR=../RealityEngine_Machines/machines
 QDRANT_URL=http://localhost:4333
 QDRANT_STORAGE_DIR=../localAIStack/volumes/qdrant
 LOCAL_AI_API_URL=http://localhost:4000

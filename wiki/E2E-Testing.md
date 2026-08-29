@@ -9,7 +9,7 @@ make e2e
 The E2E runner loads all JSON machines from:
 
 ```text
-../RealityEngine_AI/examples/machines
+../RealityEngine_Machines/machines
 ```
 
 It then runs every authored `inputSequences` entry through the C++ machine

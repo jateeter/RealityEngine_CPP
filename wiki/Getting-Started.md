@@ -8,13 +8,13 @@
 - `python3` for startup verification and E2E summary parsing.
 - `localAIStack` checked out beside this repo if you want shared Qdrant
   verification to pass without `--allow-missing-qdrant`.
-- `RealityEngine_AI` checked out beside this repo for the machine corpus.
+- `RealityEngine_Machines` checked out beside this repo for the machine corpus.
 
 Expected sibling layout:
 
 ```text
 GitHub/
-  RealityEngine_AI/
+  RealityEngine_Machines/
   RealityEngine_CPP/
   localAIStack/
 ```
