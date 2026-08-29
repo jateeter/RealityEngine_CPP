@@ -322,8 +322,32 @@ public:
     });
     server.route("GET", "/api/machines", [this](const http::Request&) {
       Json::Array arr;
-      std::shared_lock<std::shared_mutex> lock(registryMutex);
-      for (const auto& m : machines_in_canonical_order(machines)) arr.push_back(m.to_json());
+      // The operational machine corpus: what the Reality Engine is running.
+      //
+      // This served the server registry, which holds machines as declared and
+      // is never stepped — and, since registry copies became transition-
+      // inhibited, can never advance at all. Both membership and runtime state
+      // now come from the simulator, because "what was loaded" and "what is
+      // running" are different questions and this endpoint is the second one.
+      //
+      // The summary form carries no per-vector activation, so this is not the
+      // list form of #37 or #58; per-Reality-Event state is served by
+      // /api/machines/:id and /api/engine/active, both of which already read
+      // the simulator. What it does carry that is runtime-mutable is
+      // `arbiterRule`, `outputMergeTransformation` and `outputMergeLocked`.
+      // Those are retuned through set_output_merge_transformation, which has to
+      // write both copies "so a read of either agrees" — a correctness
+      // property maintained by convention. Reading the running machine here
+      // makes the answer authoritative instead of dependent on that convention
+      // holding at every future call site.
+      //
+      // Adding live activation to this payload would be a cross-runtime
+      // contract change: LSP and Scala return the same summary shape, and a
+      // field added here alone is the divergence class #176 and #197 were about.
+      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      for (const auto& m : machines_in_canonical_order(simulator.running_machines())) {
+        arr.push_back(m.to_json());
+      }
       return ok(Json::Object{{"machines", arr}});
     });
     server.route("GET", "/api/machines/:id", [this](const http::Request& req) {

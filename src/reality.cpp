@@ -1025,6 +1025,9 @@ const Machine* PerceptualSpaceSimulator::running_machine(const std::string& mach
   auto it = machines.find(machineId);
   return it == machines.end() ? nullptr : &it->second;
 }
+const std::map<std::string, Machine>& PerceptualSpaceSimulator::running_machines() const {
+  return machines;
+}
 bool PerceptualSpaceSimulator::set_output_merge_transformation(const std::string& machineId,
                                                                OutputMergeTransformation t) {
   auto it = machines.find(machineId);
