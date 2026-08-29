@@ -1,7 +1,7 @@
 # Shared Qdrant
 
 `RealityEngine_CPP` uses the same Qdrant deployment model as
-`RealityEngine_AI`.
+`RealityEngine_Machines`.
 
 Qdrant is owned by `localAIStack`.
 

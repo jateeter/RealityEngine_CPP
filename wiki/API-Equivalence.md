@@ -1,6 +1,6 @@
 # API Equivalence
 
-The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_AI`.
+The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_Scala`.
 
 ## Implemented Reality Engine Areas
 

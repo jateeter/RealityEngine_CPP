@@ -3,7 +3,7 @@
 Welcome to the `RealityEngine_CPP` wiki.
 
 This wiki documents the native C++ implementation of the Reality Engine and
-Perception Engine services. The C++ repository uses `RealityEngine_AI` as the
+Perception Engine services. The C++ repository uses `RealityEngine_Machines` as the
 behavioral model and keeps operational compatibility with the shared
 `localAIStack` Qdrant deployment.
 

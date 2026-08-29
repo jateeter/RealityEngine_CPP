@@ -7,7 +7,7 @@
 | C++ standard library documentation | Threading, futures, synchronization, containers, and filesystem APIs. |
 | OpenAPI Specification | Native service API contracts in `docs/openapi/`. |
 | Qdrant documentation | Shared vector database verification and integration boundary. |
-| RealityEngine_AI repository | Behavioral reference implementation and machine corpus. |
+| RealityEngine_Machines repository | Canonical machine corpus and contract source. |
 | localAIStack repository | Shared Qdrant/Ollama/RAG/agent integration surface. |
 | Mermaid documentation | Diagrams embedded in Markdown docs. |
 
