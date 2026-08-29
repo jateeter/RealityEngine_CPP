@@ -1448,6 +1448,24 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
     step.activeRegions.push_back({msr.inputRegion.offset, msr.inputRegion.length, id, "input"});
     if (msr.outputRegion) step.activeRegions.push_back({msr.outputRegion->offset, msr.outputRegion->length, id, "output"});
   }
+  // Canonical ordering — offset, length, machineId, type (SURFACE_SPEC.md,
+  // "Active regions"). The regions are built by walking machineResults, and
+  // each runtime walks its own map in its own order: all three reported the
+  // same fifteen regions in three different orders (#197). Because no two
+  // agreed byte-for-byte, the clustering in the universal-vectors stage never
+  // found a majority and every divergence there reported as "runtimes split
+  // evenly" whatever the engines had actually done.
+  //
+  // machineId is in the key so the order is total. offset+length+type alone is
+  // not: two machines may share a region, which is precisely the contended
+  // case the arbiter exists for.
+  std::sort(step.activeRegions.begin(), step.activeRegions.end(),
+            [](const ActiveRegion& a, const ActiveRegion& b) {
+              if (a.offset != b.offset) return a.offset < b.offset;
+              if (a.length != b.length) return a.length < b.length;
+              if (a.machineId != b.machineId) return a.machineId < b.machineId;
+              return a.type < b.type;
+            });
   record_trajectory(std::move(isre), std::move(orev));
   return step;
 }
