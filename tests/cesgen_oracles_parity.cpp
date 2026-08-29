@@ -27,6 +27,7 @@
 #include "reality/json.hpp"
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -37,6 +38,17 @@
 using namespace reality;
 
 namespace {
+
+// Every position the oracle expects is present in the folded operation at at
+// least the expected magnitude. Length is compared too: a fold that dropped
+// positions is a defect, not a subsumption.
+bool values_subsumed(const std::vector<double>& expected, const std::vector<double>& folded) {
+  if (folded.size() < expected.size()) return false;
+  for (size_t i = 0; i < expected.size(); ++i) {
+    if (folded[i] + 1e-9 < expected[i]) return false;
+  }
+  return true;
+}
 
 std::string read_file(const std::filesystem::path& p) {
   std::ifstream in(p);
@@ -56,7 +68,40 @@ struct Oracle {
   std::vector<std::vector<double>> inputs;
   Region expectedRegion;
   std::vector<double> expectedValues;
+  std::string outputMergeTransformation = "or";
 };
+
+// A machine presents ONE Reality Event per instant, not one per sequence: the
+// engine folds its collection of potential outputs at the completion boundary
+// of the atomic matching action (FOLD_PLACEMENT.md). mergeBatch therefore
+// carries one operation per machine, and an individual outputVector is no
+// longer separately observable in it.
+//
+// The oracles are generated per outputVector, which is the right unit to
+// generate — it is what the corpus declares. It stopped being the right unit to
+// *assert* when the fold landed. 68 of 4966 oracles failed for exactly this:
+// each expected value was present in the folded operation, alongside the other
+// outputs that fired at the same instant.
+//
+//     aict-mem-critical::0  expected  0 0 1 0 0 0
+//     aict-mem-critical::1  expected  0 0 0 0 0 1
+//     folded operation                0 0 1 0 0 1
+//
+// Under a monotone fold a contribution can only add — so the assertion that
+// survives is that the expectation is subsumed by the fold, not that it appears
+// intact. That still catches a missing contribution, a wrong region and a wrong
+// machine; what it gives up is detecting extra positions, which under a
+// monotone fold are the other sequences legitimately contributing.
+//
+// Only for monotone transformations. `and`, `nor`, `nand`, `xor`, `meet`,
+// `strong-conjunction` and `discrete-median` can all lower a position, so
+// subsumption would be unsound there and the exact match is kept. No corpus
+// machine selects one today — 4956 oracles are `or` and 10 are `join` — which
+// is precisely why it is written down rather than left implied.
+bool fold_is_monotone(const std::string& transformation) {
+  return transformation == "or" || transformation == "max" ||
+         transformation == "join" || transformation == "strong-disjunction";
+}
 
 Oracle parse_oracle(const Json& o) {
   Oracle out;
@@ -77,6 +122,10 @@ Oracle parse_oracle(const Json& o) {
     static_cast<int>(exp.at("region").at("length").as_number()),
   };
   out.expectedValues = json::to_numbers(exp.at("values"));
+  // Absent means "or" — both because that is the corpus default and because an
+  // oracle file generated before this field existed must keep working.
+  if (!o.at("outputMergeTransformation").is_null())
+    out.outputMergeTransformation = o.at("outputMergeTransformation").as_string("or");
   return out;
 }
 
@@ -136,6 +185,15 @@ int main(int argc, char** argv) {
   auto t0 = std::chrono::steady_clock::now();
   int passed = 0;
   int failed = 0;
+  // Was a hard 5 with no override, which is not enough to characterise a
+  // failure set: diagnosing the 68 fold failures meant editing this constant,
+  // rebuilding and reverting. ORACLE_FAILURE_LIMIT=0 reports all of them.
+  size_t failureLimit = 5;
+  if (const char* env = std::getenv("ORACLE_FAILURE_LIMIT")) {
+    char* end = nullptr;
+    const long parsed = std::strtol(env, &end, 10);
+    if (end != env && parsed >= 0) failureLimit = parsed == 0 ? SIZE_MAX : static_cast<size_t>(parsed);
+  }
   std::vector<std::string> firstFailures;
 
   for (size_t idx = 0; idx < oracles.size(); ++idx) {
@@ -151,12 +209,14 @@ int main(int argc, char** argv) {
         last = sim.process_immediate(dense_input(o.inputRegion, stepInput));
       }
 
+      const bool monotone = fold_is_monotone(o.outputMergeTransformation);
       bool hit = false;
       for (const auto& op : last.mergeBatch) {
-        if (contributed(op, o.sequenceId)
-            && op.region.offset == o.expectedRegion.offset
-            && op.region.length == o.expectedRegion.length
-            && values_equal(op.values, o.expectedValues)) {
+        if (!contributed(op, o.sequenceId)
+            || op.region.offset != o.expectedRegion.offset
+            || op.region.length != o.expectedRegion.length) continue;
+        if (monotone ? values_subsumed(o.expectedValues, op.values)
+                     : values_equal(op.values, o.expectedValues)) {
           hit = true;
           break;
         }
@@ -165,7 +225,7 @@ int main(int argc, char** argv) {
         ++passed;
       } else {
         ++failed;
-        if (firstFailures.size() < 5) {
+        if (firstFailures.size() < failureLimit) {
           std::ostringstream ss;
           ss << o.id << " — expected ";
           for (double v : o.expectedValues) ss << v << " ";
@@ -177,7 +237,7 @@ int main(int argc, char** argv) {
       }
     } catch (const std::exception& e) {
       ++failed;
-      if (firstFailures.size() < 5) firstFailures.push_back(o.id + " — exception: " + e.what());
+      if (firstFailures.size() < failureLimit) firstFailures.push_back(o.id + " — exception: " + e.what());
     }
   }
 
