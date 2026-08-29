@@ -1105,8 +1105,33 @@ private:
   }
   Json active_vectors_json() const {
     Json::Array active;
-    for (const auto& [id, m] : machines) {
-      for (auto seq : m.all_sequences()) {
+    for (const auto& [id, registered] : machines) {
+      // Read the machine as it is *running*, not as it was registered.
+      //
+      // add_machine keeps two copies — one in this registry, one in the
+      // simulator — and only the simulator's is stepped. Reading the registry
+      // here reported every Reality Event with its post-ingestion isActive no
+      // matter how far the machine had advanced: the list was correct at step 0
+      // and then frozen for the life of the process. Matching still worked, so
+      // mergeBatch, stepNumber and globalStep all agreed with LSP and Scala
+      // while GET /api/engine/active stood still at the 27 initial events.
+      //
+      // This is #37 again, on a second endpoint. That issue added
+      // running_machine() for exactly this reason — "the machine as it is
+      // running, Reality Event activation included" — and fixed the
+      // machine-detail path; this one was left on the registry and reproduced
+      // the defect verbatim.
+      //
+      // Falls back to the registered copy when the simulator holds no such
+      // machine. A machine without a perceptualMapping is never added there, so
+      // it has no running form to report and its declared initial state is the
+      // only truthful answer.
+      const Machine* src = simulator.running_machine(id);
+      if (src == nullptr) src = &registered;
+      // all_sequences() returns by value; bind it once rather than copying the
+      // whole vector again per iteration.
+      auto sequences = src->all_sequences();
+      for (auto& seq : sequences) {
         for (const auto* vector : seq.active_vectors()) {
           active.push_back(Json::Object{
             {"machineId", id},
