@@ -160,7 +160,7 @@ public:
     });
     server.route("GET", "/api/metrics", [this](const http::Request&) {
       // CES coverage telemetry + runtime gauges, Prometheus text format.
-      // Metric names + labels match RealityEngine_AI's /api/metrics so one
+      // Metric names + labels match the established /api/metrics shape so one
       // scrape config covers both targets.
       std::string body;
       {
