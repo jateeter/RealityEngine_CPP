@@ -787,6 +787,15 @@ int Machine::total_vector_count() const {
 }
 ArbiterRule Machine::arbiter_rule() const { return arbiter.get_rule(); }
 MachineTransitionResult Machine::process_input(const Vector& input, std::optional<ComparatorType> overrideType) {
+  // A registry copy does not perceive reality — see `transitionsInhibited`.
+  // Returns the shape of a machine that matched nothing: no sequence results,
+  // no output, no state change. Deliberately silent rather than throwing, so
+  // the refusal is a no-op at the seam rather than an error surfaced to a
+  // caller that has no way to act on it.
+  if (transitionsInhibited) {
+    return {input, now_ms(), {}, std::nullopt,
+            {to_string(arbiter.get_rule()), 0, 0, false}};
+  }
   std::map<std::string, SequenceResult> seqResults;
   std::map<std::string, std::vector<OutputVector>> seqOutputs;
   for (auto& [seqId, seq] : sequences) {

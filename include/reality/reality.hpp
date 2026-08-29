@@ -290,6 +290,20 @@ public:
   std::optional<PerceptualMapping> perceptualMapping;
   ComparatorType matchAlgorithm = ComparatorType::Gte;
   OutputMergeTransformation outputMergeTransformation = OutputMergeTransformation::Or;
+  // Registry copies do not perceive reality.
+  //
+  // add_machine stores every machine twice — once in the server registry, once
+  // in the simulator — and only the simulator's is stepped by the PE->RE->PE
+  // path. Anything that stepped a registry copy advanced a machine nothing else
+  // observes, forking the two permanently and silently: the endpoint reported a
+  // transition that the running corpus never made.
+  //
+  // Set on the registry copy only. process_input() then refuses to transition,
+  // so the inhibition holds at one choke point rather than depending on every
+  // present and future call site reaching for the simulator instead. A consumer
+  // that wants activity is thereby forced to observe the machines actually in
+  // action.
+  bool transitionsInhibited = false;
   // Interlock on the knob above. Initialised LOCKED: the transformation is a
   // training variable, and a run that retunes one by accident is a run whose
   // results mean nothing. Changing it requires unlocking first, deliberately
