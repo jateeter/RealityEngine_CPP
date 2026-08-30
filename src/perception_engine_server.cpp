@@ -2722,7 +2722,21 @@ private:
     Json payload = Json::Object{
       {"vector", json::numbers(vector)},
       {"matchAlgorithm", to_string(matchAlgorithm)},
-      {"matchAlgorithmOverride", to_string(matchAlgorithm == MatchAlgorithm::Equals ? ComparatorType::Equals : ComparatorType::Gte)},
+      // No matchAlgorithmOverride. This sent one on EVERY push, which made each
+      // element's declared comparatorType inoperative: an override outranks it
+      // (reality.cpp, overrideType.value_or(elem.comparatorType.value_or(...))),
+      // so a corpus element declaring `threshold` was matched with `gte`
+      // instead, on every step, in normal operation.
+      //
+      // That is not a small difference. `threshold` asks "is the input within
+      // t of this value"; `gte` asks "are the input and the value both above
+      // t", which is true of almost everything. FallSensorMotionPreaggregator
+      // declares two disjoint threshold windows -- |1.5-v|<=0.6 and
+      // |3.5-v|<=0.6 -- and with the override both fired on an input of 1,
+      // where only the first can match (RealityEngine_CI#201).
+      //
+      // matchAlgorithmOverride remains available to a caller that means it. It
+      // is not something a transport layer applies by default.
       // Always true, regardless of what the caller asked to be *shown*.
       // machineResults is what aggregate_machine_outputs merges into the
       // perceptual space to form the next InputSpaceVector, so it is an input
