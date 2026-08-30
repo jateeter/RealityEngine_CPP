@@ -838,9 +838,14 @@ public:
     });
     server.route("POST", "/api/perceive", [this](const http::Request& req) {
       auto body = parse_body(req);
+      // Only an explicit matchAlgorithmOverride overrides. `matchAlgorithm`
+      // reports the algorithm in effect; it is not an instruction to replace
+      // every element's declared comparatorType, and reading it as one made the
+      // corpus's per-element matching semantics unreachable in normal operation
+      // (RealityEngine_CI#201). Scala reads only the override and was the one
+      // runtime matching the corpus as declared.
       std::optional<ComparatorType> overrideType;
       if (body.at("matchAlgorithmOverride").is_string()) overrideType = comparator_from_string(body.at("matchAlgorithmOverride").as_string());
-      else if (body.at("matchAlgorithm").is_string()) overrideType = comparator_from_string(body.at("matchAlgorithm").as_string());
       bool includeMachineResults = body.at("includeMachineResults").as_bool(body.at("compact").as_bool(false) ? false : includeMachineResultsDefault);
       bool includePerceptualSpace = body.at("includePerceptualSpace").as_bool(includePerceptualSpaceDefault);
 
