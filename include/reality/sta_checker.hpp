@@ -7,7 +7,7 @@
 // analyzer can run before load_machine_from_json_string hands the object
 // to the engine.  That ordering matters: the loader gates on STA when the
 // machine is tagged `metadata.severity == "life-safety"` — a violating
-// machine is refused before any RealityVector instance exists.
+// machine is refused before any RealityEvent instance exists.
 //
 // compute_sta() returns the same structured report the AI CLI emits in
 // --json mode, so a regression in either side is byte-comparable.

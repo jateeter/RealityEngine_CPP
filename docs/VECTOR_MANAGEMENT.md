@@ -32,7 +32,7 @@ collection migration.
 - **Dense vectors are projections.** APIs can continue accepting `number[]`, but
   the engine should internally resize or materialize from sparse regions as
   needed.
-- **No truncation for reality vectors.** Runtime perceptual vectors must never be
+- **No truncation for Reality Events.** Runtime perceptual vectors must never be
   truncated to a configured dimension. If a payload is shorter than the required
   dimension, missing values are zeros.
 - **Region ownership is explicit.** Every input source and machine output should
@@ -52,7 +52,7 @@ Use two storage classes:
 | Store | Vector shape | Owner | Use |
 | --- | --- | --- | --- |
 | Semantic vector store | Fixed embedding dimension | localAIStack/Ollama/RAG | Similarity search over text, tools, memories, and documents. |
-| Reality vector store | Sparse regions or versioned dense snapshots | Reality/Perception Engine | Operational state, source signals, machine outputs, and replay/debug snapshots. |
+| Reality Event store | Sparse regions or versioned dense snapshots | Reality/Perception Engine | Operational state, source signals, machine outputs, and replay/debug snapshots. |
 
 Recommended reality-vector persistence options:
 

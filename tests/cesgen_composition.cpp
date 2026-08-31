@@ -46,7 +46,7 @@ Machine producer(const std::string& id, const std::string& sequenceId, int input
             PerceptualMapping{{inputBit, 1}, {outputOffset, 1}},
             id);
   CriticalEventSequence seq(sequenceId + " sequence", sequenceId);
-  RealityVector v({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, sequenceId + "-fire");
+  RealityEvent v({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, sequenceId + "-fire");
   v.add_output_vector({sequenceId + "-out", {1.0}, {}, now_ms(), {}});
   seq.add_vector(v);
   m.add_sequence(seq);
