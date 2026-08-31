@@ -1145,9 +1145,9 @@ int main() {
   {
     // Trajectory histories — SURFACE_SPEC.md, "Trajectory histories".
     //
-    // ISRE(n) is what the corpus was presented with, OREV(n) what it produced.
+    // ISRE(n) is what the corpus was presented with, OSRE(n) what it produced.
     // A machine at input [0,1] output [20,1] firing 1.0 gives a step whose ISRE
-    // carries the pushed input and whose OREV carries the output cell — which
+    // carries the pushed input and whose OSRE carries the output cell — which
     // is the whole shape of the claim, at one machine.
     PerceptualSpaceRuntime sim(32);
     sim.add_machine(make_output_machine("machine-traj", 1.0));
@@ -1157,9 +1157,9 @@ int main() {
     sim.process_immediate(input);
 
     auto isre = sim.isre_history();
-    auto orev = sim.orev_history();
+    auto osre = sim.osre_history();
     assert(isre.size() == 1);
-    assert(orev.size() == 1);
+    assert(osre.size() == 1);
 
     // ISRE is the space as presented: the pushed input, before the corpus ran.
     assert(isre[0].stepNumber == 0);
@@ -1168,11 +1168,11 @@ int main() {
     assert(isre[0].nonZero[0].index == 0);
     assert(isre[0].nonZero[0].value == 1.0);
 
-    // OREV is what the corpus produced: the output cell, not the input it read.
-    assert(orev[0].stepNumber == 0);
-    assert(orev[0].nonZero.size() == 1);
-    assert(orev[0].nonZero[0].index == 20);
-    assert(orev[0].nonZero[0].value == 1.0);
+    // OSRE is what the corpus produced: the output cell, not the input it read.
+    assert(osre[0].stepNumber == 0);
+    assert(osre[0].nonZero.size() == 1);
+    assert(osre[0].nonZero[0].index == 20);
+    assert(osre[0].nonZero[0].value == 1.0);
 
     // Ascending stepNumber — these are compared by index across engines, so a
     // newest-first history would report every step as the first divergence.
@@ -1192,7 +1192,7 @@ int main() {
     assert(second.nonZero.size() == 1);
     assert(second.nonZero[0].index == 0);
 
-    Json entry = to_json(orev[0]);
+    Json entry = to_json(osre[0]);
     assert(entry.at("stepNumber").as_number() == 0.0);
     assert(entry.at("length").as_number() == 32.0);
     const Json& cells = entry.at("nonZero");
@@ -1201,7 +1201,7 @@ int main() {
 
     sim.reset();
     assert(sim.isre_history().empty());
-    assert(sim.orev_history().empty());
+    assert(sim.osre_history().empty());
 
     // stepNumber restarts with the history. It used to keep counting while the
     // history was cleared, so a reset engine's first entry was stepNumber 2
@@ -1209,7 +1209,7 @@ int main() {
     sim.process_immediate(input);
     assert(sim.isre_history().size() == 1);
     assert(sim.isre_history()[0].stepNumber == 0);
-    assert(sim.orev_history()[0].stepNumber == 0);
+    assert(sim.osre_history()[0].stepNumber == 0);
   }
 
   {

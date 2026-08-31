@@ -37,7 +37,7 @@ inline std::vector<double> aggregate_machine_outputs(
     // was decided by an id that differs per engine and the merged vector — the
     // next InputSpaceVector — diverged. Seen on AgHarvestReadinessAssessor,
     // whose output [3967:3971] overlaps AGX055's [3959:3971]: ISRE cell 3968
-    // read 1.0 here and 0.0 on Scala while every OREV agreed
+    // read 1.0 here and 0.0 on Scala while every OSRE agreed
     // (RealityEngine_CI corpus parity sweep, 2026-08-19).
     //
     // machineName is corpus-declared and globally unique across the corpus, so

@@ -274,7 +274,7 @@ public:
         return ok(Json::Object{{"history", arr}});
       };
     };
-    server.route("GET", "/api/engine/orev-history", trajectory_route(&PerceptualSpaceRuntime::orev_history));
+    server.route("GET", "/api/engine/osre-history", trajectory_route(&PerceptualSpaceRuntime::osre_history));
     server.route("GET", "/api/engine/isre-history", trajectory_route(&PerceptualSpaceRuntime::isre_history));
     server.route("POST", "/api/engine/process", [this](const http::Request& req) {
       auto body = parse_body(req);

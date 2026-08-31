@@ -514,11 +514,11 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: get_api_engine_history
-  /api/engine/orev-history:
+  /api/engine/osre-history:
     get:
       tags:
       - Engine
-      summary: OREV-History — output reality event vector per step
+      summary: OSRE-History — output reality event vector per step
       responses:
         '200':
           description: Success
@@ -528,7 +528,7 @@ paths:
                 $ref: '#/components/schemas/Object'
         '500':
           $ref: '#/components/responses/InternalError'
-      operationId: get_api_engine_orev_history
+      operationId: get_api_engine_osre_history
   /api/engine/isre-history:
     get:
       tags:
