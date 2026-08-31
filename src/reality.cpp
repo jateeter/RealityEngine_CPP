@@ -1045,7 +1045,7 @@ void PerceptualSpaceRuntime::reset() {
   running = false;
   space.reset();
   steps.clear();
-  orevHistory.clear();
+  osreHistory.clear();
   isreHistory.clear();
   currentStep = 0;
   // Reset cleared the histories and left this counting, so the first step of a
@@ -1115,7 +1115,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   // of it.  The arbitration feedback from step n-1 is already merged in; the
   // gap between this and the seed is what arbitration did.
   TrajectoryEntry isre = sparse_trajectory(stepNumber, space.vector());
-  TrajectoryEntry orev;
+  TrajectoryEntry osre;
 
   struct MachinePhaseJob {
     std::string id;
@@ -1436,18 +1436,18 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     }
     std::vector<ArbitrationRecord> records;
     const auto resolved = resolve_all(byCell, step.stepNumber, records);
-    // OREV(n) observation point.  The corpus's output for this step exists as
+    // OSRE(n) observation point.  The corpus's output for this step exists as
     // a single-valued vector at exactly one instant: after resolution, as it
     // is committed. Recording it here, in the same loop as the writes, is what
     // makes the entry and the space agree by construction rather than by a
     // later read that could observe a different state.
-    orev.stepNumber = stepNumber;
+    osre.stepNumber = stepNumber;
     for (const auto& [cell, value] : resolved) {
       space.update_region(cell, Vector{value});
-      if (value != 0.0) orev.nonZero.push_back({cell, value});
+      if (value != 0.0) osre.nonZero.push_back({cell, value});
     }
-    orev.length = space.dimension();
-    std::sort(orev.nonZero.begin(), orev.nonZero.end(),
+    osre.length = space.dimension();
+    std::sort(osre.nonZero.begin(), osre.nonZero.end(),
               [](const TrajectoryCell& a, const TrajectoryCell& b) { return a.index < b.index; });
     step.arbitration = std::move(records);
   }
@@ -1478,17 +1478,17 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
               if (a.machineId != b.machineId) return a.machineId < b.machineId;
               return a.type < b.type;
             });
-  record_trajectory(std::move(isre), std::move(orev));
+  record_trajectory(std::move(isre), std::move(osre));
   return step;
 }
-void PerceptualSpaceRuntime::record_trajectory(TrajectoryEntry isre, TrajectoryEntry orev) {
+void PerceptualSpaceRuntime::record_trajectory(TrajectoryEntry isre, TrajectoryEntry osre) {
   isreHistory.push_back(std::move(isre));
-  orevHistory.push_back(std::move(orev));
+  osreHistory.push_back(std::move(osre));
   // Trim the oldest, keeping ascending order intact.
   if (isreHistory.size() > maxTrajectory)
     isreHistory.erase(isreHistory.begin(), isreHistory.begin() + static_cast<long>(isreHistory.size() - maxTrajectory));
-  if (orevHistory.size() > maxTrajectory)
-    orevHistory.erase(orevHistory.begin(), orevHistory.begin() + static_cast<long>(orevHistory.size() - maxTrajectory));
+  if (osreHistory.size() > maxTrajectory)
+    osreHistory.erase(osreHistory.begin(), osreHistory.begin() + static_cast<long>(osreHistory.size() - maxTrajectory));
 }
 void PerceptualSpaceRuntime::rebuild_edge_cache() const {
   cachedEdges.clear();
@@ -1532,14 +1532,14 @@ void PerceptualSpaceRuntime::set_history_limit(size_t limit) {
   if (steps.size() > maxHistory) steps.resize(maxHistory);
 }
 size_t PerceptualSpaceRuntime::history_limit() const { return maxHistory; }
-std::vector<TrajectoryEntry> PerceptualSpaceRuntime::orev_history() const { return orevHistory; }
+std::vector<TrajectoryEntry> PerceptualSpaceRuntime::osre_history() const { return osreHistory; }
 std::vector<TrajectoryEntry> PerceptualSpaceRuntime::isre_history() const { return isreHistory; }
 void PerceptualSpaceRuntime::set_trajectory_limit(size_t limit) {
   maxTrajectory = limit;
   if (isreHistory.size() > maxTrajectory)
     isreHistory.erase(isreHistory.begin(), isreHistory.begin() + static_cast<long>(isreHistory.size() - maxTrajectory));
-  if (orevHistory.size() > maxTrajectory)
-    orevHistory.erase(orevHistory.begin(), orevHistory.begin() + static_cast<long>(orevHistory.size() - maxTrajectory));
+  if (osreHistory.size() > maxTrajectory)
+    osreHistory.erase(osreHistory.begin(), osreHistory.begin() + static_cast<long>(osreHistory.size() - maxTrajectory));
 }
 size_t PerceptualSpaceRuntime::trajectory_limit() const { return maxTrajectory; }
 PerceptualSpace& PerceptualSpaceRuntime::perceptual_space() { return space; }
