@@ -11,7 +11,7 @@
 //   * DLX001 rising-edge detector — requires two steps; only step 2 produces
 //     a mergeBatch entry.
 //   * Dynamic dimension growth — adding machines from widely-separated regions
-//     bumps the simulator dimension and the mapping_version counter.
+//     bumps the spaceRuntime dimension and the mapping_version counter.
 //   * Cross-domain step — three machines in three domains all fire in a single
 //     processImmediate() call and produce three mergeBatch entries sorted by
 //     machineId (one merge operation per machine after the fold move).
@@ -88,7 +88,7 @@ int passed   = 0;
 
 void test_single_domain_trigger(const DomainCase& dc) {
   Machine m = load(dc.file, "e2e-" + dc.prefix);
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
 
   const auto& in  = m.perceptualMapping->input;
@@ -114,7 +114,7 @@ void test_single_domain_trigger(const DomainCase& dc) {
 
 void test_dlx_rising_edge() {
   Machine m = load("DLX001_rising-edge-detector.json", "dlx001-e2e");
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
 
   const auto& in  = m.perceptualMapping->input;
@@ -132,7 +132,7 @@ void test_dlx_rising_edge() {
 }
 
 void test_dimension_growth() {
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   EXPECT(sim.dimension() == 0, "fresh sim should have dimension 0");
   EXPECT(sim.mapping_version() == 0, "fresh sim should have mapping_version 0");
   EXPECT(sim.required_dimension() == 0, "fresh sim should have required_dimension 0");
@@ -164,7 +164,7 @@ void test_three_domains_in_one_step() {
     *std::find_if(DOMAIN_CASES.begin(), DOMAIN_CASES.end(), [](const DomainCase& c){ return c.prefix == "TFX"; }),
   };
 
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   std::vector<Machine> ms;
   for (size_t i = 0; i < picked.size(); ++i) {
     ms.push_back(load(picked[i].file, "cross-" + picked[i].prefix + "-" + std::to_string(i)));
@@ -192,8 +192,8 @@ void test_determinism() {
   Machine m = load("AGX001_aquaculture-water-quality-stability.json", "det-agx");
   Vector v = dense_vector({{m.perceptualMapping->input.offset, {0, 1, 0, 1}}});
 
-  PerceptualSpaceSimulator s1(0); s1.add_machine(m);
-  PerceptualSpaceSimulator s2(0); s2.add_machine(m);
+  PerceptualSpaceRuntime s1(0); s1.add_machine(m);
+  PerceptualSpaceRuntime s2(0); s2.add_machine(m);
 
   SimulationStep a = s1.process_immediate(v);
   SimulationStep b = s2.process_immediate(v);
@@ -210,12 +210,12 @@ void test_determinism() {
 void test_polymorphic_assembly() {
   // The AI test asserts dense vs narrow-grown equivalence — verify the same
   // semantics hold in C++: a dense vector whose length is smaller than the
-  // simulator's dimension still produces the right mergeBatch because the
+  // spaceRuntime's dimension still produces the right mergeBatch because the
   // tolerant set_vector zero-fills the tail.
   Machine m = load("AGX001_aquaculture-water-quality-stability.json", "poly-agx");
 
-  PerceptualSpaceSimulator s1(0); s1.add_machine(m);
-  PerceptualSpaceSimulator s2(0); s2.add_machine(m);
+  PerceptualSpaceRuntime s1(0); s1.add_machine(m);
+  PerceptualSpaceRuntime s2(0); s2.add_machine(m);
 
   const int inOff = m.perceptualMapping->input.offset;
 

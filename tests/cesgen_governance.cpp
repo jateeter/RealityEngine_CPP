@@ -127,7 +127,7 @@ void test_mergebatch_stamp(const std::filesystem::path& machinesDir) {
   // Drive the FallDetection nominal path and confirm the mergeBatch entry
   // carries the resolved governance decision (GREEN / ok / patient-safety-on-call).
   Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "gov-fd-stamp");
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
   Vector v(static_cast<size_t>(off) + 2, 0.0);
@@ -152,7 +152,7 @@ void test_mergebatch_stamp(const std::filesystem::path& machinesDir) {
 void test_paging_decisions_metric(const std::filesystem::path& machinesDir) {
   Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "gov-fd-prom");
   std::map<std::string, Machine> machines{{m.id, m}};
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
   Vector v(static_cast<size_t>(off) + 2, 0.0);

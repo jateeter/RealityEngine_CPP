@@ -206,7 +206,7 @@ static void verify_single_contributor_is_byte_identical() {
      "processStatus":"ok","description":"solo"}
   ]})");
 
-  PerceptualSpaceSimulator sim(32);
+  PerceptualSpaceRuntime sim(32);
   sim.add_machine(m);
   auto step = sim.process_immediate(fire_at(32));
 
@@ -258,7 +258,7 @@ static void verify_governance_join() {
      "processStatus":"error","description":"high","governance":{"ownerTeam":"team-high"}}
   ]})");
 
-  PerceptualSpaceSimulator sim(32);
+  PerceptualSpaceRuntime sim(32);
   sim.add_machine(m);
   auto step = sim.process_immediate(fire_at(32));
 
@@ -293,7 +293,7 @@ static void verify_governance_join() {
      "processStatus":"error","description":"second-red"}
   ]})");
 
-  PerceptualSpaceSimulator tieSim(32);
+  PerceptualSpaceRuntime tieSim(32);
   tieSim.add_machine(tie);
   auto tieStep = tieSim.process_immediate(fire_at(32));
   assert(tieStep.mergeBatch.size() == 1);
@@ -305,7 +305,7 @@ static void verify_governance_join() {
 
   // No contributor resolving means no decision — not an empty one.
   Machine bare = make_multi_sequence_machine("machine-bare", {{"only", Vector{1.0, 0.0}}}, 20, 2);
-  PerceptualSpaceSimulator bareSim(32);
+  PerceptualSpaceRuntime bareSim(32);
   bareSim.add_machine(bare);
   auto bareStep = bareSim.process_immediate(fire_at(32));
   assert(bareStep.mergeBatch.size() == 1);
@@ -333,7 +333,7 @@ static void verify_event_bus_fires_for_every_contributor() {
     {"producerMachineId":"machine-producer","producerSequenceId":"seq-beta", "bitOffset":31}
   ]})");
 
-  PerceptualSpaceSimulator sim(64);
+  PerceptualSpaceRuntime sim(64);
   sim.add_machine(producer);
   sim.add_machine(subscriber);
   auto step = sim.process_immediate(fire_at(64));
@@ -369,7 +369,7 @@ static void verify_fold_refusal_contributes_nothing() {
   // Łukasiewicz pair without saying what its chain is.
   m.outputMergeTransformation = OutputMergeTransformation::StrongDisjunction;
 
-  PerceptualSpaceSimulator sim(32);
+  PerceptualSpaceRuntime sim(32);
   sim.add_machine(m);
   auto step = sim.process_immediate(fire_at(32));
 
@@ -386,7 +386,7 @@ static void verify_fold_refusal_contributes_nothing() {
   // is what confirms the refusal was about k and not about the machine. The top
   // lives on the perceptual mapping, where machine.schema.json puts it.
   m.perceptualMapping->outputAlphabetTop = 1;
-  PerceptualSpaceSimulator declared(32);
+  PerceptualSpaceRuntime declared(32);
   declared.add_machine(m);
   auto ok = declared.process_immediate(fire_at(32));
   assert(ok.mergeBatch.size() == 1);
@@ -417,7 +417,7 @@ static void verify_refusal_still_fires_the_event_bus() {
     {"producerMachineId":"machine-refuse-bus","producerSequenceId":"seq-beta", "bitOffset":31}
   ]})");
 
-  PerceptualSpaceSimulator sim(64);
+  PerceptualSpaceRuntime sim(64);
   sim.add_machine(producer);
   sim.add_machine(subscriber);
   auto step = sim.process_immediate(fire_at(64));
@@ -876,7 +876,7 @@ int main() {
 
   {
     Machine m = make_rs_like_machine();
-    PerceptualSpaceSimulator sim(256);
+    PerceptualSpaceRuntime sim(256);
     sim.add_machine(m);
     Vector ps(256, 0.0);
     ps[0] = 1.0;
@@ -889,7 +889,7 @@ int main() {
   }
 
   {
-    PerceptualSpaceSimulator sim(256);
+    PerceptualSpaceRuntime sim(256);
     sim.add_machine(make_output_machine("machine-b", 0.8));
     sim.add_machine(make_output_machine("machine-a", 0.2));
     Vector ps(256, 0.0);
@@ -1149,7 +1149,7 @@ int main() {
     // A machine at input [0,1] output [20,1] firing 1.0 gives a step whose ISRE
     // carries the pushed input and whose OREV carries the output cell — which
     // is the whole shape of the claim, at one machine.
-    PerceptualSpaceSimulator sim(32);
+    PerceptualSpaceRuntime sim(32);
     sim.add_machine(make_output_machine("machine-traj", 1.0));
 
     Vector input(32, 0.0);

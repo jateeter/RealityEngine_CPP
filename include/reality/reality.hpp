@@ -293,14 +293,14 @@ public:
   // Registry copies do not perceive reality.
   //
   // add_machine stores every machine twice — once in the server registry, once
-  // in the simulator — and only the simulator's is stepped by the PE->RE->PE
+  // in the spaceRuntime — and only the spaceRuntime's is stepped by the PE->RE->PE
   // path. Anything that stepped a registry copy advanced a machine nothing else
   // observes, forking the two permanently and silently: the endpoint reported a
   // transition that the running corpus never made.
   //
   // Set on the registry copy only. process_input() then refuses to transition,
   // so the inhibition holds at one choke point rather than depending on every
-  // present and future call site reaching for the simulator instead. A consumer
+  // present and future call site reaching for the spaceRuntime instead. A consumer
   // that wants activity is thereby forced to observe the machines actually in
   // action.
   bool transitionsInhibited = false;
@@ -492,7 +492,7 @@ inline bool contributed(const MergeOperation& op, const std::string& sequenceId)
 // subscriber's bit offset so the next step's snapshot sees the producer's
 // "fired" signal as an input bit.  Lets meta-CES domain workflows run as
 // ordinary CESs over an event-bus region of perceptual space.  Mirrors
-// EventBusWrite in src/engine/PerceptualSpaceSimulator.ts.
+// EventBusWrite in src/engine/PerceptualSpaceRuntime.ts.
 struct EventBusWrite {
   std::string producerMachineId;
   std::string producerSequenceId;
@@ -614,7 +614,7 @@ private:
 class CesCoverageRegistry {
 public:
   void record(const Machine& machine, const MachineTransitionResult& result);
-  // Bump the paging-decisions counter.  Called by the simulator whenever
+  // Bump the paging-decisions counter.  Called by the spaceRuntime whenever
   // a mergeBatch entry carries a resolved governance contract.
   void record_paging_decision(const std::string& ownerTeam,
                               const std::string& processStatus,
@@ -645,9 +645,9 @@ private:
   long long startedAtMs = now_ms();
 };
 
-class PerceptualSpaceSimulator {
+class PerceptualSpaceRuntime {
 public:
-  explicit PerceptualSpaceSimulator(int dimension = 0);
+  explicit PerceptualSpaceRuntime(int dimension = 0);
   int dimension() const;
   // Required dimension across all currently registered machines —
   // max(offset + length) over every input and output mapping. Returned by
@@ -674,17 +674,17 @@ public:
   // and only this one is stepped. Serving machine detail from the registry
   // therefore reported every RE with its initial isActive no matter how far the
   // machine had advanced, so activation was unobservable from outside the
-  // process (#37). nullptr when this simulator holds no such machine — a
+  // process (#37). nullptr when this spaceRuntime holds no such machine — a
   // machine without a perceptualMapping is never added here.
   const Machine* running_machine(const std::string& machineId) const;
-  // The operational machine corpus — every machine this simulator is stepping.
+  // The operational machine corpus — every machine this spaceRuntime is stepping.
   //
   // The server keeps a second registry of machines as declared, which is never
   // stepped. Anything answering "what is the engine running" must come from
   // here; the registry answers "what was loaded", which is a different question
   // and has repeatedly been served in place of this one (#37, #58).
   const std::map<std::string, Machine>& running_machines() const;
-  // Retune the merge knob on the machine this simulator is stepping. The
+  // Retune the merge knob on the machine this spaceRuntime is stepping. The
   // registry holds a separate copy; both are set so a read of either agrees.
   bool set_output_merge_transformation(const std::string& machineId, OutputMergeTransformation t);
   bool set_output_merge_locked(const std::string& machineId, bool locked);
@@ -750,7 +750,7 @@ private:
   // top of every process_immediate call so a caller-provided input vector
   // (which zero-fills past its length) doesn't clobber persistent
   // workflow milestones.  Same semantic as latchedEventBits in the AI
-  // PerceptualSpaceSimulator.
+  // PerceptualSpaceRuntime.
   std::set<int> latchedEventBits;
   // Pre-computed edge list — rebuilt whenever machines are added or removed so
   // machine_graph_data() does not recompute an O(n²) overlap check on every request.

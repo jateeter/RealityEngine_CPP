@@ -65,14 +65,14 @@ std::vector<std::string> failureMsgs;
 void test_subscriptions_registered(const std::filesystem::path& machinesDir) {
   Machine agent = load_machine_from_json_string(
       read_file(find_machine_file(machinesDir, "CommunityCommandAgent.json")), "machine-community-command-agent");
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(agent);
   EXPECT(sim.event_bus_subscription_count() == 3, "expected 3 subscriptions");
   EXPECT(sim.dimension() >= 5503, "PE should grow to cover subscription bits");
 }
 
 void test_single_producer_does_not_complete(const std::filesystem::path& machinesDir) {
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(load_machine_from_json_string(
       read_file(find_machine_file(machinesDir, "CommunityCommandAgent.json")), "machine-community-command-agent"));
   sim.add_machine(producer("machine-housing-placement", "housing-place", 6002, 6012));
@@ -97,7 +97,7 @@ void test_single_producer_does_not_complete(const std::filesystem::path& machine
 }
 
 void test_all_three_fire_completes_workflow(const std::filesystem::path& machinesDir) {
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(load_machine_from_json_string(
       read_file(find_machine_file(machinesDir, "CommunityCommandAgent.json")), "machine-community-command-agent"));
   sim.add_machine(producer("machine-benefits-eligibility", "bel-finalize",    6000, 6010));
@@ -146,7 +146,7 @@ void test_all_three_fire_completes_workflow(const std::filesystem::path& machine
 }
 
 void test_event_bus_sort_order(const std::filesystem::path& machinesDir) {
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(load_machine_from_json_string(
       read_file(find_machine_file(machinesDir, "CommunityCommandAgent.json")), "machine-community-command-agent"));
   // Add producers in reverse offset order to confirm the sort isn't a
