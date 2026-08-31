@@ -102,12 +102,12 @@ OpenAPI: [`docs/openapi/reality-engine.yaml`](openapi/reality-engine.yaml)
 | `POST /engine/reset` | Implemented | Resets machine sequence state. |
 | `GET /engine/stats` | Implemented | Includes machine/vector totals. |
 | `GET /engine/active` | Stub-compatible | Returns empty object until sequence CRUD parity lands. |
-| `GET /engine/history` | Stub-compatible | Returns empty array; simulator history is implemented separately. |
+| `GET /engine/history` | Stub-compatible | Returns empty array; engine history is implemented separately. |
 | `POST /machines` | Implemented | Accepts existing machine JSON schema. |
 | `GET /machines` | Implemented | Returns `machines` array. |
 | `GET /machines/:id` | Implemented | Returns full machine details. |
 | `PUT /machines/:id` | Implemented | Replaces machine from JSON. |
-| `DELETE /machines/:id` | Implemented | Removes from engine and simulator. |
+| `DELETE /machines/:id` | Implemented | Removes from the engine. |
 | `POST /machines/:id/process` | Implemented | Machine-local input vector processing. |
 | `POST /machines/:id/process-universal` | Implemented | Universal-space extraction before machine processing. |
 | `POST /machines/process-universal/all` | Implemented | Input-atomic all-machine processing. |
@@ -122,7 +122,7 @@ OpenAPI: [`docs/openapi/reality-engine.yaml`](openapi/reality-engine.yaml)
 | `GET /demo/multi-step`, `GET /demo/data-center`, `GET /demo/kleene-star` | Implemented | Legacy TypeScript-compatible demo envelopes for loaded example machines. |
 | `GET /machine-graph` | Implemented | Nodes and overlap edges. |
 | `POST /perceptual-simulation/configure/chunk` | Implemented | Chunk buffer. |
-| `POST /perceptual-simulation/configure/commit` | Implemented | Configures simulator from buffer. |
+| `POST /perceptual-simulation/configure/commit` | Implemented | Configures the engine from the buffer. |
 | `POST /perceptual-simulation/start/stop/step/reset` | Implemented | Manual stepping; no background scheduler in first port. |
 | `GET /perceptual-simulation/state/history` | Implemented | Same top-level shapes. |
 | `POST /perception/diagnostic` | Implemented | Reports nonzero universal values and machine mappings. |
@@ -271,7 +271,7 @@ Compact responses omit `machineResults` while retaining `stepNumber`,
 to omit the merged perceptual-space vector from large responses. The response
 still includes `mergeBatch`, an ordered list of machine output writes with the
 target region, machine id, and output index. Merge application follows the
-machine processing order, matching the active Scala simulator semantics
+machine processing order, matching the active Scala engine semantics
 more closely for overlapping output regions.
 
 Runtime defaults for response projection and bounded history can be inspected
@@ -307,7 +307,7 @@ while the push is waiting on Reality Engine.
 
 Reality Engine machine CRUD/import, reset, simulation, diagnostics, and
 `POST /api/perceive` use explicit state ownership. Registry-only reads can run
-while `/api/perceive` owns simulator state. Machine CRUD/import and reset lock
-both registry and simulator state, keeping LocalAI bootstrap imports and direct
-machine CRUD from mutating simulator machines while a perception transition is
+while `/api/perceive` owns engine state. Machine CRUD/import and reset lock
+both registry and engine state, keeping LocalAI bootstrap imports and direct
+machine CRUD from mutating engine machines while a perception transition is
 running.

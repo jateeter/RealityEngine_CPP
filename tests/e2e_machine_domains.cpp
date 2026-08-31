@@ -137,9 +137,9 @@ CaseResult run_domain_case(const DomainCase& dc, int caseIndex) {
     throw std::runtime_error(dc.file.filename().string() + ": machine has no perceptual mapping for domain e2e");
   }
 
-  PerceptualSpaceSimulator simulator(simulator_dimension_for(machine));
+  PerceptualSpaceRuntime spaceRuntime(simulator_dimension_for(machine));
   std::string machineId = machine.id;
-  simulator.add_machine(machine);
+  spaceRuntime.add_machine(machine);
 
   CaseResult result;
   result.machineFile = dc.file.filename().string();
@@ -164,10 +164,10 @@ CaseResult run_domain_case(const DomainCase& dc, int caseIndex) {
     }
     for (size_t i = 0; i < input.size(); ++i) universal[inputRegion.offset + static_cast<int>(i)] = input[i];
 
-    auto step = simulator.process_immediate(universal);
+    auto step = spaceRuntime.process_immediate(universal);
     auto it = step.machineResults.find(machineId);
     if (it == step.machineResults.end()) {
-      throw std::runtime_error(result.machineFile + " / " + result.sequenceName + ": simulator did not process machine");
+      throw std::runtime_error(result.machineFile + " / " + result.sequenceName + ": spaceRuntime did not process machine");
     }
     if (it->second.transitionResult.machineOutput) {
       actualOutputs.push_back(it->second.transitionResult.machineOutput->vector);

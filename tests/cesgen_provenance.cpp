@@ -1,7 +1,7 @@
 // CES provenance trail — C++ side of the life-safety audit-loop test.
 //
 // Pairs with the Scala replacement/runtime provenance tests: drives
-// the same multi-step chains through the C++ PerceptualSpaceSimulator and
+// the same multi-step chains through the C++ PerceptualSpaceRuntime and
 // asserts every emitted mergeBatch entry carries the canonical chain of
 // vector IDs.  Same machines, same inputs, same expected provenance.
 //
@@ -61,7 +61,7 @@ std::string chain_str(const std::vector<std::string>& c) {
 
 void test_fall_confirmed_red(const std::filesystem::path& machinesDir) {
   Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "prov-fall-red");
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
 
@@ -85,7 +85,7 @@ void test_fall_confirmed_red(const std::filesystem::path& machinesDir) {
 
 void test_fall_slow_collapse(const std::filesystem::path& machinesDir) {
   Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "FallDetection.json")), "prov-fall-slow");
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
 
@@ -109,7 +109,7 @@ void test_fall_slow_collapse(const std::filesystem::path& machinesDir) {
 
 void test_rsflipflop_initial(const std::filesystem::path& machinesDir) {
   Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlop.json")), "prov-rsff-set");
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
 
@@ -131,7 +131,7 @@ void test_provenance_non_empty_property(const std::filesystem::path& machinesDir
   // Property: every emitted mergeBatch entry must carry at least its emitter
   // in the provenance chain.  Same property tested in the AI Jest suite.
   Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlop.json")), "prov-rsff-prop");
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
 

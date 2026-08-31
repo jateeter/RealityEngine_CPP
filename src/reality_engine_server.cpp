@@ -17,7 +17,7 @@ namespace {
 class RealityService {
 public:
   RealityService(const std::string& machinesDir, int vectorDimension, const LoadOptions& loadOpts = {})
-      : dimension(vectorDimension), simulator(vectorDimension), perception(vectorDimension), machinesDirectory(machinesDir) {
+      : dimension(vectorDimension), spaceRuntime(vectorDimension), perception(vectorDimension), machinesDirectory(machinesDir) {
     namespace fs = std::filesystem;
     std::cerr << "Reality Engine startup — machinesDir=" << machinesDir
               << " vectorDimension=" << vectorDimension
@@ -144,9 +144,9 @@ public:
     });
     server.route("POST", "/api/engine/reset", [this](const http::Request&) {
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       for (auto& [_, m] : machines) m.reset();
-      simulator.reset();
+      spaceRuntime.reset();
       perception.reset();
       return ok(Json::Object{{"success", true}});
     });
@@ -165,20 +165,20 @@ public:
       std::string body;
       {
         std::shared_lock<std::shared_mutex> registryLock(registryMutex);
-        std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+        std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
         // Stamp every line with runtime="cpp" so a single Prometheus scrape
         // config can drive a cross-runtime Grafana dashboard.
-        body = simulator.ces_coverage().to_prometheus_text(machines, {{"runtime", "cpp"}});
+        body = spaceRuntime.ces_coverage().to_prometheus_text(machines, {{"runtime", "cpp"}});
         std::ostringstream extras;
         extras << "# HELP re_runtime_dimension Current dimension of the shared perceptual space.\n";
         extras << "# TYPE re_runtime_dimension gauge\n";
-        extras << "re_runtime_dimension{runtime=\"cpp\"} " << simulator.dimension() << "\n";
+        extras << "re_runtime_dimension{runtime=\"cpp\"} " << spaceRuntime.dimension() << "\n";
         extras << "# HELP re_runtime_required_dimension Max(offset+length) across all registered machine mappings.\n";
         extras << "# TYPE re_runtime_required_dimension gauge\n";
-        extras << "re_runtime_required_dimension{runtime=\"cpp\"} " << simulator.required_dimension() << "\n";
+        extras << "re_runtime_required_dimension{runtime=\"cpp\"} " << spaceRuntime.required_dimension() << "\n";
         extras << "# HELP re_runtime_mapping_version Monotonic version bumped on every add/remove_machine.\n";
         extras << "# TYPE re_runtime_mapping_version gauge\n";
-        extras << "re_runtime_mapping_version{runtime=\"cpp\"} " << simulator.mapping_version() << "\n";
+        extras << "re_runtime_mapping_version{runtime=\"cpp\"} " << spaceRuntime.mapping_version() << "\n";
         body += extras.str();
       }
       http::Response r;
@@ -213,25 +213,25 @@ public:
       return ok(Json::Object{{"success", true}, {"decision", to_json(*decision)}});
     });
     server.route("GET", "/api/runtime/vector-space", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(simulatorMutex);
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
       return ok(Json::Object{
-        {"dimension", static_cast<double>(simulator.dimension())},
-        {"requiredDimension", static_cast<double>(simulator.required_dimension())},
+        {"dimension", static_cast<double>(spaceRuntime.dimension())},
+        {"requiredDimension", static_cast<double>(spaceRuntime.required_dimension())},
         {"encoding", "dense-float64-clamped-0-1"},
-        {"mappingVersion", static_cast<double>(simulator.mapping_version())}
+        {"mappingVersion", static_cast<double>(spaceRuntime.mapping_version())}
       });
     });
     server.route("GET", "/api/runtime/storage-footprint", [this](const http::Request&) {
       return ok(storage_footprint_json());
     });
     server.route("GET", "/api/runtime/options", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(simulatorMutex);
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
       return ok(runtime_options());
     });
     server.route("PATCH", "/api/runtime/options", [this](const http::Request& req) {
       auto body = parse_body(req);
-      std::lock_guard<std::mutex> lock(simulatorMutex);
-      if (body.at("historyLimit").is_number()) simulator.set_history_limit(static_cast<size_t>(body.at("historyLimit").as_number()));
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      if (body.at("historyLimit").is_number()) spaceRuntime.set_history_limit(static_cast<size_t>(body.at("historyLimit").as_number()));
       if (body.at("includeMachineResults").is_bool()) includeMachineResultsDefault = body.at("includeMachineResults").as_bool();
       if (body.at("includePerceptualSpace").is_bool()) includePerceptualSpaceDefault = body.at("includePerceptualSpace").as_bool();
       return ok(runtime_options());
@@ -256,7 +256,7 @@ public:
     // history. A comparison walks these by index across engines and reports
     // the first disagreement, so the window has to be selectable by step
     // rather than by recency.
-    auto trajectory_route = [this](std::vector<TrajectoryEntry> (PerceptualSpaceSimulator::*source)() const) {
+    auto trajectory_route = [this](std::vector<TrajectoryEntry> (PerceptualSpaceRuntime::*source)() const) {
       return [this, source](const http::Request& req) {
         long from = 0;
         size_t limit = 0;
@@ -266,7 +266,7 @@ public:
         if (limitIt != req.queryParams.end() && !limitIt->second.empty())
           limit = static_cast<size_t>(std::max(0L, std::stol(limitIt->second)));
         Json::Array arr;
-        for (const auto& entry : (simulator.*source)()) {
+        for (const auto& entry : (spaceRuntime.*source)()) {
           if (entry.stepNumber < from) continue;
           if (limit > 0 && arr.size() >= limit) break;
           arr.push_back(to_json(entry));
@@ -274,8 +274,8 @@ public:
         return ok(Json::Object{{"history", arr}});
       };
     };
-    server.route("GET", "/api/engine/orev-history", trajectory_route(&PerceptualSpaceSimulator::orev_history));
-    server.route("GET", "/api/engine/isre-history", trajectory_route(&PerceptualSpaceSimulator::isre_history));
+    server.route("GET", "/api/engine/orev-history", trajectory_route(&PerceptualSpaceRuntime::orev_history));
+    server.route("GET", "/api/engine/isre-history", trajectory_route(&PerceptualSpaceRuntime::isre_history));
     server.route("POST", "/api/engine/process", [this](const http::Request& req) {
       auto body = parse_body(req);
       auto vec = json::to_numbers(body.at("vector"));
@@ -327,13 +327,13 @@ public:
       // This served the server registry, which holds machines as declared and
       // is never stepped — and, since registry copies became transition-
       // inhibited, can never advance at all. Both membership and runtime state
-      // now come from the simulator, because "what was loaded" and "what is
+      // now come from the spaceRuntime, because "what was loaded" and "what is
       // running" are different questions and this endpoint is the second one.
       //
       // The summary form carries no per-vector activation, so this is not the
       // list form of #37 or #58; per-Reality-Event state is served by
       // /api/machines/:id and /api/engine/active, both of which already read
-      // the simulator. What it does carry that is runtime-mutable is
+      // the spaceRuntime. What it does carry that is runtime-mutable is
       // `arbiterRule`, `outputMergeTransformation` and `outputMergeLocked`.
       // Those are retuned through set_output_merge_transformation, which has to
       // write both copies "so a read of either agrees" — a correctness
@@ -344,8 +344,8 @@ public:
       // Adding live activation to this payload would be a cross-runtime
       // contract change: LSP and Scala return the same summary shape, and a
       // field added here alone is the divergence class #176 and #197 were about.
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
-      for (const auto& m : machines_in_canonical_order(simulator.running_machines())) {
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      for (const auto& m : machines_in_canonical_order(spaceRuntime.running_machines())) {
         arr.push_back(m.to_json());
       }
       return ok(Json::Object{{"machines", arr}});
@@ -354,17 +354,17 @@ public:
       std::shared_lock<std::shared_mutex> lock(registryMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
-      // Prefer the simulator's copy: add_machine registers the machine twice,
-      // here and in the simulator, and only the simulator's is stepped. Serving
+      // Prefer the spaceRuntime's copy: add_machine registers the machine twice,
+      // here and in the spaceRuntime, and only the spaceRuntime's is stepped. Serving
       // this from the registry reported every Reality Event with its initial
       // isActive however far the machine had advanced, so activation could not
       // be observed from outside the process — a machine firing on every step
       // still read as holding only its initial REs (#37).
       //
-      // The registry copy remains the fallback for a machine the simulator does
+      // The registry copy remains the fallback for a machine the spaceRuntime does
       // not hold, which is any machine without a perceptualMapping.
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
-      if (const Machine* live = simulator.running_machine(req.pathParams.at("id")))
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      if (const Machine* live = spaceRuntime.running_machine(req.pathParams.at("id")))
         return ok(Json::Object{{"machine", live->to_json(true)}});
       return ok(Json::Object{{"machine", it->second.to_json(true)}});
     });
@@ -393,14 +393,14 @@ public:
     server.route("POST", "/api/machines", [this](const http::Request& req) {
       Machine m = load_machine_from_json_string(req.body);
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
     });
     server.route("PUT", "/api/machines/:id", [this](const http::Request& req) {
       Machine m = load_machine_from_json_string(req.body, req.pathParams.at("id"));
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       remove_machine(req.pathParams.at("id"));
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
@@ -408,7 +408,7 @@ public:
     server.route("PATCH", "/api/machines/:id", [this](const http::Request& req) {
       auto body = parse_body(req);
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       Machine updated = it->second;
@@ -423,7 +423,7 @@ public:
     });
     server.route("DELETE", "/api/machines/:id", [this](const http::Request& req) {
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       bool removed = remove_machine(req.pathParams.at("id"));
       return ok(Json::Object{{"success", removed}});
     });
@@ -521,8 +521,8 @@ public:
 
       std::vector<SequenceObservation> observations;
       {
-        std::lock_guard<std::mutex> lock(simulatorMutex);
-        observations = simulator.semantic_audit().recent(limit);
+        std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+        observations = spaceRuntime.semantic_audit().recent(limit);
       }
       Json::Array records;
       for (const auto& o : observations) {
@@ -589,14 +589,14 @@ public:
       std::transform(stem.begin(), stem.end(), stem.begin(), [](unsigned char c) { return std::isalnum(c) ? static_cast<char>(std::tolower(c)) : '-'; });
       Machine m = load_machine_from_json_string(raw, "machine-" + stem);
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}, {"message", "Machine loaded successfully"}});
     });
     server.route("POST", "/api/machines/json/import", [this](const http::Request& req) {
       Machine m = load_machine_from_json_string(req.body);
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
     });
@@ -625,16 +625,16 @@ public:
     // produces a run whose results mean nothing and which nothing distinguishes
     // from a valid one, so unlocking is a separate, deliberate act.
     //
-    // Every write applies to the simulator's machine as well as the registry
-    // copy: those are two objects and only the simulator's is stepped, so
+    // Every write applies to the spaceRuntime's machine as well as the registry
+    // copy: those are two objects and only the spaceRuntime's is stepped, so
     // setting one alone would leave the knob reading differently from the knob
     // in force.
     server.route("GET", "/api/machines/:id/output-merge", [this](const http::Request& req) {
       std::shared_lock<std::shared_mutex> lock(registryMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
-      const Machine* live = simulator.running_machine(req.pathParams.at("id"));
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      const Machine* live = spaceRuntime.running_machine(req.pathParams.at("id"));
       const Machine& m = live ? *live : it->second;
       Json::Array available;
       // Boolean gates first, then the multi-valued chain folds. Order is the
@@ -667,8 +667,8 @@ public:
         return http::error_response(
           "outputMergeTransformation is locked; unlock it before changing a training variable", 423);
       it->second.outputMergeTransformation = t;
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
-      simulator.set_output_merge_transformation(req.pathParams.at("id"), t);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      spaceRuntime.set_output_merge_transformation(req.pathParams.at("id"), t);
       return ok(Json::Object{{"success", true}, {"machineId", it->second.id},
                              {"outputMergeTransformation", to_string(t)},
                              {"locked", it->second.outputMergeLocked}});
@@ -682,8 +682,8 @@ public:
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       it->second.outputMergeLocked = locked;
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
-      simulator.set_output_merge_locked(req.pathParams.at("id"), locked);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      spaceRuntime.set_output_merge_locked(req.pathParams.at("id"), locked);
       return ok(Json::Object{{"success", true}, {"machineId", it->second.id}, {"locked", locked}});
     });
     server.route("POST", "/api/machines/:id/checkpoints", [this](const http::Request& req) {
@@ -692,12 +692,12 @@ public:
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       // Snapshot the machine as it is *running*, not as it was loaded. The
-      // registry copy is never stepped — the simulator holds the one that is —
+      // registry copy is never stepped — the spaceRuntime holds the one that is —
       // so checkpointing it captured the machine's initial Reality Event
       // activation whatever state it had reached, and restoring it could not
       // return the machine to the step it was captured at (#37).
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
-      const Machine* live = simulator.running_machine(req.pathParams.at("id"));
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      const Machine* live = spaceRuntime.running_machine(req.pathParams.at("id"));
       Checkpoint cp{make_id("checkpoint"), body.at("label").as_string(), now_ms(),
                     live ? *live : it->second};
       {
@@ -708,7 +708,7 @@ public:
     });
     server.route("POST", "/api/machines/:machineId/checkpoints/:cpId/restore", [this](const http::Request& req) {
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
-      std::lock_guard<std::mutex> simulatorLock(simulatorMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       std::lock_guard<std::mutex> cpLock(checkpointMutex);
       auto machineIt = checkpoints.find(req.pathParams.at("machineId"));
       if (machineIt == checkpoints.end() || !machineIt->second.count(req.pathParams.at("cpId"))) return http::error_response("Checkpoint not found", 404);
@@ -722,33 +722,33 @@ public:
       return ok(Json::Object{{"success", removed}});
     });
     server.route("GET", "/api/machine-graph", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(simulatorMutex);
-      return ok(simulator.machine_graph_data());
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      return ok(spaceRuntime.machine_graph_data());
     });
     server.route("POST", "/api/perceptual-simulation/step", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(simulatorMutex);
-      auto s = simulator.step();
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      auto s = spaceRuntime.step();
       if (!s) return ok(Json::Object{{"done", true}, {"success", true}});
       return ok(Json::Object{{"success", true}, {"step", to_json(*s)}});
     });
     server.route("POST", "/api/perceptual-simulation/reset", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(simulatorMutex);
-      simulator.reset();
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      spaceRuntime.reset();
       return ok(Json::Object{{"success", true}});
     });
     server.route("POST", "/api/perceptual-simulation/start", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(simulatorMutex);
-      simulator.start();
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      spaceRuntime.start();
       return ok(Json::Object{{"success", true}});
     });
     server.route("POST", "/api/perceptual-simulation/stop", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(simulatorMutex);
-      simulator.stop();
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      spaceRuntime.stop();
       return ok(Json::Object{{"success", true}});
     });
     server.route("GET", "/api/perceptual-simulation/state", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(simulatorMutex);
-      return ok(simulator.state_json());
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      return ok(spaceRuntime.state_json());
     });
     // Arbitration records for the most recent step (ARBITER_CONTRACT.md 6).
     //
@@ -763,8 +763,8 @@ public:
     // cross-runtime parity is the acceptance test for this contract, so a
     // divergent shape here would defeat the endpoint's own purpose.
     server.route("GET", "/api/arbitration", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(simulatorMutex);
-      const auto hist = simulator.history();
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      const auto hist = spaceRuntime.history();
       Json::Array records;
       if (!hist.empty()) {
         auto emit = [](const Contribution& c) {
@@ -800,13 +800,13 @@ public:
     });
     server.route("GET", "/api/perceptual-simulation/history", [this](const http::Request&) {
       Json::Array arr;
-      std::lock_guard<std::mutex> lock(simulatorMutex);
-      for (const auto& s : simulator.history()) arr.push_back(to_json(s));
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      for (const auto& s : spaceRuntime.history()) arr.push_back(to_json(s));
       return ok(Json::Object{{"history", arr}});
     });
     server.route("POST", "/api/perceptual-simulation/configure/chunk", [this](const http::Request& req) {
       auto body = parse_body(req);
-      std::lock_guard<std::mutex> lock(simulatorMutex);
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
       if (body.at("reset").as_bool(false)) buffer.clear();
       for (const auto& v : body.at("vectors").is_array() ? body.at("vectors").array() : Json::Array{}) buffer.push_back(json::to_numbers(v));
       const auto& cfg = body.at("config").is_object() ? body.at("config") : body;
@@ -817,8 +817,8 @@ public:
       return ok(Json::Object{{"success", true}, {"bufferedVectors", static_cast<double>(buffer.size())}});
     });
     server.route("POST", "/api/perceptual-simulation/configure/commit", [this](const http::Request&) {
-      std::lock_guard<std::mutex> lock(simulatorMutex);
-      simulator.configure(buffer, bufferedRegion, bufferedDelay);
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      spaceRuntime.configure(buffer, bufferedRegion, bufferedDelay);
       buffer.clear();
       return ok(Json::Object{{"success", true}});
     });
@@ -850,7 +850,7 @@ public:
       bool includePerceptualSpace = body.at("includePerceptualSpace").as_bool(includePerceptualSpaceDefault);
 
       // Polymorphic input — exactly one of vector / sparseVector / domainVectors.
-      // The simulator's tolerant set_vector handles over/under-sized dense inputs.
+      // The spaceRuntime's tolerant set_vector handles over/under-sized dense inputs.
       Vector assembled;
       bool haveInput = false;
       if (body.at("vector").is_array()) {
@@ -864,7 +864,7 @@ public:
           if (!any || idx > maxIdx) maxIdx = idx;
           any = true;
         }
-        size_t len = std::max<size_t>(any ? maxIdx + 1 : 0, static_cast<size_t>(simulator.dimension()));
+        size_t len = std::max<size_t>(any ? maxIdx + 1 : 0, static_cast<size_t>(spaceRuntime.dimension()));
         assembled.assign(len, 0.0);
         for (const auto& e : body.at("sparseVector").array()) {
           assembled[static_cast<size_t>(e.at("index").as_number())] = e.at("value").as_number();
@@ -877,7 +877,7 @@ public:
           size_t n = r.at("values").is_array() ? r.at("values").array().size() : 0;
           maxEnd = std::max(maxEnd, off + n);
         }
-        size_t len = std::max<size_t>(maxEnd, static_cast<size_t>(simulator.dimension()));
+        size_t len = std::max<size_t>(maxEnd, static_cast<size_t>(spaceRuntime.dimension()));
         assembled.assign(len, 0.0);
         for (const auto& r : body.at("domainVectors").array()) {
           size_t off = static_cast<size_t>(r.at("offset").as_number());
@@ -890,8 +890,8 @@ public:
 
       SimulationStep step;
       {
-        std::lock_guard<std::mutex> lock(simulatorMutex);
-        step = simulator.process_immediate(assembled, overrideType);
+        std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+        step = spaceRuntime.process_immediate(assembled, overrideType);
         perception.perceptual_space().set_vector(step.perceptualSpace);
       }
       Json out = to_json(step, includeMachineResults, includePerceptualSpace);
@@ -1120,17 +1120,17 @@ private:
   void add_machine(const Machine& m) {
     machines[m.id] = m;
     // The registry holds the machine as declared, and it stays that way: only
-    // the simulator's copy is stepped by the PE->RE->PE path, so only it may
+    // the spaceRuntime's copy is stepped by the PE->RE->PE path, so only it may
     // transition. Without this, any endpoint calling process_input on a
     // registry machine advanced a copy nothing else observes and forked the two
     // silently for the life of the process.
     machines[m.id].transitionsInhibited = true;
     if (m.perceptualMapping) {
-      try { simulator.add_machine(m); } catch (...) {}
+      try { spaceRuntime.add_machine(m); } catch (...) {}
     }
   }
   bool remove_machine(const std::string& id) {
-    simulator.remove_machine(id);
+    spaceRuntime.remove_machine(id);
     return machines.erase(id) > 0;
   }
   Json stats() const {
@@ -1144,7 +1144,7 @@ private:
       // Read the machine as it is *running*, not as it was registered.
       //
       // add_machine keeps two copies — one in this registry, one in the
-      // simulator — and only the simulator's is stepped. Reading the registry
+      // spaceRuntime — and only the spaceRuntime's is stepped. Reading the registry
       // here reported every Reality Event with its post-ingestion isActive no
       // matter how far the machine had advanced: the list was correct at step 0
       // and then frozen for the life of the process. Matching still worked, so
@@ -1157,11 +1157,11 @@ private:
       // machine-detail path; this one was left on the registry and reproduced
       // the defect verbatim.
       //
-      // Falls back to the registered copy when the simulator holds no such
+      // Falls back to the registered copy when the spaceRuntime holds no such
       // machine. A machine without a perceptualMapping is never added there, so
       // it has no running form to report and its declared initial state is the
       // only truthful answer.
-      const Machine* src = simulator.running_machine(id);
+      const Machine* src = spaceRuntime.running_machine(id);
       if (src == nullptr) src = &registered;
       // all_sequences() returns by value; bind it once rather than copying the
       // whole vector again per iteration.
@@ -1217,7 +1217,7 @@ private:
   }
   Json runtime_options() const {
     return Json::Object{
-      {"historyLimit", static_cast<double>(simulator.history_limit())},
+      {"historyLimit", static_cast<double>(spaceRuntime.history_limit())},
       {"includeMachineResults", includeMachineResultsDefault},
       {"includePerceptualSpace", includePerceptualSpaceDefault},
       {"projectionControls", Json::Object{
@@ -1281,14 +1281,14 @@ private:
   std::map<std::string, CriticalEventSequence> sequences;
   std::map<std::string, std::map<std::string, Checkpoint>> checkpoints;
   mutable std::shared_mutex registryMutex;
-  mutable std::mutex simulatorMutex;
+  mutable std::mutex spaceRuntimeMutex;
   mutable std::mutex vectorMutex;
   mutable std::mutex sequenceMutex;
   mutable std::mutex checkpointMutex;
   mutable std::mutex historyMutex;
   int dimension = 768;
   double matchThreshold = 0.5;
-  PerceptualSpaceSimulator simulator;
+  PerceptualSpaceRuntime spaceRuntime;
   PerceptionMapper perception;
   std::string machinesDirectory;
   std::vector<Json> engineHistory;

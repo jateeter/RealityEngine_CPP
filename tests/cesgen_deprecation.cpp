@@ -63,7 +63,7 @@ void test_loader_propagates_lifecycle(const std::filesystem::path& machinesDir) 
 
 void test_engine_stamps_deprecation(const std::filesystem::path& machinesDir) {
   Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-stamp");
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
   Vector v(static_cast<size_t>(off) + 2, 0.0);
@@ -87,7 +87,7 @@ void test_engine_stamps_deprecation(const std::filesystem::path& machinesDir) {
 
 void test_non_deprecated_has_no_stamp(const std::filesystem::path& machinesDir) {
   Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-set");
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
   Vector v(static_cast<size_t>(off) + 2, 0.0);
@@ -107,7 +107,7 @@ void test_non_deprecated_has_no_stamp(const std::filesystem::path& machinesDir) 
 void test_prom_emits_deprecated_fires(const std::filesystem::path& machinesDir) {
   Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-prom");
   std::map<std::string, Machine> machines{{m.id, m}};
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
   Vector v(static_cast<size_t>(off) + 2, 0.0);

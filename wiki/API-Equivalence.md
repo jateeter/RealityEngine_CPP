@@ -37,8 +37,8 @@ The C++ APIs mirror the Scala/Akka route shapes used by `RealityEngine_Scala`.
 
 ## Concurrency Notes
 
-Reality Engine separates machine-registry ownership from mutable simulator
-ownership. Registry-only reads can run while `/api/perceive` owns simulator
+Reality Engine separates machine-registry ownership from mutable engine
+ownership. Registry-only reads can run while `/api/perceive` owns engine
 state. Machine CRUD/import and reset lock both state owners.
 
 Perception Engine serializes sensor/source writes and uses a single-flight

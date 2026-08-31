@@ -109,7 +109,7 @@ void test_full_cascade() {
   Machine agx055 = load("AGX055_yuma-facility-ai-synthesis-bridge.json",     "casc-agx055");
   Machine yieldAI = load("AgYieldOptimizationAI.json",                       "casc-agyield");
 
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(agx051);
   sim.add_machine(agx052);
   sim.add_machine(agx053);
@@ -139,7 +139,7 @@ void test_full_cascade() {
 
     // AGX055 must not fire during stage 1 — the URGENT bit isn't in
     // perceptualSpace[256] until AGX051's terminal tick merges, and the
-    // simulator takes snapshots BEFORE applying merges.  Catches a
+    // spaceRuntime takes snapshots BEFORE applying merges.  Catches a
     // regression where the snapshot/merge ordering inverts.
     EXPECT(find_merge(s, agx055.id) == nullptr,
            "stage 1 tick " + std::to_string(tick) + ": AGX055 fired before bridge inputs propagated");
@@ -239,7 +239,7 @@ void test_facility_stable_path() {
   Machine agx054 = load("AGX054_yuma-co2-safety-compliance-officer.json", "stable-agx054");
   Machine agx055 = load("AGX055_yuma-facility-ai-synthesis-bridge.json",  "stable-agx055");
 
-  PerceptualSpaceSimulator sim(0);
+  PerceptualSpaceRuntime sim(0);
   sim.add_machine(agx051);
   sim.add_machine(agx052);
   sim.add_machine(agx053);
@@ -286,7 +286,7 @@ void test_cascade_determinism() {
     Machine agx053 = load("AGX053_yuma-vpd-hvac-service-planner.json",         "det-agx053");
     Machine agx054 = load("AGX054_yuma-co2-safety-compliance-officer.json",    "det-agx054");
     Machine agx055 = load("AGX055_yuma-facility-ai-synthesis-bridge.json",     "det-agx055");
-    PerceptualSpaceSimulator sim(0);
+    PerceptualSpaceRuntime sim(0);
     sim.add_machine(agx051); sim.add_machine(agx052); sim.add_machine(agx053);
     sim.add_machine(agx054); sim.add_machine(agx055);
     std::vector<SimulationStep> steps;

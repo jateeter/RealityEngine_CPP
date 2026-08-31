@@ -890,9 +890,9 @@ Json PerceptionMapper::diagnostic_mapping(const Vector& universalInputSpace, con
   return Json::Object{{"universalSpace", Json::Object{{"dimension", static_cast<double>(dimension)}, {"nonZeroValues", nonzero}}}, {"machineMappings", mappings}};
 }
 
-PerceptualSpaceSimulator::PerceptualSpaceSimulator(int dim) : initialDimension(dim < 0 ? 0 : dim), space(dim < 0 ? 0 : dim) {}
-int PerceptualSpaceSimulator::dimension() const { return space.dimension(); }
-int PerceptualSpaceSimulator::required_dimension() const {
+PerceptualSpaceRuntime::PerceptualSpaceRuntime(int dim) : initialDimension(dim < 0 ? 0 : dim), space(dim < 0 ? 0 : dim) {}
+int PerceptualSpaceRuntime::dimension() const { return space.dimension(); }
+int PerceptualSpaceRuntime::required_dimension() const {
   int req = 0;
   for (const auto& [_, m] : machines) {
     if (!m.perceptualMapping) continue;
@@ -901,12 +901,12 @@ int PerceptualSpaceSimulator::required_dimension() const {
   }
   return req;
 }
-long PerceptualSpaceSimulator::mapping_version() const { return mappingVersion; }
-CesCoverageRegistry& PerceptualSpaceSimulator::ces_coverage() { return coverage; }
-const CesCoverageRegistry& PerceptualSpaceSimulator::ces_coverage() const { return coverage; }
-SemanticAuditLog& PerceptualSpaceSimulator::semantic_audit() { return semanticAudit; }
-const SemanticAuditLog& PerceptualSpaceSimulator::semantic_audit() const { return semanticAudit; }
-void PerceptualSpaceSimulator::add_machine(const Machine& machine) {
+long PerceptualSpaceRuntime::mapping_version() const { return mappingVersion; }
+CesCoverageRegistry& PerceptualSpaceRuntime::ces_coverage() { return coverage; }
+const CesCoverageRegistry& PerceptualSpaceRuntime::ces_coverage() const { return coverage; }
+SemanticAuditLog& PerceptualSpaceRuntime::semantic_audit() { return semanticAudit; }
+const SemanticAuditLog& PerceptualSpaceRuntime::semantic_audit() const { return semanticAudit; }
+void PerceptualSpaceRuntime::add_machine(const Machine& machine) {
   if (!machine.perceptualMapping) throw std::invalid_argument("Machine has no perceptual mapping");
   const auto& mapping = *machine.perceptualMapping;
   int needed = std::max(mapping.input.offset + mapping.input.length,
@@ -939,7 +939,7 @@ void PerceptualSpaceSimulator::add_machine(const Machine& machine) {
     }
   }
 }
-bool PerceptualSpaceSimulator::remove_machine(const std::string& machineId) {
+bool PerceptualSpaceRuntime::remove_machine(const std::string& machineId) {
   bool removed = machines.erase(machineId) > 0;
   if (removed) { ++mappingVersion; edgesDirty = true; }
   // Drop subscriptions this machine had registered.
@@ -951,12 +951,12 @@ bool PerceptualSpaceSimulator::remove_machine(const std::string& machineId) {
   }
   return removed;
 }
-size_t PerceptualSpaceSimulator::event_bus_subscription_count() const {
+size_t PerceptualSpaceRuntime::event_bus_subscription_count() const {
   size_t n = 0;
   for (const auto& [_, list] : eventBusSubscriptions) n += list.size();
   return n;
 }
-std::vector<EventBusWrite> PerceptualSpaceSimulator::apply_event_bus(const std::vector<MachineFirings>& firings) {
+std::vector<EventBusWrite> PerceptualSpaceRuntime::apply_event_bus(const std::vector<MachineFirings>& firings) {
   if (eventBusSubscriptions.empty()) return {};
   std::vector<EventBusWrite> writes;
   std::set<std::string> seen;
@@ -1010,7 +1010,7 @@ std::vector<EventBusWrite> PerceptualSpaceSimulator::apply_event_bus(const std::
   }
   return writes;
 }
-void PerceptualSpaceSimulator::configure(std::vector<Vector> inputSequence, RegionMapping inputRegion, long delay, std::optional<int> maxSteps) {
+void PerceptualSpaceRuntime::configure(std::vector<Vector> inputSequence, RegionMapping inputRegion, long delay, std::optional<int> maxSteps) {
   configuredInputSequence = std::move(inputSequence);
   configuredInputRegion = inputRegion;
   configuredStepDelayMs = delay;
@@ -1019,29 +1019,29 @@ void PerceptualSpaceSimulator::configure(std::vector<Vector> inputSequence, Regi
   reset();
   configured = true;
 }
-void PerceptualSpaceSimulator::start() { if (!configured) throw std::runtime_error("Simulation not configured"); running = true; }
-void PerceptualSpaceSimulator::stop() { running = false; }
-const Machine* PerceptualSpaceSimulator::running_machine(const std::string& machineId) const {
+void PerceptualSpaceRuntime::start() { if (!configured) throw std::runtime_error("Simulation not configured"); running = true; }
+void PerceptualSpaceRuntime::stop() { running = false; }
+const Machine* PerceptualSpaceRuntime::running_machine(const std::string& machineId) const {
   auto it = machines.find(machineId);
   return it == machines.end() ? nullptr : &it->second;
 }
-const std::map<std::string, Machine>& PerceptualSpaceSimulator::running_machines() const {
+const std::map<std::string, Machine>& PerceptualSpaceRuntime::running_machines() const {
   return machines;
 }
-bool PerceptualSpaceSimulator::set_output_merge_transformation(const std::string& machineId,
+bool PerceptualSpaceRuntime::set_output_merge_transformation(const std::string& machineId,
                                                                OutputMergeTransformation t) {
   auto it = machines.find(machineId);
   if (it == machines.end()) return false;
   it->second.outputMergeTransformation = t;
   return true;
 }
-bool PerceptualSpaceSimulator::set_output_merge_locked(const std::string& machineId, bool locked) {
+bool PerceptualSpaceRuntime::set_output_merge_locked(const std::string& machineId, bool locked) {
   auto it = machines.find(machineId);
   if (it == machines.end()) return false;
   it->second.outputMergeLocked = locked;
   return true;
 }
-void PerceptualSpaceSimulator::reset() {
+void PerceptualSpaceRuntime::reset() {
   running = false;
   space.reset();
   steps.clear();
@@ -1057,7 +1057,7 @@ void PerceptualSpaceSimulator::reset() {
   latchedEventBits.clear();
   for (auto& [_, m] : machines) m.reset();
 }
-std::optional<SimulationStep> PerceptualSpaceSimulator::step() {
+std::optional<SimulationStep> PerceptualSpaceRuntime::step() {
   if (!configured) throw std::runtime_error("Simulation not configured");
   if (currentStep >= static_cast<int>(configuredInputSequence.size())) { stop(); return std::nullopt; }
   if (configuredMaxSteps && currentStep >= *configuredMaxSteps) { stop(); return std::nullopt; }
@@ -1068,7 +1068,7 @@ std::optional<SimulationStep> PerceptualSpaceSimulator::step() {
   if (steps.size() > maxHistory) steps.resize(maxHistory);
   return result;
 }
-SimulationStep PerceptualSpaceSimulator::process_immediate(const Vector& vector, std::optional<ComparatorType> overrideType) {
+SimulationStep PerceptualSpaceRuntime::process_immediate(const Vector& vector, std::optional<ComparatorType> overrideType) {
   space.set_vector(vector);
   // Re-apply previously-latched event-bus bits so the caller's input
   // vector (which zero-fills past its length) doesn't clobber persistent
@@ -1107,7 +1107,7 @@ std::string join_ids(const std::vector<std::string>& ids) {
 }
 } // namespace
 
-SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optional<ComparatorType> overrideType) {
+SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<ComparatorType> overrideType) {
   // ISRE(n) observation point.  This is the input space reality event the
   // corpus is about to be presented with: every machine snapshot below is
   // extracted from exactly this state, so capturing it here — before the first
@@ -1481,7 +1481,7 @@ SimulationStep PerceptualSpaceSimulator::run_phases(int stepNumber, std::optiona
   record_trajectory(std::move(isre), std::move(orev));
   return step;
 }
-void PerceptualSpaceSimulator::record_trajectory(TrajectoryEntry isre, TrajectoryEntry orev) {
+void PerceptualSpaceRuntime::record_trajectory(TrajectoryEntry isre, TrajectoryEntry orev) {
   isreHistory.push_back(std::move(isre));
   orevHistory.push_back(std::move(orev));
   // Trim the oldest, keeping ascending order intact.
@@ -1490,7 +1490,7 @@ void PerceptualSpaceSimulator::record_trajectory(TrajectoryEntry isre, Trajector
   if (orevHistory.size() > maxTrajectory)
     orevHistory.erase(orevHistory.begin(), orevHistory.begin() + static_cast<long>(orevHistory.size() - maxTrajectory));
 }
-void PerceptualSpaceSimulator::rebuild_edge_cache() const {
+void PerceptualSpaceRuntime::rebuild_edge_cache() const {
   cachedEdges.clear();
   for (const auto& [sid, sm] : machines) {
     if (!sm.perceptualMapping) continue;
@@ -1508,7 +1508,7 @@ void PerceptualSpaceSimulator::rebuild_edge_cache() const {
   edgesDirty = false;
 }
 
-Json PerceptualSpaceSimulator::machine_graph_data() const {
+Json PerceptualSpaceRuntime::machine_graph_data() const {
   Json::Array nodes;
   for (const auto& m : machines_in_canonical_order(machines)) {
     if (!m.perceptualMapping) continue;
@@ -1521,31 +1521,31 @@ Json PerceptualSpaceSimulator::machine_graph_data() const {
   return Json::Object{{"nodes", nodes}, {"edges", cachedEdges},
       {"perceptualSpaceDimension", static_cast<double>(space.dimension())}};
 }
-Json PerceptualSpaceSimulator::state_json() const {
+Json PerceptualSpaceRuntime::state_json() const {
   Json::Array machineJson;
   for (const auto& m : machines_in_canonical_order(machines)) machineJson.push_back(m.to_json());
   return Json::Object{{"state", Json::Object{{"perceptualSpace", json::numbers(space.vector())}, {"currentStep", static_cast<double>(currentStep)}, {"isRunning", running}, {"machines", machineJson}}}};
 }
-std::vector<SimulationStep> PerceptualSpaceSimulator::history() const { return steps; }
-void PerceptualSpaceSimulator::set_history_limit(size_t limit) {
+std::vector<SimulationStep> PerceptualSpaceRuntime::history() const { return steps; }
+void PerceptualSpaceRuntime::set_history_limit(size_t limit) {
   maxHistory = limit;
   if (steps.size() > maxHistory) steps.resize(maxHistory);
 }
-size_t PerceptualSpaceSimulator::history_limit() const { return maxHistory; }
-std::vector<TrajectoryEntry> PerceptualSpaceSimulator::orev_history() const { return orevHistory; }
-std::vector<TrajectoryEntry> PerceptualSpaceSimulator::isre_history() const { return isreHistory; }
-void PerceptualSpaceSimulator::set_trajectory_limit(size_t limit) {
+size_t PerceptualSpaceRuntime::history_limit() const { return maxHistory; }
+std::vector<TrajectoryEntry> PerceptualSpaceRuntime::orev_history() const { return orevHistory; }
+std::vector<TrajectoryEntry> PerceptualSpaceRuntime::isre_history() const { return isreHistory; }
+void PerceptualSpaceRuntime::set_trajectory_limit(size_t limit) {
   maxTrajectory = limit;
   if (isreHistory.size() > maxTrajectory)
     isreHistory.erase(isreHistory.begin(), isreHistory.begin() + static_cast<long>(isreHistory.size() - maxTrajectory));
   if (orevHistory.size() > maxTrajectory)
     orevHistory.erase(orevHistory.begin(), orevHistory.begin() + static_cast<long>(orevHistory.size() - maxTrajectory));
 }
-size_t PerceptualSpaceSimulator::trajectory_limit() const { return maxTrajectory; }
-PerceptualSpace& PerceptualSpaceSimulator::perceptual_space() { return space; }
-int PerceptualSpaceSimulator::current_step() const { return currentStep; }
-bool PerceptualSpaceSimulator::is_running() const { return running; }
-long PerceptualSpaceSimulator::step_delay_ms() const { return configuredStepDelayMs; }
+size_t PerceptualSpaceRuntime::trajectory_limit() const { return maxTrajectory; }
+PerceptualSpace& PerceptualSpaceRuntime::perceptual_space() { return space; }
+int PerceptualSpaceRuntime::current_step() const { return currentStep; }
+bool PerceptualSpaceRuntime::is_running() const { return running; }
+long PerceptualSpaceRuntime::step_delay_ms() const { return configuredStepDelayMs; }
 
 PerceptionEngine::PerceptionEngine(int vectorDimension)
   : dimension(vectorDimension), persistentVector(static_cast<size_t>(vectorDimension), 0.0) {}
@@ -2350,7 +2350,7 @@ std::string CesCoverageRegistry::to_prometheus_text(
   // empty string, preserving the historical `ces_machines_total N` form.
   auto bl = [&]() -> std::string { return prom_labels_v(baseLabels, {}); };
 
-  out << "# HELP ces_machines_total Number of machines registered with the simulator.\n";
+  out << "# HELP ces_machines_total Number of machines loaded into the reality engine.\n";
   out << "# TYPE ces_machines_total gauge\n";
   out << "ces_machines_total" << bl() << " " << machines.size() << "\n";
 
