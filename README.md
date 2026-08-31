@@ -232,7 +232,7 @@ flags):
 
 Implemented in this repo:
 
-- `RealityVector`, `CriticalEventSequence`, `Machine`, `OutputArbiter`,
+- `RealityEvent`, `CriticalEventSequence`, `Machine`, `OutputArbiter`,
   governance / `PagingDecision`, deprecation lifecycle, STA checker,
   Option A1 narrow-cell declaration + pack/unpack helpers.
 - Configurable universal `PerceptionEngine` extraction and output merge.
