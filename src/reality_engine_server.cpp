@@ -958,7 +958,7 @@ private:
     }
     return values;
   }
-  static RealityVector vector_from_json(const Json& body) {
+  static RealityEvent vector_from_json(const Json& body) {
     std::vector<VectorElement> elements;
     for (const auto& ej : body.at("elements").is_array() ? body.at("elements").array() : Json::Array{}) {
       VectorElement element;
@@ -967,7 +967,7 @@ private:
       if (ej.at("threshold").is_number()) element.threshold = ej.at("threshold").as_number();
       elements.push_back(element);
     }
-    RealityVector vector(elements, body.at("isInitial").as_bool(false), body.at("id").as_string(make_id("vector")));
+    RealityEvent vector(elements, body.at("isInitial").as_bool(false), body.at("id").as_string(make_id("vector")));
     for (const auto& next : body.at("nextVectorIds").is_array() ? body.at("nextVectorIds").array() : Json::Array{}) vector.add_next_vector(next.as_string());
     for (const auto& output : body.at("outputVectors").is_array() ? body.at("outputVectors").array() : Json::Array{}) {
       std::map<std::string, Json> metadata;
@@ -1178,7 +1178,7 @@ private:
     }
     return active;
   }
-  Json active_vector_json(const RealityVector& vector) const {
+  Json active_vector_json(const RealityEvent& vector) const {
     Json full = vector.to_json();
     Json::Array outs;
     for (const auto& o : full.at("outputVectors").is_array() ? full.at("outputVectors").array() : Json::Array{}) {

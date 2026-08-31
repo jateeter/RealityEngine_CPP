@@ -85,7 +85,7 @@ the canonical env-var contract (see [Configuration](#configuration)).
 The Reality Engine service listens under `/api/...` matching the canonical
 runtime surface.
 The Perception Engine service listens under `/api/...` and pushes assembled
-reality vectors to `POST /api/perceive` on the Reality Engine.  Deployment
+Reality Events to `POST /api/perceive` on the Reality Engine.  Deployment
 defaults to `VECTOR_DIMENSION=7680` under the cross-runtime contract; the
 intended vector model derives the logical perceptual-space dimension from
 active machine and source mappings — see [Vector Management](docs/VECTOR_MANAGEMENT.md).

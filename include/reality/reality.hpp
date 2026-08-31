@@ -183,7 +183,7 @@ struct MachineTransitionResult {
   ArbiterMetadata arbiterMetadata;
 };
 
-class RealityVector {
+class RealityEvent {
 public:
   std::string id;
   std::vector<VectorElement> elements;
@@ -191,8 +191,8 @@ public:
   ComparatorType matchAlgorithm = ComparatorType::Gte;
   std::map<std::string, Json> metadata;
 
-  RealityVector() = default;
-  RealityVector(std::vector<VectorElement> elems, bool initial, std::string vectorId = make_id("vector"));
+  RealityEvent() = default;
+  RealityEvent(std::vector<VectorElement> elems, bool initial, std::string vectorId = make_id("vector"));
 
   bool is_active() const;
   // Activate with an optional predecessor chain so downstream outputs can
@@ -250,17 +250,17 @@ public:
   long days_since_deprecation() const;
 
   explicit CriticalEventSequence(std::string sequenceName = "unnamed", std::string sequenceId = make_id("sequence"));
-  void add_vector(const RealityVector& vector);
-  std::optional<RealityVector*> get_vector(const std::string& vectorId);
-  std::vector<RealityVector*> active_vectors();
-  std::vector<RealityVector> all_vectors() const;
+  void add_vector(const RealityEvent& vector);
+  std::optional<RealityEvent*> get_vector(const std::string& vectorId);
+  std::vector<RealityEvent*> active_vectors();
+  std::vector<RealityEvent> all_vectors() const;
   std::pair<bool, std::vector<std::string>> validate() const;
   SequenceResult transition(const Vector& input, std::optional<ComparatorType> overrideType = std::nullopt);
   void reset();
   Json to_json() const;
 
 private:
-  std::map<std::string, RealityVector> vectors;
+  std::map<std::string, RealityEvent> vectors;
 };
 
 class OutputArbiter {

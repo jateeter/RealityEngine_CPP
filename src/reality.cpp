@@ -501,37 +501,37 @@ MatchAlgorithm match_algorithm_from_string(const std::string& s) {
   throw std::invalid_argument("Unknown match algorithm: " + s);
 }
 
-RealityVector::RealityVector(std::vector<VectorElement> elems, bool initial, std::string vectorId)
+RealityEvent::RealityEvent(std::vector<VectorElement> elems, bool initial, std::string vectorId)
   : id(std::move(vectorId)), elements(std::move(elems)), isInitial(initial),
     state(initial ? VectorState::Active : VectorState::Inactive) {}
 
-bool RealityVector::is_active() const { return state == VectorState::Active; }
-void RealityVector::set_active(const std::vector<std::string>& predecessor) {
+bool RealityEvent::is_active() const { return state == VectorState::Active; }
+void RealityEvent::set_active(const std::vector<std::string>& predecessor) {
   state = VectorState::Active;
   predecessorChain = predecessor;
 }
-void RealityVector::clear_active() {
+void RealityEvent::clear_active() {
   if (!isInitial) {
     state = VectorState::Inactive;
     predecessorChain.clear();
   }
 }
-std::vector<std::string> RealityVector::provenance_chain() const {
+std::vector<std::string> RealityEvent::provenance_chain() const {
   std::vector<std::string> chain = predecessorChain;
   chain.push_back(id);
   return chain;
 }
-bool RealityVector::was_just_matched() const { return justMatched; }
-void RealityVector::set_was_just_matched() { justMatched = true; }
-void RealityVector::clear_was_just_matched() { justMatched = false; }
-void RealityVector::add_next_vector(const std::string& vectorId) {
+bool RealityEvent::was_just_matched() const { return justMatched; }
+void RealityEvent::set_was_just_matched() { justMatched = true; }
+void RealityEvent::clear_was_just_matched() { justMatched = false; }
+void RealityEvent::add_next_vector(const std::string& vectorId) {
   if (std::find(nextVectorIds.begin(), nextVectorIds.end(), vectorId) == nextVectorIds.end()) nextVectorIds.push_back(vectorId);
 }
-void RealityVector::add_output_vector(OutputVector ov) { outputVectors.push_back(std::move(ov)); }
-const std::vector<std::string>& RealityVector::next_vector_ids() const { return nextVectorIds; }
-const std::vector<OutputVector>& RealityVector::output_vectors() const { return outputVectors; }
+void RealityEvent::add_output_vector(OutputVector ov) { outputVectors.push_back(std::move(ov)); }
+const std::vector<std::string>& RealityEvent::next_vector_ids() const { return nextVectorIds; }
+const std::vector<OutputVector>& RealityEvent::output_vectors() const { return outputVectors; }
 
-MatchResult RealityVector::match(const Vector& input, std::optional<ComparatorType> overrideType) const {
+MatchResult RealityEvent::match(const Vector& input, std::optional<ComparatorType> overrideType) const {
   if (input.size() != elements.size()) {
     MatchResult r;
     r.metadata["error"] = "Vector dimension mismatch";
@@ -587,7 +587,7 @@ MatchResult RealityVector::match(const Vector& input, std::optional<ComparatorTy
   return MatchResult{true, elements.empty() ? 0.0 : total / static_cast<double>(elements.size()), {}};
 }
 
-RealityVector::Transition RealityVector::transition(const Vector& input, std::optional<ComparatorType> overrideType) {
+RealityEvent::Transition RealityEvent::transition(const Vector& input, std::optional<ComparatorType> overrideType) {
   auto mr = match(input, overrideType);
   if (!mr.matched) {
     if (!isInitial) clear_active();
@@ -606,7 +606,7 @@ RealityVector::Transition RealityVector::transition(const Vector& input, std::op
   return {true, nextVectorIds, std::move(stamped), mr, std::move(chain)};
 }
 
-Json RealityVector::to_json() const {
+Json RealityEvent::to_json() const {
   Json::Array elems;
   for (const auto& e : elements) {
     Json::Object o{{"value", e.value}};
@@ -643,19 +643,19 @@ long CriticalEventSequence::days_since_deprecation() const {
   return static_cast<long>((now - t) / 86400);
 }
 
-void CriticalEventSequence::add_vector(const RealityVector& vector) { vectors[vector.id] = vector; }
-std::optional<RealityVector*> CriticalEventSequence::get_vector(const std::string& vectorId) {
+void CriticalEventSequence::add_vector(const RealityEvent& vector) { vectors[vector.id] = vector; }
+std::optional<RealityEvent*> CriticalEventSequence::get_vector(const std::string& vectorId) {
   auto it = vectors.find(vectorId);
   if (it == vectors.end()) return std::nullopt;
   return &it->second;
 }
-std::vector<RealityVector*> CriticalEventSequence::active_vectors() {
-  std::vector<RealityVector*> out;
+std::vector<RealityEvent*> CriticalEventSequence::active_vectors() {
+  std::vector<RealityEvent*> out;
   for (auto& [_, v] : vectors) if (v.is_active()) out.push_back(&v);
   return out;
 }
-std::vector<RealityVector> CriticalEventSequence::all_vectors() const {
-  std::vector<RealityVector> out;
+std::vector<RealityEvent> CriticalEventSequence::all_vectors() const {
+  std::vector<RealityEvent> out;
   for (const auto& [_, v] : vectors) out.push_back(v);
   return out;
 }
@@ -1876,7 +1876,7 @@ Machine load_machine_from_json_string(const std::string& raw,
       throw std::runtime_error("Incompatible machine JSON version: " + ver + " (current: 1.0.0)");
   }
   // STA strict-load gate — mirrors the historical MachineLoader.loadFromJSON
-  // option of the same name.  Runs before any RealityVector is constructed so
+  // option of the same name.  Runs before any RealityEvent is constructed so
   // a violating life-safety machine cannot reach the engine.
   if (opts.strictSta) sta::assert_sta_for_life_safety(root);
   const Json& m = root.at("machine");
@@ -1930,7 +1930,7 @@ Machine load_machine_from_json_string(const std::string& raw,
         if (ej.at("threshold").is_number()) e.threshold = ej.at("threshold").as_number();
         elems.push_back(e);
       }
-      RealityVector rv(elems, vj.at("isInitial").as_bool(), vj.at("id").as_string(make_id("vector")));
+      RealityEvent rv(elems, vj.at("isInitial").as_bool(), vj.at("id").as_string(make_id("vector")));
       rv.matchAlgorithm = machine.matchAlgorithm;
       if (vj.at("metadata").is_object()) rv.metadata = vj.at("metadata").object();
       for (const auto& nid : vj.at("nextVectorIds").is_array() ? vj.at("nextVectorIds").array() : Json::Array{}) rv.add_next_vector(nid.as_string());

@@ -307,7 +307,7 @@ RealityEngine_CPP implements only the PE bridge contract:
   bridge smoke tests and future MCP tools.
 
 RE does not talk to CareKit directly. CareKit state affects RE only when PE
-aggregates the mapped CareKit source into an input-space reality vector.
+aggregates the mapped CareKit source into an input-space Reality Event.
 
 ### localAIStack GraphQL
 

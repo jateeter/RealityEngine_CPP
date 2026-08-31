@@ -129,10 +129,10 @@ static Machine make_rs_like_machine() {
   Machine m("Test Machine", "smoke test", ArbiterRule::Passthrough, mapping, "machine-test");
   CriticalEventSequence seq("A then output", "seq-test");
 
-  RealityVector start({VectorElement{1.0, ComparatorType::Gte, 0.5}, VectorElement{0.0, ComparatorType::Gte, 0.5}}, true, "start");
+  RealityEvent start({VectorElement{1.0, ComparatorType::Gte, 0.5}, VectorElement{0.0, ComparatorType::Gte, 0.5}}, true, "start");
   start.add_next_vector("terminal");
 
-  RealityVector terminal({VectorElement{0.0, ComparatorType::Gte, 0.5}, VectorElement{1.0, ComparatorType::Gte, 0.5}}, false, "terminal");
+  RealityEvent terminal({VectorElement{0.0, ComparatorType::Gte, 0.5}, VectorElement{1.0, ComparatorType::Gte, 0.5}}, false, "terminal");
   terminal.add_output_vector({"out", {1.0, 0.0}, {{"description", "terminal fired"}}, now_ms(), {}});
 
   seq.add_vector(start);
@@ -146,7 +146,7 @@ static Machine make_output_machine(const std::string& id, double outputValue) {
   Machine m("Output " + id, "deterministic merge test", ArbiterRule::Passthrough, mapping, id);
   CriticalEventSequence seq("Immediate output", "seq-" + id);
 
-  RealityVector start({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, "start-" + id);
+  RealityEvent start({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, "start-" + id);
   start.add_output_vector({"out-" + id, {outputValue}, {{"description", "merge policy output"}}, now_ms(), {}});
 
   seq.add_vector(start);
@@ -179,7 +179,7 @@ static Machine make_multi_sequence_machine(const std::string& id,
   Machine m("Multi " + id, "fold placement test", ArbiterRule::Passthrough, mapping, id);
   for (const auto& [sequenceId, values] : outputs) {
     CriticalEventSequence seq("seq " + sequenceId, sequenceId);
-    RealityVector start({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, sequenceId + "-v1");
+    RealityEvent start({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, sequenceId + "-v1");
     start.add_output_vector({sequenceId + "-out", values, {}, now_ms(), {}});
     seq.add_vector(start);
     m.add_sequence(seq);
@@ -860,7 +860,7 @@ static void verify_exhausted_test_source_serializes_inactive() {
 
 int main() {
   {
-    RealityVector v({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, "v");
+    RealityEvent v({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, "v");
     assert(v.match({0.75}).matched);
     assert(!v.match({0.25}).matched);
   }
