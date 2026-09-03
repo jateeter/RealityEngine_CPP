@@ -432,7 +432,7 @@ public:
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       auto body = parse_body(req);
-      auto result = it->second.process_input(json::to_numbers(body.at("inputVector")));
+      auto result = it->second.process_input(json::to_numbers(body.at_either("inputEvent", "inputVector")));
       return ok(to_json(result));
     });
     server.route("POST", "/api/machines/:id/process-universal", [this](const http::Request& req) {
@@ -461,7 +461,7 @@ public:
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       Machine copy = it->second;
       lock.unlock();
-      auto result = copy.process_input(json::to_numbers(parse_body(req).at("inputVector")));
+      auto result = copy.process_input(json::to_numbers(parse_body(req).at_either("inputEvent", "inputVector")));
       return ok(to_json(result));
     });
     server.route("POST", "/api/machines/:id/whatif-universal", [this](const http::Request& req) {
