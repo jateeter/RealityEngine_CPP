@@ -3333,7 +3333,7 @@ private:
   // Canonical default Ollama model, shared by every runtime so a
   // multi-engine universe answers from one model unless an operator says
   // otherwise. Override per engine with OLLAMA_MODEL. See
-  // RealityEngine_CI/docs/INTEGRATION_ARCHITECTURE.md.
+  // RealityEngine_CI/docs/OLLAMA_INTEGRATION.md.
   std::string ollamaModel = "llama3.1:8b";
   std::string ollamaCompletionSourceMappingId = "agent-completion-risk";
   std::string openaiBaseUrl = "https://api.openai.com/v1";
