@@ -118,11 +118,27 @@ Fixture coverage exists in `tests/e2e_services.sh` here,
 `tests/core-tests.lisp` in RealityEngine_LSP, and
 `MappingIntegrationGateSpec.scala` in RealityEngine_Scala.
 
+## The default source mapping is `carekit-task`
+
+Settled, and worth stating plainly because a native bridge will be written
+against it. `SURFACE_SPEC.md` § CareKit Integration used to show
+`defaultSourceMappingId: "carekit-activity"`, which no implementation agreed
+with: all four runtimes hardcode `carekit-task` as their fallback —
+`perception_engine_server.cpp`, `perception-service.lisp`,
+`PerceptionRoutes.scala` and the TypeScript PE's `server.ts` — and the shipped
+registry configures `carekit-task` too. The specification was the only dissenter
+and has been corrected.
+
+`carekit-activity` is not a mapping that exists. A bridge configured against it
+would resolve nothing and commit nothing, and the failure would look like silence
+rather than an error.
+
+Override per deployment with `CAREKIT_DEFAULT_SOURCE_MAPPING_ID`; the payload's
+own `sourceMappingId` wins over the default when present.
+
 ## Known limitations
 
-- **No native app.** Rung 3 and 4 of the verification ladder are unreachable
+- **No native app.** Rungs 3 and 4 of the verification ladder are unreachable
   until one exists; `localHealthkitBridge` is the model for what that would be.
-- **`SURFACE_SPEC.md` § CareKit Integration shows `defaultSourceMappingId:
-  "carekit-activity"`** while the shipped registry configures `carekit-task`.
-  One of the two is wrong and they should be reconciled before a native bridge
-  is written against either.
+- **`enabled: false`** is the shipped registry default. Deployment starts by
+  turning it on and configuring `CAREKIT_BRIDGE_TOKEN`.

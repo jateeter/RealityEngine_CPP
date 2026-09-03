@@ -22,6 +22,22 @@ This repo contains the C++20 Reality Engine and Perception Engine implementation
 - `docs/openapi/`: generated API documentation.
 - `scripts/`, `tools/`: support utilities.
 
+## Building
+
+**Builds are controlled through `RealityEngine_CI`, not from here.** This repo is
+an independent git repository, not a subproject of CI or of any other engine.
+Read the contract before building or deploying:
+
+    RealityEngine_CI/docs/BUILD_CONTROL_CONTRACT.md
+
+```bash
+cd ../RealityEngine_CI && ./scripts/regression-test.sh --build-only
+```
+
+The per-repo commands below are for working on this repository alone — never as
+the last step before a parity claim, which the provenance gate will refuse
+anyway if the artifact does not match the source.
+
 ## Key Commands
 
 ```bash
