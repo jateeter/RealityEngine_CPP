@@ -10,8 +10,30 @@ contract → Prometheus paging-decisions counter → Grafana dashboard
 
 The demonstration uses a real external broker, the production
 `perception_engine_server` + `reality_engine_server` binaries, the
-1,009-machine example corpus, and a mapping registry that projects
-broker telemetry into the agriculture domain.
+canonical corpus in `RealityEngine_Machines/machines`, and a mapping
+registry that projects broker telemetry into the agriculture domain.
+
+## The contract this demonstrates
+
+The rules every external integration obeys — that projection is
+registry-owned and never carried by the payload, that ingress is the only
+thing that activates a source, that governance is CES-owned, and what the
+evidence chain and verification rungs below are — are specified once, in
+`RealityEngine_CI`:
+
+    RealityEngine_CI/docs/EXTERNAL_INTEGRATION_CONTRACT.md
+
+This document is a **worked instance** of that contract, at rung 4 of its
+verification ladder (live, against a real external broker). It supplies what
+the contract deliberately does not know: this broker's identity and
+authentication, this mapping registry, the agriculture machines it drives,
+the reproduction commands, and the observed evidence. Where the two
+disagree, the contract is right and this document is the defect.
+
+The per-runtime route surface is **not** restated here. `GET /api/mqtt/status`,
+`/api/mqtt/mappings`, `/api/mqtt/enable` and `/api/mqtt/disable`, and which
+runtimes implement them, live in `RealityEngine_CI/SURFACE_SPEC.md`
+§ MQTT Bridge.
 
 ## Broker
 
@@ -261,22 +283,43 @@ curl http://localhost:5301/api/metrics | grep ces_paging_decisions
 
 ## Cross-runtime parity
 
-All three runtimes (`_AI` TypeScript, `_CPP`, `_LSP`) implement the
-same `MappingRegistry` contract:
+Per `EXTERNAL_INTEGRATION_CONTRACT.md` §6, the support matrix is not restated
+here. `RealityEngine_CI/SURFACE_SPEC.md` § MQTT Bridge is the one place that
+records which runtimes implement the bridge surface, and it marks all five
+routes present in CPP, LSP and Scala.
 
-| Feature | `_AI` | `_CPP` | `_LSP` |
-| --- | --- | --- | --- |
-| MQTT v3.1.1 client | mqtt.js (optional dep) | hand-rolled | (deferred) |
-| Mapping registry schema | identical | identical | identical |
-| Topic-filter matching (+ / #) | ✓ | ✓ | ✓ |
-| Match-all (fan-out) | ✓ | ✓ | ✓ |
-| sensorIdTemplate `{n}` interpolation | ✓ | ✓ | ✓ |
-| Extract: json / csv-float / raw / single-float | ✓ | ✓ | ✓ |
-| Normalize: passthrough / minmax / linear / band | ✓ | ✓ | ✓ |
-| Length + NaN validation | ✓ | ✓ | ✓ |
-| Overlap detection | ✓ | ✓ | ✓ |
-| Push policy: debounced / manual / immediate | ✓ | ✓ | (deferred — needs client) |
-| `/api/mqtt/status` + `/api/mqtt/mappings` | ✓ | ✓ | (deferred) |
+The bridge exists as four sibling implementations, each a full client that
+connects to a real broker and funnels accepted PUBLISHes into PE sources:
+
+| Runtime | Implementation | Client |
+|---|---|---|
+| CPP | `src/mqtt_bridge.cpp`, `mqtt_client.cpp`, `mqtt_mapping.cpp` | hand-rolled MQTT v3.1.1 |
+| Scala | `perception-engine/.../perception/mqtt/MqttBridge.scala` | Eclipse Paho 1.2.5 |
+| LSP | `src/mqtt-bridge.lisp`, `mqtt-client.lisp`, `mqtt-mapping.lisp` | native |
+| Manager (TypeScript PE) | `perception-engine/backend/src/MqttBridge.ts` | mqtt.js |
+
+They share one design rule, stated in each: **MQTT is not special-cased
+downstream.** Every accepted PUBLISH resolves to `{sensorId, region, values,
+ttlMs}` and is fed through the same ingest callback that `POST /api/signals`
+uses — which is `EXTERNAL_INTEGRATION_CONTRACT.md` §2.1 and §3 seen from inside
+the bridge.
+
+A table here used to compare `_AI`, `_CPP` and `_LSP`, marking LSP "deferred" and
+omitting Scala. It was stale in every direction that mattered. The TypeScript
+prototype's working client was carried forward into the Scala bridge — which is
+why `MqttBridge.scala` names itself a twin of the CPP, Manager and LSP bridges —
+so Scala's ability to connect, receive and funnel to PE sources has been correct
+throughout; only the documentation of it was missing. That is the failure §6
+describes: a parity table copied into an integration document becomes a second
+surface specification, and it is the one that goes stale.
+
+What is specific to this demonstration, and therefore stated here, is the
+`MappingRegistry` behaviour it exercises: topic-filter matching (`+` / `#`),
+match-all fan-out, `sensorIdTemplate` `{n}` interpolation, the `json` /
+`csv-float` / `raw` / `single-float` extract modes, the `passthrough` / `minmax`
+/ `linear` / `band` normalize modes with optional clamp, length and NaN
+validation, overlap detection, and the `debounced` / `manual` / `immediate` push
+policies.
 
 ## Visualizer monitor surface
 
