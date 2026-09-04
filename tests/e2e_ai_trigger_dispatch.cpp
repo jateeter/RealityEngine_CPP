@@ -157,7 +157,7 @@ void walk_machine(const std::filesystem::path& file, WalkSummary& sum) {
 
     const std::string seqName = seqJson.at("name").as_string("unnamed");
     const std::string scenario = seqJson.at("metadata").at("scenario").as_string();
-    const Json& vectorsJson = seqJson.at_either("events", "vectors");
+    const Json& vectorsJson = seqJson.at("events");
     if (!vectorsJson.is_array()) {
       EXPECT(false, file.filename().string() + " / " + seqName + ": missing input vectors");
       continue;

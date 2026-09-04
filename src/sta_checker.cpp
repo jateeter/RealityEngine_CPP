@@ -70,7 +70,7 @@ StaReport compute_sta(const json::Value& root) {
   if (sequences.is_array()) {
     for (const auto& seq : sequences.array()) {
       std::string seqId = seq.at("id").as_string();
-      const auto& vectors = seq.at_either("events", "vectors");
+      const auto& vectors = seq.at("events");
       if (!vectors.is_array()) continue;
       for (const auto& v : vectors.array()) {
         std::string vid = v.at("id").as_string();
@@ -90,7 +90,7 @@ StaReport compute_sta(const json::Value& root) {
 
       // Local index — vectors visible to this sequence.
       std::unordered_map<std::string, const json::Value*> localByVector;
-      const auto& vectors = seq.at_either("events", "vectors");
+      const auto& vectors = seq.at("events");
       if (vectors.is_array()) {
         for (const auto& v : vectors.array()) {
           std::string vid = v.at("id").as_string();
@@ -100,7 +100,7 @@ StaReport compute_sta(const json::Value& root) {
         for (const auto& v : vectors.array()) {
           auto fromState = vector_state(v);
           std::string fromId = v.at("id").as_string();
-          const auto& next = v.at_either("nextEventIds", "nextVectorIds");
+          const auto& next = v.at("nextEventIds");
           if (!next.is_array()) continue;
           for (const auto& nid : next.array()) {
             if (!nid.is_string()) continue;
