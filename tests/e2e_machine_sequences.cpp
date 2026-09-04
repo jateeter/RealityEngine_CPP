@@ -120,7 +120,7 @@ CaseResult run_input_sequence(const std::filesystem::path& file, const Json& seq
   result.sequenceName = seqJson.at("name").as_string(seqJson.at("id").as_string("unnamed"));
 
   std::vector<Vector> actualOutputs;
-  const auto& vectorsJson = seqJson.at("vectors");
+  const auto& vectorsJson = seqJson.at_either("events", "vectors");
   if (!vectorsJson.is_array()) throw std::runtime_error(result.machineFile + " / " + result.sequenceName + ": input sequence has no vectors array");
 
   for (const auto& vj : vectorsJson.array()) {

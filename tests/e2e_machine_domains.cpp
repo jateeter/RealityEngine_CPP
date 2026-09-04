@@ -146,7 +146,7 @@ CaseResult run_domain_case(const DomainCase& dc, int caseIndex) {
   result.sequenceName = dc.sequence.at("name").as_string(dc.sequence.at("id").as_string("unnamed"));
 
   std::vector<Vector> actualOutputs;
-  const auto& vectorsJson = dc.sequence.at("vectors");
+  const auto& vectorsJson = dc.sequence.at_either("events", "vectors");
   if (!vectorsJson.is_array()) {
     throw std::runtime_error(result.machineFile + " / " + result.sequenceName + ": input sequence has no vectors array");
   }
