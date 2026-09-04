@@ -121,20 +121,6 @@ public:
     return it == obj.end() ? null_value : it->second;
   }
 
-  // One observation, two spellings, during the Reality Event rename
-  // (RealityEngine_CI#220 layer 2). Request bodies name the same value
-  // `inputEvent` or `inputVector` depending on how old the caller is, and an
-  // engine that accepts only one breaks every caller still sending the other.
-  //
-  // The canonical name is tried first, so a caller sending both — which is what
-  // a client mid-transition emits — is read as the new one.
-  //
-  // Deleted when the rename completes, along with the old spelling at every
-  // call site. Until then, a request carrying the old name is not an error.
-  const Value& at_either(const std::string& canonical, const std::string& legacy) const {
-    const Value& primary = at(canonical);
-    return primary.is_null() ? at(legacy) : primary;
-  }
 };
 
 inline std::string escape(const std::string& s) {
