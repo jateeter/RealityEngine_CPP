@@ -968,8 +968,8 @@ private:
       elements.push_back(element);
     }
     RealityEvent vector(elements, body.at("isInitial").as_bool(false), body.at("id").as_string(make_id("vector")));
-    for (const auto& next : body.at("nextVectorIds").is_array() ? body.at("nextVectorIds").array() : Json::Array{}) vector.add_next_vector(next.as_string());
-    for (const auto& output : body.at("outputVectors").is_array() ? body.at("outputVectors").array() : Json::Array{}) {
+    for (const auto& next : body.at_either("nextEventIds", "nextVectorIds").is_array() ? body.at_either("nextEventIds", "nextVectorIds").array() : Json::Array{}) vector.add_next_vector(next.as_string());
+    for (const auto& output : body.at_either("outputEvents", "outputVectors").is_array() ? body.at_either("outputEvents", "outputVectors").array() : Json::Array{}) {
       std::map<std::string, Json> metadata;
       if (output.at("metadata").is_object()) metadata = output.at("metadata").object();
       vector.add_output_vector({output.at("id").as_string(make_id("output")), json::to_numbers(output.at("vector")), metadata, now_ms(), {}});
@@ -979,7 +979,7 @@ private:
   static CriticalEventSequence sequence_from_json(const Json& body) {
     CriticalEventSequence seq(body.at("name").as_string("unnamed"), body.at("id").as_string(make_id("sequence")));
     if (body.at("metadata").is_object()) seq.metadata = body.at("metadata").object();
-    for (const auto& vector : body.at("vectors").is_array() ? body.at("vectors").array() : Json::Array{}) seq.add_vector(vector_from_json(vector));
+    for (const auto& vector : body.at_either("events", "vectors").is_array() ? body.at_either("events", "vectors").array() : Json::Array{}) seq.add_vector(vector_from_json(vector));
     return seq;
   }
   static std::string qdrant_url() {
@@ -1248,7 +1248,7 @@ private:
     const Json& inputSequences = machine->metadata.count("inputSequences") ? machine->metadata.at("inputSequences") : Json(nullptr);
     int inputVectorCount = 0;
     if (inputSequences.is_array() && !inputSequences.array().empty()) {
-      const Json& vectors = inputSequences.array().front().at("vectors");
+      const Json& vectors = inputSequences.array().front().at_either("events", "vectors");
       if (vectors.is_array()) inputVectorCount = static_cast<int>(vectors.array().size());
     }
 
