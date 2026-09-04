@@ -54,7 +54,7 @@ public:
     });
     server.route("GET", "/api/config", [this](const http::Request&) {
       std::shared_lock<std::shared_mutex> lock(registryMutex);
-      return ok(Json::Object{{"vectorDimension", static_cast<double>(dimension)}, {"matchThreshold", matchThreshold}, {"qdrantUrl", qdrant_url()}, {"collectionName", collection_name()}});
+      return ok(Json::Object{{"eventDimension", static_cast<double>(dimension)}, {"matchThreshold", matchThreshold}, {"qdrantUrl", qdrant_url()}, {"collectionName", collection_name()}});
     });
     server.route("PUT", "/api/config/dimension", [this](const http::Request& req) {
       auto it = req.queryParams.find("dimension");
@@ -236,7 +236,7 @@ public:
       if (body.at("includePerceptualSpace").is_bool()) includePerceptualSpaceDefault = body.at("includePerceptualSpace").as_bool();
       return ok(runtime_options());
     });
-    server.route("GET", "/api/engine/active", [this](const http::Request&) { return ok(Json::Object{{"activeVectors", active_vectors_json()}}); });
+    server.route("GET", "/api/engine/active", [this](const http::Request&) { return ok(Json::Object{{"activeEvents", active_vectors_json()}}); });
     server.route("GET", "/api/engine/history", [this](const http::Request& req) {
       int limit = 0;
       auto it = req.queryParams.find("limit");
@@ -285,7 +285,7 @@ public:
         auto r = m.process_input(vec);
         if (r.machineOutput) outputs.push_back(to_json(*r.machineOutput));
       }
-      auto result = Json::Object{{"inputVector", json::numbers(vec)}, {"timestamp", static_cast<double>(now_ms())}, {"outputs", outputs}};
+      auto result = Json::Object{{"inputEvent", json::numbers(vec)}, {"timestamp", static_cast<double>(now_ms())}, {"outputs", outputs}};
       record_engine_history(Json::Object{{"type", "engine-process"}, {"result", result}});
       return ok(Json::Object{{"result", result}});
     });
@@ -294,7 +294,7 @@ public:
       auto data = json::to_numbers(body.at("data"));
       return ok(Json::Object{
         {"success", true},
-        {"inputVector", json::numbers(data)},
+        {"inputEvent", json::numbers(data)},
         {"transformations", Json::Array{}},
         {"processingTimestamp", static_cast<double>(now_ms())}
       });
@@ -314,7 +314,7 @@ public:
       auto body = parse_body(req);
       ++samplerSampleCount;
       auto data = json::to_numbers(body.at("data"));
-      Json result = Json::Object{{"inputVector", json::numbers(data)}, {"processingTimestamp", static_cast<double>(now_ms())}};
+      Json result = Json::Object{{"inputEvent", json::numbers(data)}, {"processingTimestamp", static_cast<double>(now_ms())}};
       return ok(Json::Object{{"success", true}, {"result", result}});
     });
     server.route("GET", "/api/sampler/stats", [this](const http::Request&) {
@@ -1136,7 +1136,7 @@ private:
   Json stats() const {
     int vectors = 0;
     for (const auto& [_, m] : machines) vectors += m.total_vector_count();
-    return Json::Object{{"totalMachines", static_cast<double>(machines.size())}, {"totalVectors", static_cast<double>(vectors)}, {"domainWorkerPool", worker_pool_metrics_json()}};
+    return Json::Object{{"totalMachines", static_cast<double>(machines.size())}, {"totalEvents", static_cast<double>(vectors)}, {"domainWorkerPool", worker_pool_metrics_json()}};
   }
   Json active_vectors_json() const {
     Json::Array active;
