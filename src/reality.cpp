@@ -709,7 +709,7 @@ Json CriticalEventSequence::to_json() const {
     if (v.isInitial) initials.emplace_back(id);
     if (!v.output_vectors().empty()) outputs.emplace_back(id);
   }
-  Json::Object out{{"id", id}, {"name", name}, {"vectors", arr}, {"initialVectorIds", initials}, {"outputVectorIds", outputs}, {"metadata", metadata}};
+  Json::Object out{{"id", id}, {"name", name}, {"vectors", arr}, {"initialEventIds", initials}, {"outputVectorIds", outputs}, {"metadata", metadata}};
   if (!schemaVersion.empty()) out["schemaVersion"] = schemaVersion;
   if (!deprecatedAt.empty())  out["deprecatedAt"]  = deprecatedAt;
   if (!replacedBy.empty())    out["replacedBy"]    = replacedBy;
@@ -825,7 +825,7 @@ Json Machine::to_json(bool full) const {
     {"outputMergeTransformation", to_string(outputMergeTransformation)},
     {"outputMergeLocked", outputMergeLocked},
     {"arbiterRule", to_string(arbiter.get_rule())}, {"sequenceCount", static_cast<double>(sequence_count())},
-    {"totalVectors", static_cast<double>(total_vector_count())}, {"sequenceIds", seqIds}, {"sequences", seqs},
+    {"totalEvents", static_cast<double>(total_vector_count())}, {"sequenceIds", seqIds}, {"sequences", seqs},
     {"metadata", metadata}, {"perceptualMapping", mapping}
   };
 }
@@ -2087,13 +2087,13 @@ Json to_json(const SequenceResult& r) {
   for (const auto& id : r.matchedVectors) matched.emplace_back(id);
   for (const auto& id : r.activatedVectors) activated.emplace_back(id);
   for (const auto& o : r.assertedOutputs) outputs.push_back(to_json(o));
-  return Json::Object{{"matchedVectors", matched}, {"activatedVectors", activated}, {"assertedOutputs", outputs}};
+  return Json::Object{{"matchedEvents", matched}, {"activatedEvents", activated}, {"assertedOutputs", outputs}};
 }
 Json to_json(const MachineTransitionResult& r) {
   Json::Object seqs;
   for (const auto& [id, sr] : r.sequenceResults) seqs[id] = to_json(sr);
   Json output = r.machineOutput ? to_json(*r.machineOutput) : Json(nullptr);
-  return Json::Object{{"inputVector", json::numbers(r.inputVector)}, {"timestamp", static_cast<double>(r.timestamp)}, {"sequenceResults", seqs}, {"machineOutput", output}, {"arbiterMetadata", Json::Object{{"rule", r.arbiterMetadata.rule}, {"totalInputs", static_cast<double>(r.arbiterMetadata.totalInputs)}, {"sequencesWithOutput", static_cast<double>(r.arbiterMetadata.sequencesWithOutput)}, {"shouldOutput", r.arbiterMetadata.shouldOutput}}}};
+  return Json::Object{{"inputEvent", json::numbers(r.inputVector)}, {"timestamp", static_cast<double>(r.timestamp)}, {"sequenceResults", seqs}, {"machineOutput", output}, {"arbiterMetadata", Json::Object{{"rule", r.arbiterMetadata.rule}, {"totalInputs", static_cast<double>(r.arbiterMetadata.totalInputs)}, {"sequencesWithOutput", static_cast<double>(r.arbiterMetadata.sequencesWithOutput)}, {"shouldOutput", r.arbiterMetadata.shouldOutput}}}};
 }
 Json to_json(const TrajectoryEntry& entry) {
   Json::Array cells;
@@ -2108,7 +2108,7 @@ Json to_json(const TrajectoryEntry& entry) {
 Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace) {
   Json::Object machineResults;
   if (includeMachineResults) {
-    for (const auto& [id, mr] : step.machineResults) machineResults[id] = Json::Object{{"machineId", mr.machineId}, {"machineName", mr.machineName}, {"inputVector", json::numbers(mr.inputVector)}, {"outputVector", mr.outputVector ? Json(json::numbers(*mr.outputVector)) : Json(nullptr)}, {"mergedOutputVector", mr.mergedOutputVector ? Json(json::numbers(*mr.mergedOutputVector)) : Json(nullptr)}, {"outputMergeTransformation", mr.outputMergeTransformation}, {"inputRegion", to_json(mr.inputRegion)}, {"outputRegion", mr.outputRegion ? to_json(*mr.outputRegion) : Json(nullptr)}, {"transitionResult", to_json(mr.transitionResult)}};
+    for (const auto& [id, mr] : step.machineResults) machineResults[id] = Json::Object{{"machineId", mr.machineId}, {"machineName", mr.machineName}, {"inputEvent", json::numbers(mr.inputVector)}, {"outputVector", mr.outputVector ? Json(json::numbers(*mr.outputVector)) : Json(nullptr)}, {"mergedOutputVector", mr.mergedOutputVector ? Json(json::numbers(*mr.mergedOutputVector)) : Json(nullptr)}, {"outputMergeTransformation", mr.outputMergeTransformation}, {"inputRegion", to_json(mr.inputRegion)}, {"outputRegion", mr.outputRegion ? to_json(*mr.outputRegion) : Json(nullptr)}, {"transitionResult", to_json(mr.transitionResult)}};
   }
   Json::Array regions;
   for (const auto& r : step.activeRegions) regions.push_back(Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}, {"machineId", r.machineId}, {"type", r.type}});
