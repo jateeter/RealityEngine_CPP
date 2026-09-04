@@ -988,7 +988,7 @@ private:
   }
   static std::string collection_name() {
     const char* value = std::getenv("COLLECTION_NAME");
-    return value ? value : "reality-vectors";
+    return value ? value : "reality-events";
   }
 
   std::filesystem::path semantic_bus_registry_path() const {

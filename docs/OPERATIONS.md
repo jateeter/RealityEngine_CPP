@@ -24,7 +24,7 @@ Startup performs these steps:
    `../localAIStack/volumes/qdrant`.
 5. Checks for expected shared collections:
    - `localai_docs`
-   - `reality-vectors`
+   - `reality-events`
 6. Starts Reality Engine.
 7. Waits for `GET /api/health`.
 8. Verifies nonzero machine loading through `GET /api/machines`.
@@ -65,7 +65,7 @@ Important variables:
 | `QDRANT_URL` | `http://localhost:4333` |
 | `QDRANT_STORAGE_DIR` | `../localAIStack/volumes/qdrant` |
 | `QDRANT_LOCALAI_COLLECTION` | `localai_docs` |
-| `QDRANT_REALITY_COLLECTION` | `reality-vectors` |
+| `QDRANT_REALITY_COLLECTION` | `reality-events` |
 | `LOCAL_AI_API_URL` | `http://localhost:4000` |
 | `LOCAL_AI_MACHINES_DIR` | `../localAIStack/data/machines` |
 | `LOCAL_AI_BOOTSTRAP` | `false` |
