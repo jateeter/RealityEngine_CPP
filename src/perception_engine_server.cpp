@@ -1113,11 +1113,11 @@ private:
     std::vector<std::string> segmentNames;
     for (size_t i = 0; i < sequences.array().size(); ++i) {
       const Json& seq = sequences.array()[i];
-      if (!seq.at("vectors").is_array() || seq.at("vectors").array().empty()) continue;
+      if (!seq.at_either("events", "vectors").is_array() || seq.at_either("events", "vectors").array().empty()) continue;
       std::string segName = seq.at("name").as_string("Test sequence");
       segmentNames.push_back(segName);
       size_t beforeLen = source.inputs.size();
-      for (const auto& vector : seq.at("vectors").array())
+      for (const auto& vector : seq.at_either("events", "vectors").array())
         source.inputs.push_back(json::to_numbers(vector));
       size_t segLen = source.inputs.size() - beforeLen;
       segments.push_back(Json::Object{

@@ -1921,7 +1921,7 @@ Machine load_machine_from_json_string(const std::string& raw,
     if (sj.at("schemaVersion").is_string()) seq.schemaVersion = sj.at("schemaVersion").as_string();
     if (sj.at("deprecatedAt").is_string()) seq.deprecatedAt = sj.at("deprecatedAt").as_string();
     if (sj.at("replacedBy").is_string())   seq.replacedBy   = sj.at("replacedBy").as_string();
-    for (const auto& vj : sj.at("vectors").is_array() ? sj.at("vectors").array() : Json::Array{}) {
+    for (const auto& vj : sj.at_either("events", "vectors").is_array() ? sj.at_either("events", "vectors").array() : Json::Array{}) {
       std::vector<VectorElement> elems;
       for (const auto& ej : vj.at("elements").is_array() ? vj.at("elements").array() : Json::Array{}) {
         VectorElement e;
@@ -1933,8 +1933,8 @@ Machine load_machine_from_json_string(const std::string& raw,
       RealityEvent rv(elems, vj.at("isInitial").as_bool(), vj.at("id").as_string(make_id("vector")));
       rv.matchAlgorithm = machine.matchAlgorithm;
       if (vj.at("metadata").is_object()) rv.metadata = vj.at("metadata").object();
-      for (const auto& nid : vj.at("nextVectorIds").is_array() ? vj.at("nextVectorIds").array() : Json::Array{}) rv.add_next_vector(nid.as_string());
-      for (const auto& oj : vj.at("outputVectors").is_array() ? vj.at("outputVectors").array() : Json::Array{}) {
+      for (const auto& nid : vj.at_either("nextEventIds", "nextVectorIds").is_array() ? vj.at_either("nextEventIds", "nextVectorIds").array() : Json::Array{}) rv.add_next_vector(nid.as_string());
+      for (const auto& oj : vj.at_either("outputEvents", "outputVectors").is_array() ? vj.at_either("outputEvents", "outputVectors").array() : Json::Array{}) {
         std::map<std::string, Json> meta;
         if (oj.at("metadata").is_object()) meta = oj.at("metadata").object();
         rv.add_output_vector({oj.at("id").as_string(make_id("output")), json::to_numbers(oj.at("vector")), meta, now_ms(), {}});
