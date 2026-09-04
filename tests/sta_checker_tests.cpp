@@ -40,10 +40,10 @@ std::string life_safety_with_violation_json() {
         {
           "id": "seq-violation",
           "name": "violation",
-          "vectors": [
-            { "id": "v1", "isInitial": true,  "elements": [{"value":0},{"value":0}], "nextVectorIds": ["v2"] },
-            { "id": "v2", "isInitial": false, "elements": [{"value":1},{"value":1}], "nextVectorIds": [],
-              "outputVectors": [{"id":"o1","vector":[1,0]}] }
+          "events": [
+            { "id": "v1", "isInitial": true,  "elements": [{"value":0},{"value":0}], "nextEventIds": ["v2"] },
+            { "id": "v2", "isInitial": false, "elements": [{"value":1},{"value":1}], "nextEventIds": [],
+              "outputEvents": [{"id":"o1","vector":[1,0]}] }
           ]
         }
       ]
@@ -66,10 +66,10 @@ std::string life_safety_clean_json() {
         {
           "id": "seq-ok",
           "name": "ok",
-          "vectors": [
-            { "id": "v1", "isInitial": true,  "elements": [{"value":0},{"value":0}], "nextVectorIds": ["v2"] },
-            { "id": "v2", "isInitial": false, "elements": [{"value":1},{"value":0}], "nextVectorIds": [],
-              "outputVectors": [{"id":"o1","vector":[1,0]}] }
+          "events": [
+            { "id": "v1", "isInitial": true,  "elements": [{"value":0},{"value":0}], "nextEventIds": ["v2"] },
+            { "id": "v2", "isInitial": false, "elements": [{"value":1},{"value":0}], "nextEventIds": [],
+              "outputEvents": [{"id":"o1","vector":[1,0]}] }
           ]
         }
       ]
@@ -94,10 +94,10 @@ std::string non_life_safety_with_violation_json() {
         {
           "id": "seq-violation",
           "name": "violation",
-          "vectors": [
-            { "id": "v1", "isInitial": true,  "elements": [{"value":0},{"value":0}], "nextVectorIds": ["v2"] },
-            { "id": "v2", "isInitial": false, "elements": [{"value":1},{"value":1}], "nextVectorIds": [],
-              "outputVectors": [{"id":"o1","vector":[1,0]}] }
+          "events": [
+            { "id": "v1", "isInitial": true,  "elements": [{"value":0},{"value":0}], "nextEventIds": ["v2"] },
+            { "id": "v2", "isInitial": false, "elements": [{"value":1},{"value":1}], "nextEventIds": [],
+              "outputEvents": [{"id":"o1","vector":[1,0]}] }
           ]
         }
       ]
@@ -120,8 +120,8 @@ std::string dangling_next_id_json() {
         {
           "id": "seq-dangling",
           "name": "dangling",
-          "vectors": [
-            { "id": "v1", "isInitial": true, "elements": [{"value":0}], "nextVectorIds": ["nope"] }
+          "events": [
+            { "id": "v1", "isInitial": true, "elements": [{"value":0}], "nextEventIds": ["nope"] }
           ]
         }
       ]
@@ -143,15 +143,15 @@ std::string inter_sequence_jump_json() {
       "sequences": [
         {
           "id": "s1", "name": "s1",
-          "vectors": [
-            { "id": "s1v1", "isInitial": true, "elements": [{"value":0}], "nextVectorIds": ["s2v1"] }
+          "events": [
+            { "id": "s1v1", "isInitial": true, "elements": [{"value":0}], "nextEventIds": ["s2v1"] }
           ]
         },
         {
           "id": "s2", "name": "s2",
-          "vectors": [
-            { "id": "s2v1", "isInitial": false, "elements": [{"value":1}], "nextVectorIds": [],
-              "outputVectors": [{"id":"o","vector":[1]}] }
+          "events": [
+            { "id": "s2v1", "isInitial": false, "elements": [{"value":1}], "nextEventIds": [],
+              "outputEvents": [{"id":"o","vector":[1]}] }
           ]
         }
       ]
@@ -176,10 +176,10 @@ std::string drift_declared_json() {
       "sequences": [
         {
           "id": "seq", "name": "seq",
-          "vectors": [
-            { "id": "v1", "isInitial": true,  "elements": [{"value":0},{"value":0}], "nextVectorIds": ["v2"] },
-            { "id": "v2", "isInitial": false, "elements": [{"value":1},{"value":1}], "nextVectorIds": [],
-              "outputVectors": [{"id":"o","vector":[1,0]}] }
+          "events": [
+            { "id": "v1", "isInitial": true,  "elements": [{"value":0},{"value":0}], "nextEventIds": ["v2"] },
+            { "id": "v2", "isInitial": false, "elements": [{"value":1},{"value":1}], "nextEventIds": [],
+              "outputEvents": [{"id":"o","vector":[1,0]}] }
           ]
         }
       ]
