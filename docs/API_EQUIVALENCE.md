@@ -66,8 +66,8 @@ established beyond the first input event, so these are first observations from
 territory the suite reaches but had not yet certified.
 
 Newly established, and narrower than byte equivalence: with the output arbiter
-implemented in all four runtimes (`docs/ARBITER_CONTRACT.md` in
-`RealityEngine_Machines`), C++, LSP and Scala agree on the **resolved value of a
+implemented in all four runtimes (`ARBITER_CONTRACT.md`, mastered in
+`RealityEngine_CI`), C++, LSP and Scala agree on the **resolved value of a
 contended universal-vector position**. Verified live against the §9a contention
 fixture — two machines writing one cell with opposing values and opposing
 severities resolve to the `SEVERITY` outcome in all three, where the previous
