@@ -735,9 +735,9 @@ paths:
             schema:
               type: object
               required:
-              - inputVector
+              - inputEvent
               properties:
-                inputVector:
+                inputEvent:
                   $ref: '#/components/schemas/Vector'
       responses:
         '200':
@@ -795,9 +795,9 @@ paths:
             schema:
               type: object
               required:
-              - inputVector
+              - inputEvent
               properties:
-                inputVector:
+                inputEvent:
                   $ref: '#/components/schemas/Vector'
       responses:
         '200':

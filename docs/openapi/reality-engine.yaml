@@ -78,7 +78,7 @@ components:
     RealityConfig:
       type: object
       properties:
-        vectorDimension:
+        eventDimension:
           type: integer
           example: 7680
         matchThreshold:
@@ -151,7 +151,7 @@ components:
       type: object
       additionalProperties: true
       properties:
-        inputVector:
+        inputEvent:
           $ref: '#/components/schemas/Vector'
         timestamp:
           type: number
