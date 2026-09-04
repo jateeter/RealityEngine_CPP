@@ -621,7 +621,7 @@ Json RealityEvent::to_json() const {
   return Json::Object{
     {"id", id}, {"matchAlgorithm", to_string(matchAlgorithm)}, {"elements", elems},
     {"state", is_active() ? "active" : "inactive"}, {"isActive", is_active()},
-    {"nextVectorIds", next}, {"outputVectors", outs}, {"isInitial", isInitial},
+    {"nextEventIds", next}, {"outputEvents", outs}, {"isInitial", isInitial},
     {"wasJustMatched", justMatched}, {"metadata", metadata}
   };
 }
@@ -709,7 +709,7 @@ Json CriticalEventSequence::to_json() const {
     if (v.isInitial) initials.emplace_back(id);
     if (!v.output_vectors().empty()) outputs.emplace_back(id);
   }
-  Json::Object out{{"id", id}, {"name", name}, {"vectors", arr}, {"initialEventIds", initials}, {"outputVectorIds", outputs}, {"metadata", metadata}};
+  Json::Object out{{"id", id}, {"name", name}, {"events", arr}, {"initialEventIds", initials}, {"outputEventIds", outputs}, {"metadata", metadata}};
   if (!schemaVersion.empty()) out["schemaVersion"] = schemaVersion;
   if (!deprecatedAt.empty())  out["deprecatedAt"]  = deprecatedAt;
   if (!replacedBy.empty())    out["replacedBy"]    = replacedBy;

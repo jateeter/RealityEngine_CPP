@@ -1181,7 +1181,7 @@ private:
   Json active_vector_json(const RealityEvent& vector) const {
     Json full = vector.to_json();
     Json::Array outs;
-    for (const auto& o : full.at("outputVectors").is_array() ? full.at("outputVectors").array() : Json::Array{}) {
+    for (const auto& o : full.at("outputEvents").is_array() ? full.at("outputEvents").array() : Json::Array{}) {
       outs.push_back(Json::Object{
         {"id", o.at("id")},
         {"metadata", o.at("metadata")},
@@ -1195,8 +1195,8 @@ private:
       {"isInitial", full.at("isInitial")},
       {"matchAlgorithm", full.at("matchAlgorithm")},
       {"metadata", full.at("metadata")},
-      {"nextVectorIds", full.at("nextVectorIds")},
-      {"outputVectors", outs},
+      {"nextEventIds", full.at("nextEventIds")},
+      {"outputEvents", outs},
       {"state", full.at("state")},
       {"wasJustMatched", full.at("wasJustMatched")}
     };
