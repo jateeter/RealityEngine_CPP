@@ -105,10 +105,10 @@ void test_no_governance_returns_unrouted(const std::filesystem::path& /*machines
       },
       "sequences": [{
         "id": "legacy-seq", "name": "Legacy",
-        "vectors": [{
+        "events": [{
           "id": "legacy-v", "isInitial": true,
           "elements": [{ "value": 1, "threshold": 0.5 }],
-          "outputVectors": [{ "id": "legacy-out", "vector": [1], "metadata": {} }]
+          "outputEvents": [{ "id": "legacy-out", "vector": [1], "metadata": {} }]
         }]
       }]
     }
