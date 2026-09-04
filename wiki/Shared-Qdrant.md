@@ -13,7 +13,7 @@ Qdrant is owned by `localAIStack`.
 | gRPC URL | `http://localhost:4334` |
 | Storage directory | `../localAIStack/volumes/qdrant` |
 | localAIStack collection | `localai_docs` |
-| Reality Engine collection | `reality-vectors` |
+| Reality Engine collection | `reality-events` |
 
 ## Ownership Boundary
 

@@ -62,7 +62,7 @@ Recommended reality-vector persistence options:
    `spaceVersion` and `dimension` metadata.
 3. If Qdrant similarity search is needed for operational snapshots, create a
    Reality Engine-owned collection named by dimension/version, for example
-   `reality_vectors_v<spaceVersion>_<dimension>`. Do not place these points in
+   `reality_events_v<spaceVersion>_<dimension>`. Do not place these points in
    localAIStack embedding collections.
 
 ## Dynamic Dimension Lifecycle

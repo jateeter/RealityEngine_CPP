@@ -88,7 +88,7 @@ components:
           type: string
         collectionName:
           type: string
-          example: reality-vectors
+          example: reality-events
     RuntimeOptions:
       type: object
       properties:
