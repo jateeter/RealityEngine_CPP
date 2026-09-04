@@ -121,19 +121,6 @@ public:
     return it == obj.end() ? null_value : it->second;
   }
 
-  // One observation, two spellings, during the corpus schema rename
-  // (RealityEngine_CI#220 layer 1). A machine file names the same collection
-  // `events` or `vectors` depending on whether it has been rewritten yet, and
-  // a loader that accepts only one reads an empty list from the other — with
-  // no error. The machine loads with no sequences and the engine reports
-  // success, which is the failure mode this whole layer is sequenced around.
-  //
-  // The canonical name is tried first. Deleted in layer 1c, once the corpus
-  // carries only the new spelling.
-  const Value& at_either(const std::string& canonical, const std::string& legacy) const {
-    const Value& primary = at(canonical);
-    return primary.is_null() ? at(legacy) : primary;
-  }
 
 };
 

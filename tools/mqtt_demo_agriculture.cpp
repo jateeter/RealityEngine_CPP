@@ -100,8 +100,8 @@ MachineSummary load_machine(const fs::path& file) {
   if (m.at("sequences").is_array()) {
     for (const auto& seq : m.at("sequences").array()) {
       std::string sid = seq.at("id").as_string();
-      if (!seq.at_either("events", "vectors").is_array() || seq.at_either("events", "vectors").array().empty()) continue;
-      const auto& v0 = seq.at_either("events", "vectors").array()[0];
+      if (!seq.at("events").is_array() || seq.at("events").array().empty()) continue;
+      const auto& v0 = seq.at("events").array()[0];
       if (!v0.at("isInitial").as_bool(false)) continue;
       if (!v0.at("elements").is_array()) continue;
       std::vector<std::pair<double, double>> pattern;
@@ -111,8 +111,8 @@ MachineSummary load_machine(const fs::path& file) {
         pattern.emplace_back(value, threshold);
       }
       s.initialPatterns[sid] = pattern;
-      if (v0.at_either("outputEvents", "outputVectors").is_array()) {
-        s.initialOutputs[sid] = v0.at_either("outputEvents", "outputVectors").array();
+      if (v0.at("outputEvents").is_array()) {
+        s.initialOutputs[sid] = v0.at("outputEvents").array();
       }
     }
   }
