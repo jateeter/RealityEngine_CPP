@@ -367,6 +367,11 @@ public:
   Vector extract_machine_input(const PerceptualMapping& mapping) const;
   void merge_machine_output(const Vector& output, const PerceptualMapping& mapping);
   void update_region(int offset, const Vector& values);
+  // Single-cell store. update_region is the region form and needs a Vector to
+  // pass one double, which allocates once per cell — a real cost when 90% of
+  // written cells hold exactly one contribution and need no fold at all
+  // (ARBITER_CONTRACT.md 4.5). Same bounds contract as update_region.
+  void set_cell(int cell, double value);
 
 private:
   Vector values;
