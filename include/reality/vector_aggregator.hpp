@@ -94,15 +94,46 @@ inline std::vector<double> aggregate_machine_outputs(
     std::sort(records.begin(), records.end(),
               [](const MergeRecord& a, const MergeRecord& b) { return a.sort_key < b.sort_key; });
 
+    // A cell covered by more than one gated contributor was ARBITRATED by the
+    // Reality Engine, and `base` already carries that resolution. Writing it
+    // here would replace the arbiter's answer with last-writer-wins in
+    // machineName order, which is the merge the arbiter exists to replace
+    // (ARBITER_CONTRACT.md 2.1, "Nothing bypasses the arbiter").
+    //
+    // Reproduced before this guard: over 30 pushes at 2-30% density against the
+    // 1328-machine corpus, cell 2437 read 1 in the arbitrated space and 0 after
+    // aggregation. Four Legal Services machines share region [2435:2439] and the
+    // registry declares the cell PRECEDENCE-contended; the arbiter resolved 1
+    // and the later-sorted contributor's zero overwrote it. The three
+    // aggregating runtimes advanced with 0, the TypeScript PE with 1
+    // (RealityEngine_CI#263).
+    //
+    // Contention is computed from the gated contributors themselves rather than
+    // read from the step: `arbitration` is not on the push wire -- SURFACE_SPEC
+    // lists the step's keys and it is not among them -- and 6 observability is a
+    // separate GET, so consulting it would cost a round trip per step.
+    std::vector<int> writers_per_cell;
+    for (const auto& rec : records) {
+        const int end = rec.offset + rec.write_len;
+        if (end > static_cast<int>(writers_per_cell.size()))
+            writers_per_cell.resize(static_cast<size_t>(end), 0);
+        for (int i = 0; i < rec.write_len; ++i)
+            ++writers_per_cell[static_cast<size_t>(rec.offset + i)];
+    }
+
     for (const auto& rec : records) {
         // Grow base to accommodate the output region if needed
         const int needed = rec.offset + rec.write_len;
         if (needed > static_cast<int>(base.size()))
             base.resize(needed, 0.0);
 
-        // Write into region — unconditional (zeros clear stale values)
-        for (int i = 0; i < rec.write_len; ++i)
-            base[rec.offset + i] = rec.vec[i];
+        // Write into region — unconditional (zeros clear stale values) EXCEPT
+        // where the cell was arbitrated, which the engine has already resolved.
+        for (int i = 0; i < rec.write_len; ++i) {
+            const int cell = rec.offset + i;
+            if (writers_per_cell[static_cast<size_t>(cell)] > 1) continue;
+            base[cell] = rec.vec[i];
+        }
     }
     return base;
 }
