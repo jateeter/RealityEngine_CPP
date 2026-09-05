@@ -859,6 +859,49 @@ void PerceptualSpace::update_region(int offset, const Vector& regionValues) {
   std::copy(regionValues.begin(), regionValues.end(), values.begin() + offset);
 }
 
+std::vector<OutputVector> PerceptualSpaceRuntime::process_across_machines(const Vector& input) {
+  // 1. Atomic collection. The machine set is sampled once, as one consistent
+  //    view, so a machine added or removed partway cannot appear in some
+  //    results and not others (RealityEngine_CI#254, property 1). Pointers into
+  //    `machines` stay valid for the call: the caller holds the runtime lock.
+  struct Job { const std::string* id; Machine* machine; };
+  std::vector<Job> jobs;
+  jobs.reserve(machines.size());
+  for (auto& [id, m] : machines) jobs.push_back({&id, &m});
+
+  // 2. Machine-level parallelism, on the pool the step phase already uses.
+  //    Machines are independent at this boundary — process_input touches only
+  //    its own machine's sequences.
+  std::vector<std::optional<OutputVector>> results(jobs.size());
+  std::vector<std::future<std::optional<OutputVector>>> futures;
+  futures.reserve(jobs.size());
+  auto& pool = domain_workers();
+  if (!pool.try_reserve(jobs.size())) throw std::runtime_error("Domain worker queue is full");
+  size_t unsubmitted = jobs.size();
+  try {
+    for (const auto& job : jobs) {
+      auto future = pool.submit_reserved([job, &input]() -> std::optional<OutputVector> {
+        auto r = job.machine->process_input(input);
+        return r.machineOutput;
+      });
+      --unsubmitted;
+      futures.push_back(std::move(future));
+    }
+  } catch (...) {
+    if (unsubmitted > 0) pool.release_reservation(unsubmitted);
+    throw;
+  }
+  // 3. Atomic join, in snapshot order. Results are placed by index rather than
+  //    appended on completion, so the output order is canonical regardless of
+  //    which worker finished first.
+  for (size_t i = 0; i < futures.size(); ++i) results[i] = futures[i].get();
+
+  std::vector<OutputVector> outputs;
+  outputs.reserve(results.size());
+  for (auto& r : results) if (r) outputs.push_back(std::move(*r));
+  return outputs;
+}
+
 void PerceptualSpace::set_cell(int cell, double value) {
   if (cell < 0 || cell >= static_cast<int>(values.size())) throw std::out_of_range("Region outside perceptual space");
   values[static_cast<size_t>(cell)] = value;
