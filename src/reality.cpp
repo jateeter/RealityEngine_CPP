@@ -2191,13 +2191,16 @@ Json to_json(const TrajectoryEntry& entry) {
     {"nonZero", cells}
   };
 }
-Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace) {
+Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace,
+             bool includeActiveRegions) {
   Json::Object machineResults;
   if (includeMachineResults) {
     for (const auto& [id, mr] : step.machineResults) machineResults[id] = Json::Object{{"machineId", mr.machineId}, {"machineName", mr.machineName}, {"inputEvent", json::numbers(mr.inputVector)}, {"outputVector", mr.outputVector ? Json(json::numbers(*mr.outputVector)) : Json(nullptr)}, {"mergedOutputVector", mr.mergedOutputVector ? Json(json::numbers(*mr.mergedOutputVector)) : Json(nullptr)}, {"outputMergeTransformation", mr.outputMergeTransformation}, {"inputRegion", to_json(mr.inputRegion)}, {"outputRegion", mr.outputRegion ? to_json(*mr.outputRegion) : Json(nullptr)}, {"transitionResult", to_json(mr.transitionResult)}};
   }
   Json::Array regions;
-  for (const auto& r : step.activeRegions) regions.push_back(Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}, {"machineId", r.machineId}, {"type", r.type}});
+  if (includeActiveRegions) {
+    for (const auto& r : step.activeRegions) regions.push_back(Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}, {"machineId", r.machineId}, {"type", r.type}});
+  }
   Json::Array mergeBatch;
   for (const auto& op : step.mergeBatch) {
     Json::Array provArr;
@@ -2241,7 +2244,13 @@ Json to_json(const SimulationStep& step, bool includeMachineResults, bool includ
       {"provenance", prov}
     });
   }
-  Json::Object out{{"stepNumber", static_cast<double>(step.stepNumber)}, {"timestamp", static_cast<double>(step.timestamp)}, {"activeRegions", regions}};
+  Json::Object out{{"stepNumber", static_cast<double>(step.stepNumber)}, {"timestamp", static_cast<double>(step.timestamp)}};
+  // Omitted, not emptied, when not requested (SURFACE_SPEC.md, "Requesting less
+  // than the full step"). An empty array is the claim that no regions were
+  // active, which is a different statement from "not asked for" — and the parity
+  // stage compares key sets, so emptying it would read as agreement between a
+  // runtime that had nothing to report and one that was never asked.
+  if (includeActiveRegions) out["activeRegions"] = regions;
   // mergeBatch is the authoritative synchronization result — clients should
   // apply these region writes to stay in sync. The dense perceptualSpace
   // payload is a debug projection of the post-merge state and may be omitted
@@ -2255,8 +2264,11 @@ Json to_json(const SimulationStep& step, bool includeMachineResults, bool includ
   if (includeMachineResults) out["machineResults"] = machineResults;
   return out;
 }
+Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace) {
+  return to_json(step, includeMachineResults, includePerceptualSpace, true);
+}
 Json to_json(const SimulationStep& step, bool includeMachineResults) {
-  return to_json(step, includeMachineResults, true);
+  return to_json(step, includeMachineResults, true, true);
 }
 Json to_json(const SimulationStep& step) {
   return to_json(step, true);
