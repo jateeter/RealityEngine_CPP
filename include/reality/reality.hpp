@@ -690,6 +690,17 @@ public:
     std::uint64_t coveragePagingNs = 0; // paging-decision / deprecated-fire records
     std::uint64_t mergeOpNs       = 0;  // MergeOperation construction
   };
+  // Map across machines, in parallel, over one atomic collection
+  // (SURFACE_SPEC.md, "POST /api/engine/process"; RealityEngine_CI#254).
+  //
+  // Lives here rather than in the route because the machines that RUN are the
+  // runtime's, and because the domain worker pool the fan-out uses is in this
+  // translation unit. The route previously walked the SERVER's registry, whose
+  // copies carry transitionsInhibited — so every machine refused to transition
+  // and the route could never produce an output. Scala and LSP both return 167
+  // outputs on the same input where this returned 0.
+  std::vector<OutputVector> process_across_machines(const Vector& input);
+
   const PhaseTimings& phase_timings() const { return phaseTimings; }
   void reset_phase_timings() { phaseTimings = PhaseTimings{}; }
   bool phase_detail() const { return phaseDetail; }

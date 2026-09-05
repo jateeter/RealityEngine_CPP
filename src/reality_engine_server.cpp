@@ -340,11 +340,19 @@ public:
       auto body = parse_body(req);
       auto vec = json::to_numbers(body.at("vector"));
       Json::Array outputs;
-      std::unique_lock<std::shared_mutex> lock(registryMutex);
-      for (auto& [_, m] : machines) {
-        auto r = m.process_input(vec);
-        if (r.machineOutput) outputs.push_back(to_json(*r.machineOutput));
-      }
+      // Runs against the RUNTIME's machines, not the registry's.
+      //
+      // This walked `machines` — the server registry — whose copies carry
+      // transitionsInhibited, so every one returned the shape of a machine that
+      // matched nothing and this route could never emit an output. LSP and
+      // Scala both return 167 on the input that returned 0 here
+      // (RealityEngine_CI#254).
+      //
+      // process_across_machines also supplies the two properties the contract
+      // asks for and the serial loop did not: one atomic collection of the
+      // machine set, and machine-level parallelism over it.
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      for (auto& out : spaceRuntime.process_across_machines(vec)) outputs.push_back(to_json(out));
       auto result = Json::Object{{"inputEvent", json::numbers(vec)}, {"timestamp", static_cast<double>(now_ms())}, {"outputs", outputs}};
       record_engine_history(Json::Object{{"type", "engine-process"}, {"result", result}});
       return ok(Json::Object{{"result", result}});
