@@ -859,6 +859,23 @@ void PerceptualSpace::update_region(int offset, const Vector& regionValues) {
   std::copy(regionValues.begin(), regionValues.end(), values.begin() + offset);
 }
 
+std::map<std::string, bool> PerceptualSpaceRuntime::transitions_inhibited() const {
+  std::map<std::string, bool> out;
+  for (const auto& [id, m] : machines) out[id] = m.transitionsInhibited;
+  return out;
+}
+
+bool PerceptualSpaceRuntime::set_transitions_inhibited(const std::string& id, bool value) {
+  auto it = machines.find(id);
+  if (it == machines.end()) return false;
+  it->second.transitionsInhibited = value;
+  return true;
+}
+
+void PerceptualSpaceRuntime::set_transitions_inhibited_all(bool value) {
+  for (auto& [_, m] : machines) m.transitionsInhibited = value;
+}
+
 std::vector<OutputVector> PerceptualSpaceRuntime::process_across_machines(const Vector& input) {
   // 1. Atomic collection. The machine set is sampled once, as one consistent
   //    view, so a machine added or removed partway cannot appear in some
