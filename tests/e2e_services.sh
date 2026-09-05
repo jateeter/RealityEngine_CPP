@@ -131,7 +131,7 @@ for path in root.rglob("*.json"):
         isinstance(mapping, dict)
         and isinstance(mapping.get("input"), dict)
         and isinstance(seqs, list)
-        and any(seq.get("events") or seq.get("vectors") for seq in seqs)
+        and any(seq.get("events") for seq in seqs)
     ):
         count += 1
 print(count)
