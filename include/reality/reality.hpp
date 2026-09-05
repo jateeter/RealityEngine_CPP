@@ -678,9 +678,22 @@ public:
     std::uint64_t eventBusNs      = 0;  // apply_event_bus
     std::uint64_t spaceCopyNs     = 0;  // step.perceptualSpace = space.vector()
     std::uint64_t activeRegionsNs = 0;  // active region build + canonical sort
+
+    // Inside merge_build, which is ~70% of the step. Off by default — these sit
+    // in a loop over every machine, so unlike the phase probes above they would
+    // cost a measurable fraction of the thing they measure if always on.
+    // Enable with RE_PHASE_DETAIL=1 or PATCH /api/runtime/options
+    // {"phaseDetail":true}. Zero when disabled, and the metric omits them.
+    std::uint64_t foldNs          = 0;  // fold_outputs — the intra-machine fold
+    std::uint64_t machineResultNs = 0;  // building + inserting MachineStepResult
+    std::uint64_t governanceNs    = 0;  // resolve_governance + severity ranking
+    std::uint64_t coveragePagingNs = 0; // paging-decision / deprecated-fire records
+    std::uint64_t mergeOpNs       = 0;  // MergeOperation construction
   };
   const PhaseTimings& phase_timings() const { return phaseTimings; }
   void reset_phase_timings() { phaseTimings = PhaseTimings{}; }
+  bool phase_detail() const { return phaseDetail; }
+  void set_phase_detail(bool on) { phaseDetail = on; }
 
   explicit PerceptualSpaceRuntime(int dimension = 0);
   int dimension() const;
@@ -750,6 +763,7 @@ public:
 private:
   SimulationStep run_phases(int stepNumber, std::optional<ComparatorType> overrideType);
   PhaseTimings phaseTimings;
+  bool phaseDetail = false;
   int initialDimension;
   PerceptualSpace space;
   std::map<std::string, Machine> machines;

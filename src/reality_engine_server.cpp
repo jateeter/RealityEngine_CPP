@@ -43,6 +43,7 @@ public:
   }
 
   void mount(http::Server& server) {
+    if (phaseDetailEnv) spaceRuntime.set_phase_detail(true);
     server.sse("/api/engine/stream", sseHub);
     server.route("GET", "/", [](const http::Request&) {
       return ok(Json::Object{{"name", "Reality Engine"}, {"version", "1.0.0-cpp"}, {"status", "running"}});
@@ -205,12 +206,31 @@ public:
             {"space_copy",     pt.spaceCopyNs},
             {"active_regions", pt.activeRegionsNs},
         };
+        // Sub-phases of merge_build, emitted only when the detail gate is on.
+        // Absent rather than zero when off: a zero would read as "this costs
+        // nothing", which is a claim, where absence is the truth — not measured.
+        const std::pair<const char*, std::uint64_t> detailPhases[] = {
+            {"merge_build.fold",           pt.foldNs},
+            {"merge_build.machine_result", pt.machineResultNs},
+            {"merge_build.governance",     pt.governanceNs},
+            {"merge_build.coverage_paging", pt.coveragePagingNs},
+            {"merge_build.merge_op",       pt.mergeOpNs},
+        };
         extras << std::fixed << std::setprecision(9);
         for (const auto& [name, ns] : phases) {
           extras << "re_step_phase_seconds_total{runtime=\"cpp\",phase=\"" << name << "\"} "
                  << (static_cast<double>(ns) / 1e9) << "\n";
         }
+        if (spaceRuntime.phase_detail()) {
+          for (const auto& [name, ns] : detailPhases) {
+            extras << "re_step_phase_seconds_total{runtime=\"cpp\",phase=\"" << name << "\"} "
+                   << (static_cast<double>(ns) / 1e9) << "\n";
+          }
+        }
         extras.unsetf(std::ios::fixed);
+        extras << "# HELP re_step_phase_detail Whether the merge_build sub-phase probes are enabled.\n";
+        extras << "# TYPE re_step_phase_detail gauge\n";
+        extras << "re_step_phase_detail{runtime=\"cpp\"} " << (spaceRuntime.phase_detail() ? 1 : 0) << "\n";
         extras << "# HELP re_step_phase_steps_total Steps measured — the denominator for re_step_phase_seconds_total.\n";
         extras << "# TYPE re_step_phase_steps_total counter\n";
         extras << "re_step_phase_steps_total{runtime=\"cpp\"} " << pt.steps << "\n";
@@ -270,6 +290,10 @@ public:
       if (body.at("includeMachineResults").is_bool()) includeMachineResultsDefault = body.at("includeMachineResults").as_bool();
       if (body.at("includePerceptualSpace").is_bool()) includePerceptualSpaceDefault = body.at("includePerceptualSpace").as_bool();
       if (body.at("includeActiveRegions").is_bool()) includeActiveRegionsDefault = body.at("includeActiveRegions").as_bool();
+      if (body.at("phaseDetail").is_bool()) {
+        std::lock_guard<std::mutex> lk(spaceRuntimeMutex);
+        spaceRuntime.set_phase_detail(body.at("phaseDetail").as_bool());
+      }
       return ok(runtime_options());
     });
     server.route("GET", "/api/engine/active", [this](const http::Request&) { return ok(Json::Object{{"activeEvents", active_vectors_json()}}); });
@@ -1262,6 +1286,7 @@ private:
       {"includeMachineResults", includeMachineResultsDefault},
       {"includePerceptualSpace", includePerceptualSpaceDefault},
       {"includeActiveRegions", includeActiveRegionsDefault},
+      {"phaseDetail", spaceRuntime.phase_detail()},
       {"projectionControls", Json::Object{
         {"includeMachineResults", "boolean request field on /api/perceive"},
         {"includePerceptualSpace", "boolean request field on /api/perceive"},
@@ -1331,6 +1356,13 @@ private:
   int dimension = 768;
   double matchThreshold = 0.5;
   PerceptualSpaceRuntime spaceRuntime;
+  // Sub-phase probes inside merge_build, off unless asked for. An env default so
+  // a run can be started with detail on without a follow-up PATCH, which matters
+  // when the thing being measured is the first step after boot.
+  const bool phaseDetailEnv = [] {
+    const char* v = std::getenv("RE_PHASE_DETAIL");
+    return v && (std::string(v) == "1" || std::string(v) == "true");
+  }();
   PerceptionMapper perception;
   std::string machinesDirectory;
   std::vector<Json> engineHistory;

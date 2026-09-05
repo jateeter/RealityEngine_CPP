@@ -1188,6 +1188,36 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   // Phase clock for the serialised region below. `mark` advances at each phase
   // boundary, so every tick() is the cost of exactly the span since the last
   // one and the phases sum to the whole region with nothing unattributed.
+  // Scoped accumulator for the sub-phase probes inside merge_build. Unlike
+  // `tick` below, these sit in a loop over every machine, so they are gated:
+  // when phaseDetail is off the clock is never read and the cost is one
+  // predictable branch per region. RAII rather than paired calls so a probe
+  // cannot be left unclosed by an early continue.
+  struct ScopedNs {
+    std::uint64_t* sink;
+    std::chrono::steady_clock::time_point t0;
+    ScopedNs(bool on, std::uint64_t& s) : sink(on ? &s : nullptr) {
+      if (sink) t0 = std::chrono::steady_clock::now();
+    }
+    ~ScopedNs() {
+      if (sink) *sink += static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - t0).count());
+    }
+    // Ends the probe early, where the region it measures finishes before the
+    // enclosing scope does. Idempotent, so the destructor is a no-op after it.
+    void stop() {
+      if (!sink) return;
+      *sink += static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - t0).count());
+      sink = nullptr;
+    }
+    ScopedNs(const ScopedNs&) = delete;
+    ScopedNs& operator=(const ScopedNs&) = delete;
+  };
+  const bool detail = phaseDetail;
+
   auto mark = std::chrono::steady_clock::now();
   const auto tick = [&mark]() -> std::uint64_t {
     const auto now = std::chrono::steady_clock::now();
@@ -1259,12 +1289,17 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     // transformation ignores it, which is why the two corpus machines that
     // declare a chain fold (both "join") need no top.
     const std::optional<int> chainTop = result.mapping.outputAlphabetTop;
-    std::optional<Vector> merged =
-      fold_outputs(potentialOutputs, transformation, chainTop);
+    std::optional<Vector> merged;
+    {
+      ScopedNs _(detail, phaseTimings.foldNs);
+      merged = fold_outputs(potentialOutputs, transformation, chainTop);
+    }
 
     // Named assignment rather than aggregate initialisation: the field order of
     // MachineStepResult is not a contract, and a positional list breaks
     // silently when one is inserted.
+    {
+    ScopedNs machineResultProbe(detail, phaseTimings.machineResultNs);
     MachineStepResult msr;
     msr.machineId        = result.id;
     msr.machineName      = result.name;
@@ -1281,6 +1316,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     msr.transitionResult = result.transition;
     if (msr.outputVector || msr.mergedOutputVector) msr.outputRegion = result.mapping.output;
     step.machineResults[result.id] = msr;
+    }
 
     // Which Reality Events completed, and the evidence behind them. Computed
     // BEFORE the fold's outcome is consulted, and recorded even when the fold
@@ -1352,6 +1388,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
       // The winner's PagingDecision travels WHOLE. Composing one from the
       // ragStatusCode of one rule and the ownerTeam of another would describe no
       // rule that exists, and it is a real on-call rota that reads ownerTeam.
+      ScopedNs governanceProbe(detail, phaseTimings.governanceNs);
       int bestRank = -1;
       for (const auto& po : result.pendingOutputs) {
         auto decision = resolve_governance(machineIt->second, po.sequenceId, po.values);
@@ -1367,6 +1404,8 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
       // from per-firing to per-machine-per-step; dashboards reading those
       // counters step down with it, and that is the shape of the move rather
       // than a regression.
+      governanceProbe.stop();
+      ScopedNs coverageProbe(detail, phaseTimings.coveragePagingNs);
       if (op.governance) {
         coverage.record_paging_decision(
             op.governance->ownerTeam.empty()     ? "unrouted" : op.governance->ownerTeam,
@@ -1409,7 +1448,10 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
         if (marked) break;
       }
     }
-    step.mergeBatch.push_back(std::move(op));
+    {
+      ScopedNs _(detail, phaseTimings.mergeOpNs);
+      step.mergeBatch.push_back(std::move(op));
+    }
   }
 
   // Canonical merge ordering — by machineId alone, which is total now that the
