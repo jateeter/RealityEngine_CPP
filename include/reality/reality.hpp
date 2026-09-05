@@ -893,6 +893,12 @@ Json to_json(const MachineTransitionResult& r);
 Json to_json(const SimulationStep& step);
 Json to_json(const SimulationStep& step, bool includeMachineResults);
 Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace);
+// includeActiveRegions=false omits `activeRegions` entirely rather than
+// emitting an empty array (SURFACE_SPEC.md). It is an observation surface —
+// nothing reads it to produce the next result — and it scales with the
+// corpus rather than with what fired (RealityEngine_CI#259).
+Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace,
+             bool includeActiveRegions);
 Json to_json(const TrajectoryEntry& entry);
 Json to_json(const SourceConfig& source);
 // The reported `active` is stored AND validated at every read

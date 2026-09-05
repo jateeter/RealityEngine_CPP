@@ -269,6 +269,7 @@ public:
       if (body.at("historyLimit").is_number()) spaceRuntime.set_history_limit(static_cast<size_t>(body.at("historyLimit").as_number()));
       if (body.at("includeMachineResults").is_bool()) includeMachineResultsDefault = body.at("includeMachineResults").as_bool();
       if (body.at("includePerceptualSpace").is_bool()) includePerceptualSpaceDefault = body.at("includePerceptualSpace").as_bool();
+      if (body.at("includeActiveRegions").is_bool()) includeActiveRegionsDefault = body.at("includeActiveRegions").as_bool();
       return ok(runtime_options());
     });
     server.route("GET", "/api/engine/active", [this](const http::Request&) { return ok(Json::Object{{"activeEvents", active_vectors_json()}}); });
@@ -883,6 +884,11 @@ public:
       if (body.at("matchAlgorithmOverride").is_string()) overrideType = comparator_from_string(body.at("matchAlgorithmOverride").as_string());
       bool includeMachineResults = body.at("includeMachineResults").as_bool(body.at("compact").as_bool(false) ? false : includeMachineResultsDefault);
       bool includePerceptualSpace = body.at("includePerceptualSpace").as_bool(includePerceptualSpaceDefault);
+      // Observation surface, like machineResults. Deliberately NOT folded into
+      // `compact`, which omits exactly machineResults and nothing else —
+      // widening it would silently change a wire several regression stages
+      // already compare byte-for-byte (SURFACE_SPEC.md).
+      bool includeActiveRegions = body.at("includeActiveRegions").as_bool(includeActiveRegionsDefault);
 
       // Polymorphic input — exactly one of vector / sparseVector / domainVectors.
       // The spaceRuntime's tolerant set_vector handles over/under-sized dense inputs.
@@ -929,7 +935,7 @@ public:
         step = spaceRuntime.process_immediate(assembled, overrideType);
         perception.perceptual_space().set_vector(step.perceptualSpace);
       }
-      Json out = to_json(step, includeMachineResults, includePerceptualSpace);
+      Json out = to_json(step, includeMachineResults, includePerceptualSpace, includeActiveRegions);
       bool compact = body.at("compact").as_bool(false);
       auto compactQuery = req.queryParams.find("compact");
       if (compactQuery != req.queryParams.end()) compact = compactQuery->second == "true" || compactQuery->second == "1";
@@ -1255,6 +1261,7 @@ private:
       {"historyLimit", static_cast<double>(spaceRuntime.history_limit())},
       {"includeMachineResults", includeMachineResultsDefault},
       {"includePerceptualSpace", includePerceptualSpaceDefault},
+      {"includeActiveRegions", includeActiveRegionsDefault},
       {"projectionControls", Json::Object{
         {"includeMachineResults", "boolean request field on /api/perceive"},
         {"includePerceptualSpace", "boolean request field on /api/perceive"},
@@ -1332,6 +1339,9 @@ private:
   long bufferedDelay = 100;
   bool includeMachineResultsDefault = true;
   bool includePerceptualSpaceDefault = true;
+  // Defaults stay full so no existing caller changes shape and the parity
+  // gates keep comparing identical key sets until a caller opts out.
+  bool includeActiveRegionsDefault = true;
   bool samplerRunning = false;
   long samplerIntervalMs = 0;
   long long samplerSampleCount = 0;
