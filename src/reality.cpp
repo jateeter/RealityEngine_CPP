@@ -1303,7 +1303,11 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     MachineStepResult msr;
     msr.machineId        = result.id;
     msr.machineName      = result.name;
-    msr.inputVector      = result.snapshot;
+    // Moved, not copied. `results` is not read again after this loop and
+    // nothing below touches result.snapshot or result.transition — checked,
+    // because a move from a member that is read later is the kind of change
+    // that produces an empty vector rather than a compile error.
+    msr.inputVector      = std::move(result.snapshot);
     msr.outputVector     = result.transition.machineOutput
                              ? std::optional<Vector>(result.transition.machineOutput->vector)
                              : std::nullopt;
@@ -1313,9 +1317,11 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     msr.mergedOutputVector        = merged;
     msr.outputMergeTransformation = to_string(transformation);
     msr.inputRegion      = result.mapping.input;
-    msr.transitionResult = result.transition;
+    msr.transitionResult = std::move(result.transition);
     if (msr.outputVector || msr.mergedOutputVector) msr.outputRegion = result.mapping.output;
-    step.machineResults[result.id] = msr;
+    // The insert was a copy of the whole record — every vector in it, plus the
+    // transition result, duplicated for each of 1328 machines every step.
+    step.machineResults[result.id] = std::move(msr);
     }
 
     // Which Reality Events completed, and the evidence behind them. Computed
