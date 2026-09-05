@@ -5,6 +5,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <shared_mutex>
@@ -179,6 +180,40 @@ public:
         extras << "# HELP re_runtime_mapping_version Monotonic version bumped on every add/remove_machine.\n";
         extras << "# TYPE re_runtime_mapping_version gauge\n";
         extras << "re_runtime_mapping_version{runtime=\"cpp\"} " << spaceRuntime.mapping_version() << "\n";
+        // Where a step's time goes, by phase of the serialised region that runs
+        // after the machine futures join. The OSRE build is ~86% of a step
+        // (RealityEngine_CI#256); this is what says which part of it.
+        //
+        // Counters, not gauges: seconds accumulated and a step count, so
+        // rate(_seconds_total) / rate(_steps_total) is the per-step cost and a
+        // scrape that lands mid-step cannot report a partial figure as a level.
+        // One metric with a phase label rather than twelve metric names, so a
+        // dashboard can sum or break down without knowing the phase set.
+        const auto& pt = spaceRuntime.phase_timings();
+        extras << "# HELP re_step_phase_seconds_total Cumulative wall clock per phase of a step.\n";
+        extras << "# TYPE re_step_phase_seconds_total counter\n";
+        const std::pair<const char*, std::uint64_t> phases[] = {
+            {"machine_join",   pt.machineJoinNs},
+            {"coverage",       pt.coverageNs},
+            {"merge_build",    pt.mergeBuildNs},
+            {"merge_sort",     pt.mergeSortNs},
+            {"fan_in",         pt.fanInNs},
+            {"gather",         pt.gatherNs},
+            {"resolve",        pt.resolveNs},
+            {"commit",         pt.commitNs},
+            {"event_bus",      pt.eventBusNs},
+            {"space_copy",     pt.spaceCopyNs},
+            {"active_regions", pt.activeRegionsNs},
+        };
+        extras << std::fixed << std::setprecision(9);
+        for (const auto& [name, ns] : phases) {
+          extras << "re_step_phase_seconds_total{runtime=\"cpp\",phase=\"" << name << "\"} "
+                 << (static_cast<double>(ns) / 1e9) << "\n";
+        }
+        extras.unsetf(std::ios::fixed);
+        extras << "# HELP re_step_phase_steps_total Steps measured — the denominator for re_step_phase_seconds_total.\n";
+        extras << "# TYPE re_step_phase_steps_total counter\n";
+        extras << "re_step_phase_steps_total{runtime=\"cpp\"} " << pt.steps << "\n";
         body += extras.str();
       }
       http::Response r;

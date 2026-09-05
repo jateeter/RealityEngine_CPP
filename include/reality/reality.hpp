@@ -652,6 +652,36 @@ private:
 
 class PerceptualSpaceRuntime {
 public:
+  // Wall clock per phase of a step, for the serialised region that runs after
+  // the machine futures join. The OSRE build is ~86% of a step
+  // (RealityEngine_CI#256) and "the serialised build" is not a thing anyone can
+  // act on — this says which part of it.
+  //
+  // Deliberately NOT on SimulationStep. That is the parity wire and byte
+  // equivalence across the runtimes is the acceptance test; a timing field
+  // would differ on every run of every engine by construction. Exposed through
+  // /api/metrics instead, which is not compared.
+  //
+  // Plain integers, not atomics: every mutation happens inside run_phases and
+  // every read happens in the /api/metrics handler, and both hold
+  // spaceRuntimeMutex. Atomics here would also make the runtime non-copyable.
+  struct PhaseTimings {
+    std::uint64_t steps           = 0;  // denominator for all of the below
+    std::uint64_t machineJoinNs   = 0;  // the barrier itself — waiting on the last machine
+    std::uint64_t coverageNs      = 0;  // CES coverage + semantic audit record
+    std::uint64_t mergeBuildNs    = 0;  // fold per machine, governance join, merge batch
+    std::uint64_t mergeSortNs     = 0;  // canonical ordering of the batch
+    std::uint64_t fanInNs         = 0;  // counting contributions per cell
+    std::uint64_t gatherNs        = 0;  // building Contributions for contended cells
+    std::uint64_t resolveNs       = 0;  // resolve_all
+    std::uint64_t commitNs        = 0;  // writing resolved cells + OSRE nonZero
+    std::uint64_t eventBusNs      = 0;  // apply_event_bus
+    std::uint64_t spaceCopyNs     = 0;  // step.perceptualSpace = space.vector()
+    std::uint64_t activeRegionsNs = 0;  // active region build + canonical sort
+  };
+  const PhaseTimings& phase_timings() const { return phaseTimings; }
+  void reset_phase_timings() { phaseTimings = PhaseTimings{}; }
+
   explicit PerceptualSpaceRuntime(int dimension = 0);
   int dimension() const;
   // Required dimension across all currently registered machines —
@@ -719,6 +749,7 @@ public:
 
 private:
   SimulationStep run_phases(int stepNumber, std::optional<ComparatorType> overrideType);
+  PhaseTimings phaseTimings;
   int initialDimension;
   PerceptualSpace space;
   std::map<std::string, Machine> machines;

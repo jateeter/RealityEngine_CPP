@@ -1185,7 +1185,22 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     if (unsubmitted > 0) pool.release_reservation(unsubmitted);
     throw;
   }
+  // Phase clock for the serialised region below. `mark` advances at each phase
+  // boundary, so every tick() is the cost of exactly the span since the last
+  // one and the phases sum to the whole region with nothing unattributed.
+  auto mark = std::chrono::steady_clock::now();
+  const auto tick = [&mark]() -> std::uint64_t {
+    const auto now = std::chrono::steady_clock::now();
+    const auto ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(now - mark).count();
+    mark = now;
+    return static_cast<std::uint64_t>(ns);
+  };
+
   for (size_t i = 0; i < futures.size(); ++i) results[i] = futures[i].get();
+  // The barrier itself: how long the main thread spends waiting for the last
+  // machine to finish. This is the span RealityEngine_CI#256 proposes to bleed
+  // into the OSRE work rather than serialise ahead of it.
+  phaseTimings.machineJoinNs += tick();
 
   // Record CES coverage from every machine's transition.  Done after the
   // parallel phase joins so map writes are serialised by the main thread.
@@ -1196,6 +1211,8 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
       semanticAudit.record(it->second, result.transition);
     }
   }
+
+  phaseTimings.coverageNs += tick();
 
   SimulationStep step;
   step.stepNumber = stepNumber;
@@ -1401,6 +1418,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   // per machine they are constant within a machine and no longer sort keys at
   // all (FOLD_PLACEMENT.md 6). The ordering exists so every runtime emits the
   // same mergeBatch sequence for the same input.
+  phaseTimings.mergeBuildNs += tick();
   std::sort(step.mergeBatch.begin(), step.mergeBatch.end(),
             [](const MergeOperation& a, const MergeOperation& b) {
               return a.machineId < b.machineId;
@@ -1432,6 +1450,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     // Counting first is what makes the short-circuit decidable without first
     // building the thing being avoided. One pass over the batch, one flat
     // counter, no per-cell allocation.
+    phaseTimings.mergeSortNs += tick();
     const int dim = space.dimension();
     std::vector<std::uint32_t> fanIn(static_cast<size_t>(std::max(dim, 0)), 0u);
     for (const auto& merge : step.mergeBatch) {
@@ -1443,6 +1462,8 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
         if (cell >= 0 && cell < dim) ++fanIn[static_cast<size_t>(cell)];
       }
     }
+
+    phaseTimings.fanInNs += tick();
 
     osre.stepNumber = stepNumber;
     std::map<int, std::vector<Contribution>> byCell;
@@ -1485,8 +1506,11 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
         byCell[c.cell].push_back(std::move(c));
       }
     }
+    phaseTimings.gatherNs += tick();
+
     std::vector<ArbitrationRecord> records;
     const auto resolved = resolve_all(byCell, step.stepNumber, records);
+    phaseTimings.resolveNs += tick();
     // OSRE(n) observation point.  The corpus's output for this step exists as
     // a single-valued vector at exactly one instant: after resolution, as it
     // is committed. Recording it here, in the same loop as the writes, is what
@@ -1509,8 +1533,12 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   // Phase 4 — apply compose/meta-CES event-bus subscriptions, latching
   // 1.0 bits at the offsets every subscriber asked for.  These writes
   // make producer "fired" signals visible to meta-machines on the next step.
+  phaseTimings.commitNs += tick();
+
   step.eventBus = apply_event_bus(stepFirings);
+  phaseTimings.eventBusNs += tick();
   step.perceptualSpace = space.vector();
+  phaseTimings.spaceCopyNs += tick();
   for (const auto& [id, msr] : step.machineResults) {
     step.activeRegions.push_back({msr.inputRegion.offset, msr.inputRegion.length, id, "input"});
     if (msr.outputRegion) step.activeRegions.push_back({msr.outputRegion->offset, msr.outputRegion->length, id, "output"});
@@ -1533,6 +1561,9 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
               if (a.machineId != b.machineId) return a.machineId < b.machineId;
               return a.type < b.type;
             });
+  phaseTimings.activeRegionsNs += tick();
+  phaseTimings.steps += 1;
+
   record_trajectory(std::move(isre), std::move(osre));
   return step;
 }
