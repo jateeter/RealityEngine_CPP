@@ -290,10 +290,10 @@ public:
       if (body.at("includeMachineResults").is_bool()) includeMachineResultsDefault = body.at("includeMachineResults").as_bool();
       if (body.at("includePerceptualSpace").is_bool()) includePerceptualSpaceDefault = body.at("includePerceptualSpace").as_bool();
       if (body.at("includeActiveRegions").is_bool()) includeActiveRegionsDefault = body.at("includeActiveRegions").as_bool();
-      if (body.at("phaseDetail").is_bool()) {
-        std::lock_guard<std::mutex> lk(spaceRuntimeMutex);
-        spaceRuntime.set_phase_detail(body.at("phaseDetail").as_bool());
-      }
+      // No lock here: the handler already holds spaceRuntimeMutex above, and
+      // std::mutex is not recursive — re-locking it on this thread deadlocks the
+      // request. Every other option on this route is set under that same lock.
+      if (body.at("phaseDetail").is_bool()) spaceRuntime.set_phase_detail(body.at("phaseDetail").as_bool());
       return ok(runtime_options());
     });
     server.route("GET", "/api/engine/active", [this](const http::Request&) { return ok(Json::Object{{"activeEvents", active_vectors_json()}}); });
