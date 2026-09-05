@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
 #include <ctime>
 #include <deque>
@@ -858,6 +859,11 @@ void PerceptualSpace::update_region(int offset, const Vector& regionValues) {
   std::copy(regionValues.begin(), regionValues.end(), values.begin() + offset);
 }
 
+void PerceptualSpace::set_cell(int cell, double value) {
+  if (cell < 0 || cell >= static_cast<int>(values.size())) throw std::out_of_range("Region outside perceptual space");
+  values[static_cast<size_t>(cell)] = value;
+}
+
 PerceptionMapper::PerceptionMapper(int universalDimension) : dimension(universalDimension), space(universalDimension) {}
 Vector PerceptionMapper::resolve_input_event_vector(const Vector& universalInputSpace, const PerceptualMapping& mapping) {
   space.set_vector(universalInputSpace);
@@ -1179,7 +1185,22 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     if (unsubmitted > 0) pool.release_reservation(unsubmitted);
     throw;
   }
+  // Phase clock for the serialised region below. `mark` advances at each phase
+  // boundary, so every tick() is the cost of exactly the span since the last
+  // one and the phases sum to the whole region with nothing unattributed.
+  auto mark = std::chrono::steady_clock::now();
+  const auto tick = [&mark]() -> std::uint64_t {
+    const auto now = std::chrono::steady_clock::now();
+    const auto ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(now - mark).count();
+    mark = now;
+    return static_cast<std::uint64_t>(ns);
+  };
+
   for (size_t i = 0; i < futures.size(); ++i) results[i] = futures[i].get();
+  // The barrier itself: how long the main thread spends waiting for the last
+  // machine to finish. This is the span RealityEngine_CI#256 proposes to bleed
+  // into the OSRE work rather than serialise ahead of it.
+  phaseTimings.machineJoinNs += tick();
 
   // Record CES coverage from every machine's transition.  Done after the
   // parallel phase joins so map writes are serialised by the main thread.
@@ -1190,6 +1211,8 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
       semanticAudit.record(it->second, result.transition);
     }
   }
+
+  phaseTimings.coverageNs += tick();
 
   SimulationStep step;
   step.stepNumber = stepNumber;
@@ -1395,6 +1418,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   // per machine they are constant within a machine and no longer sort keys at
   // all (FOLD_PLACEMENT.md 6). The ordering exists so every runtime emits the
   // same mergeBatch sequence for the same input.
+  phaseTimings.mergeBuildNs += tick();
   std::sort(step.mergeBatch.begin(), step.mergeBatch.end(),
             [](const MergeOperation& a, const MergeOperation& b) {
               return a.machineId < b.machineId;
@@ -1409,13 +1433,60 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   // triggerConfig (the 4.3.1 join), resolve reduces per cell under the declared
   // rule, and commit writes exactly once per cell.
   {
-    std::map<int, std::vector<Contribution>> byCell;
+    // Fan-in per cell, counted before any contribution is built.
+    //
+    // A cell with one contributing machine resolves to that contribution
+    // whatever rule is declared, and emits no arbitration record (4.5, and the
+    // size==1 short-circuit in resolve_cell). That is not the rare case: across
+    // the 1328-machine corpus, 4016 of the 4446 cells any machine can ever write
+    // hold exactly one contestant, and the widest fold anywhere is seven.
+    //
+    // The arithmetic was already free. The machinery around it was not — an
+    // uncontended cell still built a Contribution with two heap-allocated
+    // strings, took a red-black tree node and a per-cell vector to hold the one
+    // element, and committed through a one-element Vector. Roughly five
+    // allocations to store one double, for 90% of the cells written.
+    //
+    // Counting first is what makes the short-circuit decidable without first
+    // building the thing being avoided. One pass over the batch, one flat
+    // counter, no per-cell allocation.
+    phaseTimings.mergeSortNs += tick();
+    const int dim = space.dimension();
+    std::vector<std::uint32_t> fanIn(static_cast<size_t>(std::max(dim, 0)), 0u);
     for (const auto& merge : step.mergeBatch) {
       const int n = std::min<int>(merge.region.length, static_cast<int>(merge.values.size()));
       for (int i = 0; i < n; ++i) {
+        const int cell = merge.region.offset + i;
+        // Out of range counts as contended so it takes the resolve path and
+        // throws from the commit exactly where it always did.
+        if (cell >= 0 && cell < dim) ++fanIn[static_cast<size_t>(cell)];
+      }
+    }
+
+    phaseTimings.fanInNs += tick();
+
+    osre.stepNumber = stepNumber;
+    std::map<int, std::vector<Contribution>> byCell;
+    for (const auto& merge : step.mergeBatch) {
+      const int n = std::min<int>(merge.region.length, static_cast<int>(merge.values.size()));
+      // Loop-invariant: every cell this merge writes carries the same
+      // contributing set, so the join belongs outside the walk over the region
+      // rather than repeated once per cell. Built lazily, so an uncontended
+      // merge never pays for it at all.
+      std::string cesId;
+      bool cesIdBuilt = false;
+      for (int i = 0; i < n; ++i) {
+        const int cell   = merge.region.offset + i;
+        const double val = merge.values[static_cast<size_t>(i)];
+        if (cell >= 0 && cell < dim && fanIn[static_cast<size_t>(cell)] == 1) {
+          // Nothing to fold. The commit is the store.
+          space.set_cell(cell, val);
+          if (val != 0.0) osre.nonZero.push_back({cell, val});
+          continue;
+        }
         Contribution c;
-        c.cell           = merge.region.offset + i;
-        c.value          = merge.values[static_cast<size_t>(i)];
+        c.cell           = cell;
+        c.value          = val;
         c.provider       = "machine";
         c.originId       = merge.machineId;
         // The whole contributing set, comma-joined — a one-element set renders
@@ -1424,7 +1495,8 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
         // moved (FOLD_PLACEMENT.md 8). cesId is attribution here, not identity:
         // the arbiter now sees one machine contribution per cell, so it has
         // nothing left to tie-break within a machine.
-        c.cesId          = join_ids(merge.sequenceIds);
+        if (!cesIdBuilt) { cesId = join_ids(merge.sequenceIds); cesIdBuilt = true; }
+        c.cesId          = cesId;
         // The machine contributes exactly one operation, so the index within its
         // contributions is always the first. Kept as "0" rather than emptied
         // because /api/arbitration serialises it and an emptied field would
@@ -1434,16 +1506,23 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
         byCell[c.cell].push_back(std::move(c));
       }
     }
+    phaseTimings.gatherNs += tick();
+
     std::vector<ArbitrationRecord> records;
     const auto resolved = resolve_all(byCell, step.stepNumber, records);
+    phaseTimings.resolveNs += tick();
     // OSRE(n) observation point.  The corpus's output for this step exists as
     // a single-valued vector at exactly one instant: after resolution, as it
     // is committed. Recording it here, in the same loop as the writes, is what
     // makes the entry and the space agree by construction rather than by a
     // later read that could observe a different state.
-    osre.stepNumber = stepNumber;
+    //
+    // This loop now carries only the contended cells; the uncontended ones were
+    // stored above, at the same observation point, under 4.5's guarantee that
+    // the result is identical either way. nonZero is sorted below, so which
+    // path appended an entry cannot affect the recorded order.
     for (const auto& [cell, value] : resolved) {
-      space.update_region(cell, Vector{value});
+      space.set_cell(cell, value);
       if (value != 0.0) osre.nonZero.push_back({cell, value});
     }
     osre.length = space.dimension();
@@ -1454,8 +1533,12 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   // Phase 4 — apply compose/meta-CES event-bus subscriptions, latching
   // 1.0 bits at the offsets every subscriber asked for.  These writes
   // make producer "fired" signals visible to meta-machines on the next step.
+  phaseTimings.commitNs += tick();
+
   step.eventBus = apply_event_bus(stepFirings);
+  phaseTimings.eventBusNs += tick();
   step.perceptualSpace = space.vector();
+  phaseTimings.spaceCopyNs += tick();
   for (const auto& [id, msr] : step.machineResults) {
     step.activeRegions.push_back({msr.inputRegion.offset, msr.inputRegion.length, id, "input"});
     if (msr.outputRegion) step.activeRegions.push_back({msr.outputRegion->offset, msr.outputRegion->length, id, "output"});
@@ -1478,6 +1561,9 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
               if (a.machineId != b.machineId) return a.machineId < b.machineId;
               return a.type < b.type;
             });
+  phaseTimings.activeRegionsNs += tick();
+  phaseTimings.steps += 1;
+
   record_trajectory(std::move(isre), std::move(osre));
   return step;
 }
