@@ -881,10 +881,35 @@ std::vector<OutputVector> PerceptualSpaceRuntime::process_across_machines(const 
   //    view, so a machine added or removed partway cannot appear in some
   //    results and not others (RealityEngine_CI#254, property 1). Pointers into
   //    `machines` stay valid for the call: the caller holds the runtime lock.
-  struct Job { const std::string* id; Machine* machine; };
+  // A Universal Reality Event is decomposed; anything else is applied whole.
+  //
+  // Length decides, against the declared dimension. The route previously handed
+  // the raw vector to every machine, so a universal event met a machine whose
+  // input region is a handful of cells, matched nothing, and returned a
+  // well-formed empty result — indistinguishable from a universe in which
+  // nothing fired (RealityEngine_CI#267).
+  //
+  // The slice is `extract_machine_input`'s, which is what /api/perceive already
+  // uses: a machine's input is the region at its declared mapping. That makes
+  // this the mirror of merge_machine_output, and it parallelises over the same
+  // partition for the same reason — the regions are declared and independent.
+  const bool universal = static_cast<int>(input.size()) == space.dimension();
+
+  struct Job { const std::string* id; Machine* machine; Vector slice; };
   std::vector<Job> jobs;
   jobs.reserve(machines.size());
-  for (auto& [id, m] : machines) jobs.push_back({&id, &m});
+  for (auto& [id, m] : machines) {
+    if (!universal) { jobs.push_back({&id, &m, input}); continue; }
+    // A machine mapped outside the presented space contributes nothing rather
+    // than raising: a partial space is usable, and refusing would make it not.
+    if (!m.perceptualMapping) continue;
+    const auto& region = m.perceptualMapping->input;
+    if (region.offset < 0 || region.length < 0 ||
+        region.offset + region.length > static_cast<int>(input.size())) continue;
+    jobs.push_back({&id, &m,
+                    Vector(input.begin() + region.offset,
+                           input.begin() + region.offset + region.length)});
+  }
 
   // 2. Machine-level parallelism, on the pool the step phase already uses.
   //    Machines are independent at this boundary — process_input touches only
@@ -897,8 +922,8 @@ std::vector<OutputVector> PerceptualSpaceRuntime::process_across_machines(const 
   size_t unsubmitted = jobs.size();
   try {
     for (const auto& job : jobs) {
-      auto future = pool.submit_reserved([job, &input]() -> std::optional<OutputVector> {
-        auto r = job.machine->process_input(input);
+      auto future = pool.submit_reserved([job]() -> std::optional<OutputVector> {
+        auto r = job.machine->process_input(job.slice);
         return r.machineOutput;
       });
       --unsubmitted;
