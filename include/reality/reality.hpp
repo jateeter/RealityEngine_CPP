@@ -699,6 +699,11 @@ public:
   // copies carry transitionsInhibited — so every machine refused to transition
   // and the route could never produce an output. Scala and LSP both return 167
   // outputs on the same input where this returned 0.
+  // `input` is either a Universal Reality Event — length equal to this
+  // runtime's dimension, decomposed per machine at its declared
+  // perceptualMapping.input — or a machine-space vector applied to every
+  // machine unchanged (SURFACE_SPEC.md, "The input may be universal or
+  // machine-space, and length says which"; RealityEngine_CI#267).
   std::vector<OutputVector> process_across_machines(const Vector& input);
 
   // Runtime controls — SURFACE_SPEC.md, "/api/engine/config".
