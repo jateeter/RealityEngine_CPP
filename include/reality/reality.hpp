@@ -701,6 +701,18 @@ public:
   // outputs on the same input where this returned 0.
   std::vector<OutputVector> process_across_machines(const Vector& input);
 
+  // Runtime controls — SURFACE_SPEC.md, "/api/engine/config".
+  //
+  // transitionsInhibited is machine-scoped: one value per machine, not one for
+  // the engine. It is exposed here rather than read off the registry because
+  // the machines that RUN are the runtime's, and the control has to describe
+  // the collection whose behaviour it governs.
+  std::map<std::string, bool> transitions_inhibited() const;
+  // Returns false when no machine carries `id`, so the route can answer 404
+  // rather than silently accepting a write that lands nowhere.
+  bool set_transitions_inhibited(const std::string& id, bool value);
+  void set_transitions_inhibited_all(bool value);
+
   const PhaseTimings& phase_timings() const { return phaseTimings; }
   void reset_phase_timings() { phaseTimings = PhaseTimings{}; }
   bool phase_detail() const { return phaseDetail; }

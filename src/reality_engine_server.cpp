@@ -296,6 +296,58 @@ public:
       if (body.at("phaseDetail").is_bool()) spaceRuntime.set_phase_detail(body.at("phaseDetail").as_bool());
       return ok(runtime_options());
     });
+    // ── /api/engine/config — one pathway for every runtime control ──────
+    //
+    // SURFACE_SPEC.md, "/api/engine/config". Controls are declared there, not
+    // here: name, scope and default all come from the specification so three
+    // runtimes cannot each pick a reasonable value and disagree, which is how
+    // historyLimit became 256/250/1000 across the three.
+    //
+    // Emitted sorted by name. A set walked in each runtime's own iteration
+    // order reports the same content three ways and no comparison finds a
+    // majority (#197) — and this surface exists precisely to be compared.
+    server.route("GET", "/api/engine/config", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      Json::Array controls;
+      controls.push_back(transitions_inhibited_control());
+      return ok(Json::Object{{"controls", controls}});
+    });
+    server.route("GET", "/api/engine/config/:control", [this](const http::Request& req) {
+      const auto& name = req.pathParams.at("control");
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      if (name != "transitionsInhibited") return http::error_response("Unknown control: " + name, 404);
+      return ok(transitions_inhibited_control());
+    });
+    server.route("PUT", "/api/engine/config/:control", [this](const http::Request& req) {
+      const auto& name = req.pathParams.at("control");
+      auto body = parse_body(req);
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      if (name != "transitionsInhibited") return http::error_response("Unknown control: " + name, 404);
+      if (!body.at("value").is_bool())
+        return http::error_response("transitionsInhibited requires a boolean `value`", 400);
+      const bool value = body.at("value").as_bool();
+      // Machine-scoped: a write names a machine, or omits it to set every one.
+      // Naming a machine that does not exist is a 404 rather than a silent
+      // no-op — a write that lands nowhere and answers 200 is the shape of
+      // failure this whole surface exists to remove.
+      if (body.at("machine").is_string()) {
+        const std::string id = body.at("machine").as_string();
+        if (!spaceRuntime.set_transitions_inhibited(id, value))
+          return http::error_response("Machine not found: " + id, 404);
+      } else {
+        spaceRuntime.set_transitions_inhibited_all(value);
+      }
+      return ok(transitions_inhibited_control());
+    });
+    server.route("DELETE", "/api/engine/config/:control", [this](const http::Request& req) {
+      const auto& name = req.pathParams.at("control");
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      if (name != "transitionsInhibited") return http::error_response("Unknown control: " + name, 404);
+      // "Restore the declared default", not "remove the control". Controls are
+      // fixed by the specification and cannot be created or destroyed here.
+      spaceRuntime.set_transitions_inhibited_all(false);
+      return ok(transitions_inhibited_control());
+    });
     server.route("GET", "/api/engine/active", [this](const http::Request&) { return ok(Json::Object{{"activeEvents", active_vectors_json()}}); });
     server.route("GET", "/api/engine/history", [this](const http::Request& req) {
       int limit = 0;
@@ -1288,6 +1340,23 @@ private:
       {"intervalMs", static_cast<double>(samplerIntervalMs)}
     };
   }
+  // The declared shape of a control (SURFACE_SPEC.md, "/api/engine/config").
+  // `default` is the specification's value, restated here so a reader of the
+  // response can see what the runtime is supposed to hold as well as what it
+  // does hold.
+  Json transitions_inhibited_control() const {
+    Json::Object value;
+    for (const auto& [id, inhibited] : spaceRuntime.transitions_inhibited())
+      value[id] = inhibited;
+    return Json::Object{
+      {"name", "transitionsInhibited"},
+      {"scope", "machine"},
+      {"value", value},
+      {"default", false},
+      {"mutable", true}
+    };
+  }
+
   Json runtime_options() const {
     return Json::Object{
       {"historyLimit", static_cast<double>(spaceRuntime.history_limit())},
