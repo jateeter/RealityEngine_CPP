@@ -21,7 +21,6 @@ behavioral model and keeps operational compatibility with the shared
 - [Shared Qdrant](Shared-Qdrant)
 - [Acronyms](Acronyms)
 - [Bibliography](Bibliography)
-- [Roadmap](Roadmap)
 
 ## Quick Commands
 
