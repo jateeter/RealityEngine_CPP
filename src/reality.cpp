@@ -701,6 +701,16 @@ SequenceResult CriticalEventSequence::transition(const Vector& input, std::optio
 void CriticalEventSequence::reset() {
   for (auto& [_, v] : vectors) v.isInitial ? v.set_active() : v.clear_active();
 }
+// `vectors` is a std::map keyed by event id, so this is already id-sorted and
+// agrees with Scala's `getInitialVectorIds.sorted` without a second sort.
+std::vector<std::string> CriticalEventSequence::initial_vector_ids() const {
+  std::vector<std::string> out;
+  for (const auto& [id, v] : vectors) {
+    if (v.isInitial) out.push_back(id);
+  }
+  return out;
+}
+
 Json CriticalEventSequence::to_json() const {
   Json::Array arr;
   Json::Array initials;
@@ -817,7 +827,22 @@ Json Machine::to_json(bool full) const {
   // Scala and LSP even after both had adopted the canonical rule.
   Json::Array seqs;
   for (const auto& s : all_sequences()) {
-    seqs.push_back(full ? s.to_json() : Json::Object{{"id", s.id}, {"name", s.name}});
+    if (full) {
+      seqs.push_back(s.to_json());
+      continue;
+    }
+    // The summary carries initialEventIds as well as id and name. It is not
+    // decoration: the Scala Perception Engine builds its machine corpus from
+    // GET /api/machines and reads this key in
+    // RealityEngine_Scala/perception-engine/.../perception/MachineCorpus.scala
+    // `provenance()`, which ends `.toOption.getOrElse(Vector.empty)` — so an RE
+    // that omits it hands the PE an empty audit trail and raises nothing, in
+    // contradiction of that method's own documented expectation that a fired
+    // sequence yields a non-empty one. The alternative this rejects is a
+    // full-detail request per machine to read one field.
+    Json::Array initials;
+    for (const auto& initialId : s.initial_vector_ids()) initials.emplace_back(initialId);
+    seqs.push_back(Json::Object{{"id", s.id}, {"name", s.name}, {"initialEventIds", initials}});
   }
   Json mapping = nullptr;
   if (perceptualMapping) mapping = reality::to_json(*perceptualMapping);

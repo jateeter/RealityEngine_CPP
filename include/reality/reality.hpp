@@ -254,6 +254,14 @@ public:
   std::optional<RealityEvent*> get_vector(const std::string& vectorId);
   std::vector<RealityEvent*> active_vectors();
   std::vector<RealityEvent> all_vectors() const;
+  // Ids of this sequence's Initial Reality Events, sorted by id.
+  //
+  // Public because `GET /api/machines` reports it on the *summary* form of a
+  // sequence, not only the full one, and the summary is built from outside
+  // this class. Mirrors Scala's `getInitialVectorIds`, which is likewise
+  // sorted — an unsorted answer would present the same set three ways and no
+  // comparison would find a majority (RealityEngine_CI#197).
+  std::vector<std::string> initial_vector_ids() const;
   std::pair<bool, std::vector<std::string>> validate() const;
   SequenceResult transition(const Vector& input, std::optional<ComparatorType> overrideType = std::nullopt);
   void reset();
