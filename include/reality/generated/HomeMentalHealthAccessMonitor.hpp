@@ -17,6 +17,7 @@ inline constexpr int output_length = 4;
 
 enum class StateId {
   MhComorbid,  // mh-comorbid
+  MhComorbidityRiskState,  // mh-comorbidity-risk-state
   MhDeteriorating,  // mh-deteriorating
   MhDistressed,  // mh-distressed
   MhStable,  // mh-stable
@@ -26,6 +27,7 @@ enum class StateId {
 constexpr std::string_view state_id_string(StateId s) {
   switch (s) {
     case StateId::MhComorbid: return "mh-comorbid";
+    case StateId::MhComorbidityRiskState: return "mh-comorbidity-risk-state";
     case StateId::MhDeteriorating: return "mh-deteriorating";
     case StateId::MhDistressed: return "mh-distressed";
     case StateId::MhStable: return "mh-stable";
@@ -37,6 +39,7 @@ constexpr std::string_view state_id_string(StateId s) {
 enum class SequenceId {
   MhAccessCrisis,  // mh-access-crisis
   MhReferralNeeded,  // mh-referral-needed
+  MhComorbidityRisk,  // mh-comorbidity-risk
   MhAccessAdequate  // mh-access-adequate
 };
 
@@ -44,6 +47,7 @@ constexpr std::string_view sequence_id_string(SequenceId s) {
   switch (s) {
     case SequenceId::MhAccessCrisis: return "mh-access-crisis";
     case SequenceId::MhReferralNeeded: return "mh-referral-needed";
+    case SequenceId::MhComorbidityRisk: return "mh-comorbidity-risk";
     case SequenceId::MhAccessAdequate: return "mh-access-adequate";
   }
   return "";

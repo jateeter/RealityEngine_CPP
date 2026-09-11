@@ -18,6 +18,7 @@ inline constexpr int output_length = 4;
 enum class StateId {
   HfAdequate,  // hf-adequate
   HfCrisis,  // hf-crisis
+  HfFoodInsecureState,  // hf-food-insecure-state
   HfInsecure,  // hf-insecure
   HfSecure,  // hf-secure
   HfStrained,  // hf-strained
@@ -28,6 +29,7 @@ constexpr std::string_view state_id_string(StateId s) {
   switch (s) {
     case StateId::HfAdequate: return "hf-adequate";
     case StateId::HfCrisis: return "hf-crisis";
+    case StateId::HfFoodInsecureState: return "hf-food-insecure-state";
     case StateId::HfInsecure: return "hf-insecure";
     case StateId::HfSecure: return "hf-secure";
     case StateId::HfStrained: return "hf-strained";
@@ -39,6 +41,7 @@ constexpr std::string_view state_id_string(StateId s) {
 enum class SequenceId {
   HomeFoodCrisisEscalation,  // home-food-crisis-escalation
   HomeFoodAssistanceNeeded,  // home-food-assistance-needed
+  HomeFoodInsecure,  // home-food-insecure
   HomeFoodSecure  // home-food-secure
 };
 
@@ -46,6 +49,7 @@ constexpr std::string_view sequence_id_string(SequenceId s) {
   switch (s) {
     case SequenceId::HomeFoodCrisisEscalation: return "home-food-crisis-escalation";
     case SequenceId::HomeFoodAssistanceNeeded: return "home-food-assistance-needed";
+    case SequenceId::HomeFoodInsecure: return "home-food-insecure";
     case SequenceId::HomeFoodSecure: return "home-food-secure";
   }
   return "";

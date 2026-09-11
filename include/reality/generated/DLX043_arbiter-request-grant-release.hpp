@@ -12,7 +12,7 @@ inline constexpr std::string_view machine_slug  = "DLX043_arbiter-request-grant-
 
 inline constexpr int input_offset  = 1715;
 inline constexpr int input_length  = 4;
-inline constexpr int output_offset = 4077;
+inline constexpr int output_offset = 7432;
 inline constexpr int output_length = 2;
 
 enum class StateId {

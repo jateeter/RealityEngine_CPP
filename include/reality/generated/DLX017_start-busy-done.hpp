@@ -12,7 +12,7 @@ inline constexpr std::string_view machine_slug  = "DLX017_start-busy-done";
 
 inline constexpr int input_offset  = 1589;
 inline constexpr int input_length  = 4;
-inline constexpr int output_offset = 4047;
+inline constexpr int output_offset = 7426;
 inline constexpr int output_length = 2;
 
 enum class StateId {
