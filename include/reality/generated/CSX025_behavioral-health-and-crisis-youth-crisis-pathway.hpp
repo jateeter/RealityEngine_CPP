@@ -12,7 +12,7 @@ inline constexpr std::string_view machine_slug  = "CSX025_behavioral-health-and-
 
 inline constexpr int input_offset  = 1096;
 inline constexpr int input_length  = 4;
-inline constexpr int output_offset = 3823;
+inline constexpr int output_offset = 7304;
 inline constexpr int output_length = 4;
 
 enum class StateId {

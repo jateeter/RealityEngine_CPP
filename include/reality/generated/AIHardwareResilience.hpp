@@ -12,7 +12,7 @@ inline constexpr std::string_view machine_slug  = "AIHardwareResilience";
 
 inline constexpr int input_offset  = 276;
 inline constexpr int input_length  = 4;
-inline constexpr int output_offset = 3923;
+inline constexpr int output_offset = 7390;
 inline constexpr int output_length = 6;
 
 enum class StateId {

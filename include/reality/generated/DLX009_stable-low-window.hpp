@@ -12,7 +12,7 @@ inline constexpr std::string_view machine_slug  = "DLX009_stable-low-window";
 
 inline constexpr int input_offset  = 1579;
 inline constexpr int input_length  = 4;
-inline constexpr int output_offset = 4009;
+inline constexpr int output_offset = 7418;
 inline constexpr int output_length = 2;
 
 enum class StateId {

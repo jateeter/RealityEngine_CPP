@@ -12,7 +12,7 @@ inline constexpr std::string_view machine_slug  = "DLX012_req-hold-ack";
 
 inline constexpr int input_offset  = 4021;
 inline constexpr int input_length  = 4;
-inline constexpr int output_offset = 4025;
+inline constexpr int output_offset = 7420;
 inline constexpr int output_length = 2;
 
 enum class StateId {

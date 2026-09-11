@@ -12,7 +12,7 @@ inline constexpr std::string_view machine_slug  = "LBL098_projection-automation-
 
 inline constexpr int input_offset  = 3231;
 inline constexpr int input_length  = 4;
-inline constexpr int output_offset = 3939;
+inline constexpr int output_offset = 7358;
 inline constexpr int output_length = 4;
 
 enum class StateId {

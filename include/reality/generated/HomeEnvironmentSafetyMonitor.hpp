@@ -18,6 +18,7 @@ inline constexpr int output_length = 4;
 enum class StateId {
   HenvDeteriorating,  // henv-deteriorating
   HenvHazardous,  // henv-hazardous
+  HenvHealthHazardRisk,  // henv-health-hazard-risk
   HenvPastDue,  // henv-past-due
   HenvSafe,  // henv-safe
   HenvShutoffRisk,  // henv-shutoff-risk
@@ -29,6 +30,7 @@ constexpr std::string_view state_id_string(StateId s) {
   switch (s) {
     case StateId::HenvDeteriorating: return "henv-deteriorating";
     case StateId::HenvHazardous: return "henv-hazardous";
+    case StateId::HenvHealthHazardRisk: return "henv-health-hazard-risk";
     case StateId::HenvPastDue: return "henv-past-due";
     case StateId::HenvSafe: return "henv-safe";
     case StateId::HenvShutoffRisk: return "henv-shutoff-risk";
@@ -41,6 +43,7 @@ constexpr std::string_view state_id_string(StateId s) {
 enum class SequenceId {
   HomeEnvHazardEscalation,  // home-env-hazard-escalation
   HomeEnvUtilityFailure,  // home-env-utility-failure
+  HomeEnvHealthHazardRisk,  // home-env-health-hazard-risk
   HomeEnvSafe  // home-env-safe
 };
 
@@ -48,6 +51,7 @@ constexpr std::string_view sequence_id_string(SequenceId s) {
   switch (s) {
     case SequenceId::HomeEnvHazardEscalation: return "home-env-hazard-escalation";
     case SequenceId::HomeEnvUtilityFailure: return "home-env-utility-failure";
+    case SequenceId::HomeEnvHealthHazardRisk: return "home-env-health-hazard-risk";
     case SequenceId::HomeEnvSafe: return "home-env-safe";
   }
   return "";

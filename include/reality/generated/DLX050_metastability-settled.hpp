@@ -12,7 +12,7 @@ inline constexpr std::string_view machine_slug  = "DLX050_metastability-settled"
 
 inline constexpr int input_offset  = 4103;
 inline constexpr int input_length  = 4;
-inline constexpr int output_offset = 4107;
+inline constexpr int output_offset = 7438;
 inline constexpr int output_length = 2;
 
 enum class StateId {

@@ -12,7 +12,7 @@ inline constexpr std::string_view machine_slug  = "DLX039_fifo-full-to-not-full"
 
 inline constexpr int input_offset  = 4057;
 inline constexpr int input_length  = 4;
-inline constexpr int output_offset = 4061;
+inline constexpr int output_offset = 7428;
 inline constexpr int output_length = 2;
 
 enum class StateId {
