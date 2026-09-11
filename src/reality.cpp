@@ -1735,17 +1735,32 @@ void PerceptualSpaceRuntime::record_trajectory(TrajectoryEntry isre, TrajectoryE
     osreHistory.erase(osreHistory.begin(), osreHistory.begin() + static_cast<long>(osreHistory.size() - maxTrajectory));
 }
 void PerceptualSpaceRuntime::rebuild_edge_cache() const {
+  // Canonical order — by machine name, then id — the same order
+  // machine_graph_data() already gives `nodes`.
+  //
+  // This walked `machines` directly, which is a std::map keyed by id, so edges
+  // came out in id order while nodes came out in name order: one payload
+  // carrying an ordered array beside an unordered one. LSP and Scala both
+  // order edges canonically, so GET /api/machine-graph diverged three ways at
+  // *identical* byte length — the same six edges permuted, 133,474 bytes on
+  // every runtime (RealityEngine_CI#349).
+  //
+  // Ids are generated per runtime, so ordering by them was never portable;
+  // that is the same reason all_sequences() and machines_in_canonical_order()
+  // sort by name. An unsorted answer presents the same set three ways and no
+  // comparison can find a majority (RealityEngine_CI#197).
   cachedEdges.clear();
-  for (const auto& [sid, sm] : machines) {
+  const std::vector<Machine> ordered = machines_in_canonical_order(machines);
+  for (const auto& sm : ordered) {
     if (!sm.perceptualMapping) continue;
     const auto& so = sm.perceptualMapping->output;
     int send = so.offset + so.length;
-    for (const auto& [tid, tm] : machines) {
-      if (sid == tid || !tm.perceptualMapping) continue;
+    for (const auto& tm : ordered) {
+      if (sm.id == tm.id || !tm.perceptualMapping) continue;
       const auto& ti = tm.perceptualMapping->input;
       int tend = ti.offset + ti.length;
       if (!(send <= ti.offset || so.offset >= tend))
-        cachedEdges.push_back(Json::Object{{"source", sid}, {"target", tid},
+        cachedEdges.push_back(Json::Object{{"source", sm.id}, {"target", tm.id},
             {"sourceRegion", to_json(so)}, {"targetRegion", to_json(ti)}, {"overlap", true}});
     }
   }
