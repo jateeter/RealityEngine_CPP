@@ -144,13 +144,42 @@ public:
       it->second.add_vector(vector);
       return ok(Json::Object{{"success", true}, {"vector", vector.to_json()}});
     });
-    server.route("POST", "/api/engine/reset", [this](const http::Request&) {
+    server.route("POST", "/api/engine/reset", [this](const http::Request& req) {
+      // clearAudit — opt-in, default false (SURFACE_SPEC.md "Already-settled
+      // instances", 2026-09-12). Absent or false, the re:SequenceObservation
+      // ring buffer SURVIVES the reset, which is what every runtime already did,
+      // so the default changes nothing. The audit trail is evidence and a rewind
+      // of run state is not a reason to discard it.
+      //
+      // It has to be possible, though: the buffer is cumulative across every
+      // drive a process serves, and a caller wanting a clean floor should not
+      // have to subtract what was there before. Dynamic load/unload sharpens
+      // that — a buffer holding observations of machines no longer resident
+      // describes a corpus that is no longer there.
+      //
+      // Read from the query string or the JSON body: the resets are called both
+      // ways across the harness and a caller should not have to know which.
+      bool clearAudit = false;
+      auto clearQuery = req.queryParams.find("clearAudit");
+      if (clearQuery != req.queryParams.end()) {
+        clearAudit = clearQuery->second == "true" || clearQuery->second == "1";
+      } else if (!req.body.empty()) {
+        try {
+          Json body = json::parse(req.body);
+          if (body.at("clearAudit").is_bool()) clearAudit = body.at("clearAudit").as_bool();
+        } catch (...) {
+          // A malformed body is not a reason to refuse the reset; the flag
+          // simply stays at its default.
+        }
+      }
+
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       for (auto& [_, m] : machines) m.reset();
       spaceRuntime.reset();
       perception.reset();
-      return ok(Json::Object{{"success", true}});
+      if (clearAudit) spaceRuntime.semantic_audit().clear();
+      return ok(Json::Object{{"success", true}, {"auditCleared", clearAudit}});
     });
     server.route("GET", "/api/engine/stats", [this](const http::Request&) {
       std::shared_lock<std::shared_mutex> lock(registryMutex);
