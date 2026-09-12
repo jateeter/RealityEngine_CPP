@@ -1921,7 +1921,24 @@ SourceConfig PerceptionEngine::add_source(SourceConfig source) {
   // as live. The ingest paths that construct a source while delivering a value
   // still come out active, because they set lastValue/lastUpdated first and so
   // satisfy the predicate.
-  if (source.kind == "sensor") source.active = sensor_value_is_live(source, now_ms());
+  // Every kind is evaluated here, not just sensor (RealityEngine_CI#358, settled
+  // in SURFACE_SPEC.md "Already-settled instances" 2026-09-12). The point-3
+  // rules are *the* activity rules, evaluated wherever activity is computed, and
+  // a test source's term — it has an interned sequence to supply from — is
+  // answerable the moment the source is declared. Leaving test and simulated to
+  // the first reset made registration and reset disagree about the same
+  // unchanged state.
+  //
+  // Point 2(a)'s "declares ... inactive" is scoped to integration sources,
+  // matching 2(b)'s "a source from an integration", so the sensor term below is
+  // unchanged: no registration path may originate a sensor's activity.
+  if (source.kind == "sensor") {
+    source.active = sensor_value_is_live(source, now_ms());
+  } else if (source.kind == "test") {
+    source.active = !source.inputs.empty();
+  } else {
+    source.active = true;
+  }
   // Grow to cover the source's region.  Without this the source is stored,
   // counted and returned by /api/pe/sources, then silently dropped by
   // assemble_vector — machines whose perceptualMapping.input starts past the
