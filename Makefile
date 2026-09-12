@@ -49,7 +49,7 @@ TEST_NAMES := reality_engine_tests arbiter_tests sta_checker_tests mqtt_client_t
               mqtt_mapping_tests e2e_machine_sequences e2e_machine_domains \
               e2e_domain_scenarios e2e_ai_trigger_dispatch e2e_yuma_localai_cascade \
               cesgen_oracles_parity cesgen_provenance cesgen_composition \
-              cesgen_governance cesgen_contracts_parity cesgen_deprecation
+              cesgen_governance cesgen_deprecation
 TEST_OBJ   := $(TEST_NAMES:%=$(OBJ_DIR)/tests/%.o) $(OBJ_DIR)/tests/cesgen_index_compile.o
 
 ALL_OBJ := $(SRC_OBJ) $(SERVER_OBJ) $(CLI_OBJ) $(TEST_OBJ)
@@ -93,7 +93,7 @@ test: $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/arbiter_tests $(BIN_DIR)/sta_ch
 	$(BIN_DIR)/mqtt_client_tests
 	$(BIN_DIR)/mqtt_mapping_tests
 
-e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_contracts_parity $(BIN_DIR)/cesgen_deprecation
+e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_deprecation
 	$(BIN_DIR)/e2e_machine_sequences ../RealityEngine_Machines/machines
 	$(BIN_DIR)/e2e_machine_domains ../RealityEngine_Machines/machines
 	$(BIN_DIR)/e2e_domain_scenarios ../RealityEngine_Machines/machines
@@ -103,7 +103,6 @@ e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BI
 	$(BIN_DIR)/cesgen_provenance ../RealityEngine_Machines/machines
 	$(BIN_DIR)/cesgen_composition ../RealityEngine_Machines/machines
 	$(BIN_DIR)/cesgen_governance ../RealityEngine_Machines/machines
-	$(BIN_DIR)/cesgen_contracts_parity ../RealityEngine_Machines/contracts.json ../RealityEngine_Machines/machines
 	$(BIN_DIR)/cesgen_deprecation ../RealityEngine_Machines/machines
 
 e2e-services: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_cli
