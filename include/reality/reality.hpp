@@ -420,6 +420,13 @@ struct PagingDecision {
   std::string machineName;
   std::string sequenceId;
   std::string ragStatusCode;      // "GREEN" | "AMBER" | "RED" | ""
+  // The action the corpus prescribes for this determination, from the output
+  // event's metadata. SEMANTIC_AUDIT_CONTRACT.md links a dispatch to its
+  // re:Action through it, and the PE's escalation guardrail is keyed on it —
+  // without it invariant 3 is unevaluable rather than passing
+  // (RealityEngine_CI#365). Travels beside ragStatusCode because both come from
+  // the same output.metadata map.
+  std::string actionCode;         // e.g. "emergency-dispatch" | ""
   std::string processStatus;      // "ok" | "info" | "warning" | "error" | ""
   std::string ownerTeam;
   std::optional<int> slaSeconds;

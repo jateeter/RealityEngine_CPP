@@ -1244,6 +1244,11 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     size_t outputIndex = 0;
     Vector values;
     std::vector<std::string> provenance;
+    // Carried from the asserted output's metadata so the governance join can
+    // reach it. resolve_governance() matches a rule by sequenceId and values
+    // and never sees the output event, so the action has to travel with the
+    // pending output or it cannot be recovered later (RealityEngine_CI#365).
+    std::string actionCode;
   };
   struct MachinePhaseResult {
     std::string id;
@@ -1275,7 +1280,13 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
       if (transition.arbiterMetadata.shouldOutput) {
         for (const auto& [sequenceId, sr] : transition.sequenceResults) {
           for (size_t i = 0; i < sr.assertedOutputs.size(); ++i) {
-            pendingOutputs.push_back({sequenceId, i, sr.assertedOutputs[i].vector, sr.assertedOutputs[i].provenance});
+            std::string poAction;
+            auto actionIt = sr.assertedOutputs[i].metadata.find("action");
+            if (actionIt != sr.assertedOutputs[i].metadata.end() && actionIt->second.is_string()) {
+              poAction = actionIt->second.as_string();
+            }
+            pendingOutputs.push_back({sequenceId, i, sr.assertedOutputs[i].vector,
+                                      sr.assertedOutputs[i].provenance, poAction});
           }
         }
       }
@@ -1512,7 +1523,11 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
         const int rank = severity_rank(decision->ragStatusCode);
         if (rank > bestRank ||
             (rank == bestRank && po.sequenceId < op.governance->sequenceId)) {
-          bestRank      = rank;
+          bestRank = rank;
+          // The winning decision takes the action of the output that won with
+          // it. The decision travels whole, so the action must come from the
+          // same contributor rather than from whichever was seen last.
+          decision->actionCode = po.actionCode;
           op.governance = std::move(decision);
         }
       }
@@ -2889,6 +2904,7 @@ Json to_json(const PagingDecision& d) {
   o["machineName"]          = d.machineName;
   o["sequenceId"]           = d.sequenceId;
   o["ragStatusCode"]        = d.ragStatusCode.empty() ? Json(nullptr) : Json(d.ragStatusCode);
+  o["actionCode"]           = d.actionCode.empty() ? Json(nullptr) : Json(d.actionCode);
   o["processStatus"]        = d.processStatus.empty() ? Json(nullptr) : Json(d.processStatus);
   o["ownerTeam"]            = d.ownerTeam;
   o["slaSeconds"]           = d.slaSeconds ? Json(static_cast<double>(*d.slaSeconds)) : Json(nullptr);
