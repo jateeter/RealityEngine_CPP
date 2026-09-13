@@ -1048,7 +1048,24 @@ public:
         step = spaceRuntime.process_immediate(assembled, overrideType);
         perception.perceptual_space().set_vector(step.perceptualSpace);
       }
-      Json out = to_json(step, includeMachineResults, includePerceptualSpace, includeActiveRegions);
+      // Subset selector (RealityEngine_CI#367). Absent => the full step, on the
+      // same wire as before. Present but matching nothing => an empty selection,
+      // which is the honest answer; returning the universe instead would make
+      // the filter unfalsifiable — a caller could never tell a working filter
+      // from one that silently ignored them.
+      StepSelector selector;
+      if (body.at("only").is_object()) {
+        selector.active = true;
+        const Json& only = body.at("only");
+        if (only.at("sequenceIds").is_array())
+          for (const auto& v : only.at("sequenceIds").array())
+            if (v.is_string()) selector.sequenceIds.insert(v.as_string());
+        if (only.at("machineNames").is_array())
+          for (const auto& v : only.at("machineNames").array())
+            if (v.is_string()) selector.machineNames.insert(v.as_string());
+      }
+      Json out = to_json(step, includeMachineResults, includePerceptualSpace, includeActiveRegions,
+                         selector);
       bool compact = body.at("compact").as_bool(false);
       auto compactQuery = req.queryParams.find("compact");
       if (compactQuery != req.queryParams.end()) compact = compactQuery->second == "true" || compactQuery->second == "1";
@@ -1396,7 +1413,9 @@ private:
       {"projectionControls", Json::Object{
         {"includeMachineResults", "boolean request field on /api/perceive"},
         {"includePerceptualSpace", "boolean request field on /api/perceive"},
-        {"compact", "sets includeMachineResults false when includeMachineResults is omitted"}
+        {"compact", "sets includeMachineResults false when includeMachineResults is omitted"},
+        {"only", "object request field on /api/perceive: {sequenceIds[], machineNames[]} restricts "
+                 "mergeBatch, eventBus, activeRegions and machineResults to the named subset"}
       }}
     };
   }

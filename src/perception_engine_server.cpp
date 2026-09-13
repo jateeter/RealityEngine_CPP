@@ -779,7 +779,7 @@ public:
       auto body = parse_body(req);
       bool includeMachineResults = body.at("includeMachineResults").as_bool(!body.at("compact").as_bool(false));
       bool async = body.at("async").as_bool(false);
-      return do_push(includeMachineResults, async);
+      return do_push(includeMachineResults, async, body.at("only"));
     });
     server.route("GET", "/api/push/:id", [this](const http::Request& req) {
       return read_push_job(req.pathParams.at("id"));
@@ -926,6 +926,9 @@ private:
     std::string id;
     std::shared_ptr<std::promise<http::Response>> result;
     bool includeMachineResults = true;
+    // Caller's subset selector, carried to the worker so an async push narrows
+    // the same way a synchronous one does (RealityEngine_CI#367).
+    Json only;
   };
   struct PushRecord {
     std::string id;
@@ -2637,7 +2640,8 @@ private:
     }), allOk ? 200 : 207);
   }
 
-  http::Response do_push(bool includeMachineResults = true, bool async = false) {
+  http::Response do_push(bool includeMachineResults = true, bool async = false,
+                         const Json& only = Json()) {
     // Catalog only. A push used to run the full corpus sync here, so every
     // push could add sources and — before the definition-change guard added
     // for #35 — rebuild the existing ones, zeroing their playback cursors. The
@@ -2665,6 +2669,7 @@ private:
     job->id = make_id("push");
     std::string jobId = job->id;
     job->includeMachineResults = includeMachineResults;
+    job->only = only;
     auto promise = std::make_shared<std::promise<http::Response>>();
     if (!async) job->result = promise;
     auto future = promise->get_future();
@@ -2711,7 +2716,7 @@ private:
     return ok(result);
   }
 
-  http::Response execute_push(bool includeMachineResults) {
+  http::Response execute_push(bool includeMachineResults, const Json& only = Json()) {
     Vector vector;
     MatchAlgorithm matchAlgorithm;
     {
@@ -2756,6 +2761,18 @@ private:
       {"includeMachineResults", true},
       {"includePerceptualSpace", true},
     };
+    // The caller's subset selector is forwarded (RealityEngine_CI#367), but it
+    // narrows only the *observation* fields — mergeBatch, eventBus,
+    // activeRegions. machineResults and perceptualSpace stay unconditional
+    // above, for the reason the comment there gives: this engine merges
+    // machineResults into the next input vector, so trimming them would change
+    // what the engine computes rather than what it reports.
+    //
+    // That leaves machineResults as the residual cost on this hop, and it is
+    // the larger term at corpus scale. #367 narrows what a caller is *sent*;
+    // fully removing the RE->PE transfer needs the aggregation to move into the
+    // RE, which is a separate change.
+    if (only.is_object()) payload.object()["only"] = only;
     try {
       std::string raw = http::post_json(realityEngineUrl + "/api/perceive", json::stringify(payload));
       Json parsed = json::parse(raw);
@@ -2826,7 +2843,7 @@ private:
           pushRecords[job->id].status = "running";
           pushRecords[job->id].updatedAt = now_ms();
         }
-        auto response = execute_push(job->includeMachineResults);
+        auto response = execute_push(job->includeMachineResults, job->only);
         {
           std::lock_guard<std::mutex> lock(pushQueueMutex);
           auto& record = pushRecords[job->id];
