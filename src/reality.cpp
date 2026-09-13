@@ -2397,17 +2397,61 @@ Json to_json(const TrajectoryEntry& entry) {
   };
 }
 Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace,
-             bool includeActiveRegions) {
+             bool includeActiveRegions, const StepSelector& selector) {
+  // Which machine ids the selector resolves to. Built once from machineResults,
+  // which carries the id->name mapping even when the caller asked not to be sent
+  // machineResults itself. Needed because mergeBatch, eventBus and activeRegions
+  // are keyed by machine *id* while the selector names machines — ids are minted
+  // per runtime, so a caller cannot know them (RealityEngine_CI#367).
+  std::set<std::string> selectedIds;
+  if (selector.active && !selector.machineNames.empty()) {
+    for (const auto& [id, mr] : step.machineResults) {
+      if (selector.wantsMachineName(mr.machineName)) selectedIds.insert(id);
+    }
+  }
+  const auto keepMachineId = [&](const std::string& id) {
+    return selectedIds.count(id) > 0;
+  };
+  // Every predicate below answers true when no selector was supplied, so the
+  // unfiltered wire is unchanged byte-for-byte — several regression stages
+  // compare it exactly (SURFACE_SPEC.md).
+  const auto keepMerge = [&](const MergeOperation& op) {
+    if (!selector.active) return true;
+    for (const auto& sid : op.sequenceIds) if (selector.wantsSequence(sid)) return true;
+    return keepMachineId(op.machineId);
+  };
+  const auto keepEvent = [&](const EventBusWrite& w) {
+    if (!selector.active) return true;
+    if (selector.wantsSequence(w.producerSequenceId)) return true;
+    return keepMachineId(w.producerMachineId) || keepMachineId(w.subscriberMachineId);
+  };
+  const auto keepRegion = [&](const ActiveRegion& r) {
+    return !selector.active || keepMachineId(r.machineId);
+  };
+  const auto keepResult = [&](const std::string& id, const MachineStepResult& mr) {
+    if (!selector.active) return true;
+    if (selector.wantsMachineName(mr.machineName) || keepMachineId(id)) return true;
+    for (const auto& op : step.mergeBatch) {
+      if (op.machineId != id) continue;
+      for (const auto& sid : op.sequenceIds) if (selector.wantsSequence(sid)) return true;
+    }
+    return false;
+  };
+
   Json::Object machineResults;
   if (includeMachineResults) {
-    for (const auto& [id, mr] : step.machineResults) machineResults[id] = Json::Object{{"machineId", mr.machineId}, {"machineName", mr.machineName}, {"inputEvent", json::numbers(mr.inputVector)}, {"outputVector", mr.outputVector ? Json(json::numbers(*mr.outputVector)) : Json(nullptr)}, {"mergedOutputVector", mr.mergedOutputVector ? Json(json::numbers(*mr.mergedOutputVector)) : Json(nullptr)}, {"outputMergeTransformation", mr.outputMergeTransformation}, {"inputRegion", to_json(mr.inputRegion)}, {"outputRegion", mr.outputRegion ? to_json(*mr.outputRegion) : Json(nullptr)}, {"transitionResult", to_json(mr.transitionResult)}};
+    for (const auto& [id, mr] : step.machineResults) { if (!keepResult(id, mr)) continue; machineResults[id] = Json::Object{{"machineId", mr.machineId}, {"machineName", mr.machineName}, {"inputEvent", json::numbers(mr.inputVector)}, {"outputVector", mr.outputVector ? Json(json::numbers(*mr.outputVector)) : Json(nullptr)}, {"mergedOutputVector", mr.mergedOutputVector ? Json(json::numbers(*mr.mergedOutputVector)) : Json(nullptr)}, {"outputMergeTransformation", mr.outputMergeTransformation}, {"inputRegion", to_json(mr.inputRegion)}, {"outputRegion", mr.outputRegion ? to_json(*mr.outputRegion) : Json(nullptr)}, {"transitionResult", to_json(mr.transitionResult)}}; }
   }
   Json::Array regions;
   if (includeActiveRegions) {
-    for (const auto& r : step.activeRegions) regions.push_back(Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}, {"machineId", r.machineId}, {"type", r.type}});
+    for (const auto& r : step.activeRegions) { if (!keepRegion(r)) continue; regions.push_back(Json::Object{{"offset", static_cast<double>(r.offset)}, {"length", static_cast<double>(r.length)}, {"machineId", r.machineId}, {"type", r.type}}); }
   }
   Json::Array mergeBatch;
   for (const auto& op : step.mergeBatch) {
+    // Skipped before the entry is built, not filtered afterwards. Constructing
+    // the whole batch and then dropping entries would leave the allocation cost
+    // — which is the defect — exactly where it was.
+    if (!keepMerge(op)) continue;
     Json::Array provArr;
     for (const auto& vid : op.provenance) provArr.emplace_back(vid);
     // `sequenceIds` (array) replaces `sequenceId` (string), and `outputIndex`
@@ -2438,6 +2482,7 @@ Json to_json(const SimulationStep& step, bool includeMachineResults, bool includ
   // without meta-CES wiring.
   Json::Array eventBus;
   for (const auto& w : step.eventBus) {
+    if (!keepEvent(w)) continue;
     Json::Array prov;
     for (const auto& vid : w.provenance) prov.emplace_back(vid);
     eventBus.push_back(Json::Object{
@@ -2468,6 +2513,11 @@ Json to_json(const SimulationStep& step, bool includeMachineResults, bool includ
   }
   if (includeMachineResults) out["machineResults"] = machineResults;
   return out;
+}
+Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace,
+             bool includeActiveRegions) {
+  return to_json(step, includeMachineResults, includePerceptualSpace, includeActiveRegions,
+                 StepSelector{});
 }
 Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace) {
   return to_json(step, includeMachineResults, includePerceptualSpace, true);

@@ -947,6 +947,34 @@ Json to_json(const PerceptualMapping& m);
 Json to_json(const OutputVector& o);
 Json to_json(const SequenceResult& r);
 Json to_json(const MachineTransitionResult& r);
+// Subset selector for a step response (RealityEngine_CI#367).
+//
+// `POST /api/perceive` answered with the whole universe on every call. A caller
+// driving one machine received every other machine's entries too — measured on
+// DLX001 with the full corpus, step 0 came back with 438 mergeBatch entries,
+// none of them in that machine's declared output region. Thousands of those
+// exhausted the LSP and Scala heaps mid-sweep and killed both runtimes.
+//
+// Selection is by **sequence id** rather than by region: a region can have more
+// than one writer, a sequence id cannot, so the sequence is the only attribution
+// that is unambiguous. Machine *names* rather than ids, because ids are minted
+// per runtime and are not comparable across the quorum.
+//
+// `active == false` means no selector was supplied and the full step is emitted,
+// byte-for-byte as before. An *empty* selection is not the same thing: it means
+// the caller asked for something this step did not produce, and the honest
+// answer is nothing rather than everything.
+struct StepSelector {
+  bool active = false;
+  std::set<std::string> sequenceIds;
+  std::set<std::string> machineNames;
+
+  bool wantsSequence(const std::string& id) const { return sequenceIds.count(id) > 0; }
+  bool wantsMachineName(const std::string& n) const { return machineNames.count(n) > 0; }
+};
+
+Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace,
+             bool includeActiveRegions, const StepSelector& selector);
 Json to_json(const SimulationStep& step);
 Json to_json(const SimulationStep& step, bool includeMachineResults);
 Json to_json(const SimulationStep& step, bool includeMachineResults, bool includePerceptualSpace);
