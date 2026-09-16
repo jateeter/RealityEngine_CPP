@@ -563,6 +563,9 @@ public:
     server.route("POST", "/api/integrations/localai/invoke", [this](const http::Request& req) {
       return invoke_localai(parse_body(req));
     });
+    server.route("GET", "/api/integrations/localai/ledger", [this](const http::Request&) {
+      return ok(localai_ledger());
+    });
     server.route("GET", "/api/integrations/ollama/status", [this](const http::Request&) {
       return ok(ollama_status());
     });
@@ -1694,6 +1697,26 @@ private:
     });
   }
 
+  Json localai_ledger() const {
+    std::lock_guard<std::mutex> lock(localAIInvocationMutex);
+    return Json::Object{
+      {"provider", std::string("localai")},
+      {"endpoint", localAIBaseUrl},
+      {"records", localAIInvocations}
+    };
+  }
+
+  // Append one invocation record. Called on both the success and the failure
+  // path: a call that failed is still a call that was made, and a ledger that
+  // only records successes cannot answer "was this attempted".
+  void record_localai_invocation(Json record) const {
+    std::lock_guard<std::mutex> lock(localAIInvocationMutex);
+    localAIInvocations.push_back(std::move(record));
+    while (localAIInvocations.size() > localAIInvocationCapacity) {
+      localAIInvocations.erase(localAIInvocations.begin());
+    }
+  }
+
   http::Response invoke_localai(const Json& body) const {
     std::string method = body.at("method").as_string("POST");
     std::transform(method.begin(), method.end(), method.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
@@ -1701,9 +1724,72 @@ private:
     if (body.at("endpoint").is_string()) endpoint = body.at("endpoint").as_string();
     else if (body.at("path").is_string()) endpoint = body.at("path").as_string();
     else return http::error_response("localAI invocation requires endpoint or path", 400);
+
+    // The correlation id is the whole point of the ledger: it is what lets a
+    // completion write-back be joined to the invocation that justified it.
+    // Taken from the caller when supplied, so a caller that already has one
+    // keeps it, and minted here otherwise so a record is never left unjoinable.
+    const std::string correlationId = body.at("correlationId").is_string()
+        ? body.at("correlationId").as_string()
+        : make_id("localai-invocation");
+    const std::string invocationId = make_id("localai-inv");
+    const long long startedAt = now_ms();
+
+    // Machine and sequence are recorded when the caller names them, and left
+    // absent when it does not. An invocation with no authored occasion is a
+    // detectable condition; inventing one would hide it.
+    auto carry = [&](const char* key, Json::Object& into) {
+      if (body.at(key).is_string() && !body.at(key).as_string().empty()) {
+        into[key] = body.at(key).as_string();
+      }
+    };
+
+    auto record = [&](bool success, const std::string& operationId,
+                      const Json& response, const std::string& error) {
+      Json::Object rec{
+        {"id", invocationId},
+        {"correlationId", correlationId},
+        {"provider", std::string("localai")},
+        {"endpoint", endpoint},
+        {"method", method},
+        {"startedAt", static_cast<double>(startedAt)},
+        {"completedAt", static_cast<double>(now_ms())},
+        {"success", success}
+      };
+      if (!operationId.empty()) rec["operationId"] = operationId;
+      carry("machineName", rec);
+      carry("sequenceId", rec);
+      carry("requestClass", rec);
+      carry("resultClass", rec);
+      if (!error.empty()) rec["error"] = error;
+      // The response is summarised, never stored whole. A ledger that holds
+      // every RAG passage becomes the largest object in the process and is read
+      // by nobody; what a trace needs is that evidence existed and where it
+      // came from.
+      if (!response.is_null()) {
+        rec["evidence"] = Json::Object{
+          {"uri", localAIBaseUrl + endpoint},
+          {"shape", response.is_object() ? std::string("object")
+                    : response.is_array() ? std::string("array")
+                    : std::string("scalar")}
+        };
+        if (response.is_object() && response.at("confidence").is_number()) {
+          rec["confidence"] = response.at("confidence").as_number();
+        }
+      }
+      record_localai_invocation(Json(std::move(rec)));
+    };
+
     try {
       endpoint = normalize_endpoint(endpoint);
-      if (!endpoint_allowed(endpoint)) return http::error_response("localAI endpoint is not allowed: " + endpoint, 403);
+      if (!endpoint_allowed(endpoint)) {
+        // Recorded before the refusal is returned. An attempt on a forbidden
+        // endpoint is exactly the event M5's forbidden-endpoint check exists to
+        // find, and it is the one an unrecorded path loses entirely.
+        record(false, operation_id_for(endpoint), Json(nullptr),
+               "endpoint is not allowed");
+        return http::error_response("localAI endpoint is not allowed: " + endpoint, 403);
+      }
       std::string raw;
       if (method == "GET") {
         raw = http::get(localAIBaseUrl + endpoint);
@@ -1711,13 +1797,32 @@ private:
         Json payload = body.at("payload").is_null() ? Json::Object{} : body.at("payload");
         raw = http::post_json(localAIBaseUrl + endpoint, json::stringify(payload));
       } else {
+        record(false, operation_id_for(endpoint), Json(nullptr),
+               "unsupported method");
         return http::error_response("localAI invocation supports GET and POST only", 400);
       }
       Json parsed = json::parse(raw);
-      return ok(Json::Object{{"success", true}, {"endpoint", endpoint}, {"method", method}, {"response", parsed}});
+      record(true, operation_id_for(endpoint), parsed, "");
+      return ok(Json::Object{{"success", true}, {"endpoint", endpoint}, {"method", method},
+                             {"correlationId", correlationId}, {"invocationId", invocationId},
+                             {"response", parsed}});
     } catch (const std::exception& e) {
-      return http::json_response(json::stringify(Json::Object{{"success", false}, {"endpoint", endpoint}, {"method", method}, {"error", e.what()}}), 502);
+      record(false, operation_id_for(endpoint), Json(nullptr), e.what());
+      return http::json_response(json::stringify(Json::Object{{"success", false}, {"endpoint", endpoint}, {"method", method}, {"correlationId", correlationId}, {"error", e.what()}}), 502);
     }
+  }
+
+  // The catalogue's own id for this endpoint, so the ledger names the operation
+  // the deployment permits rather than a path this code invented. Empty when
+  // the endpoint is not in the catalogue, which is itself the finding.
+  std::string operation_id_for(const std::string& endpoint) const {
+    const Json catalog = localai_catalog();
+    const Json& allowed = catalog.at("allowedEndpoints");
+    if (!allowed.is_array()) return {};
+    for (const auto& e : allowed.array()) {
+      if (e.at("path").as_string() == endpoint) return e.at("id").as_string();
+    }
+    return {};
   }
 
   static Json parse_json_or_null(const std::string& raw) {
@@ -3407,6 +3512,22 @@ private:
   std::map<std::string, DispatchRecord> dispatchRecords;
   std::deque<std::string> dispatchRecordOrder;
   static constexpr size_t dispatchRecordCapacity = 256;
+  // localAI/MCP invocation ledger (RealityEngine_Machines#152).
+  //
+  // The ACP path has recorded every dispatch since it was written; the MCP path
+  // recorded nothing at all. An invocation reached localAIStack, returned its
+  // answer, and left no trace in the dispatch ledger, the integration status or
+  // the audit surface — so a completion could be traced back to the mapping
+  // that authorised it but never to the invocation that justified it, and an
+  // invocation that was never made was indistinguishable from one nobody
+  // recorded.
+  //
+  // Same shape and same capacity as the dispatch ledger deliberately: one
+  // bounded ring, newest-last, so a long-running PE cannot grow without bound
+  // and the two ledgers behave alike for anyone reading both.
+  mutable std::mutex localAIInvocationMutex;
+  mutable Json::Array localAIInvocations;
+  static constexpr size_t localAIInvocationCapacity = 256;
   size_t triggerEnvelopesCreated = 0;
   size_t triggerDroppedNoGovernance = 0;
   size_t triggerDroppedNoDispatch = 0;
