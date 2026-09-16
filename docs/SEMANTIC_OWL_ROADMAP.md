@@ -1,6 +1,6 @@
 # Semantic OWL Framework Roadmap
 
-Last reviewed: 2026-08-11
+Last reviewed: 2026-09-16
 
 ## Objective
 
@@ -49,9 +49,16 @@ Acceptance criteria:
 | ROBOT report | Zero ERROR rows for selected profiles. |
 | ROBOT reason | Produces classified output for selected profiles. |
 
-### M2 - Integration Ontology Vocabulary
+### M2 - Integration Ontology Vocabulary - COMPLETE 2026-09-16
 
 Target: semantic representation of MCP/localAIStack and ACP/OpenClaw paths.
+
+Delivered in `RealityEngine_Machines#148`. Ontology `0.3.1 -> 0.4.0`.
+
+M2 stood at one of its seven concepts, and that count was generous:
+`re:CompletionMapping` was declared and its extension was **empty across all
+twelve domains**. Nothing in the corpus described the route a completion takes
+into the vector; the ontology only said such a route could be described.
 
 Add ontology classes and properties for:
 
@@ -67,11 +74,43 @@ Add ontology classes and properties for:
 
 Acceptance criteria:
 
-| Criterion | Expected result |
-| --- | --- |
-| Ontology report | ROBOT reports no syntax/profile errors. |
-| Corpus generation | Existing machine ABoxes continue to generate unchanged semantic identities. |
-| Integration examples | At least one MCP and one ACP workflow classify under the new vocabulary. |
+| Criterion | Expected result | Measured 2026-09-16 |
+| --- | --- | --- |
+| Ontology report | ROBOT reports no syntax/profile errors. | **0 ERROR, 0 WARN, 0 INFO** |
+| Corpus generation | Existing machine ABoxes continue to generate unchanged semantic identities. | `generate-owl.py --all --check` clean, **0 files changed** |
+| Integration examples | At least one MCP and one ACP workflow classify under the new vocabulary. | HermiT classifies both; merged by `reason-owl.sh` in every scope, so it is gated rather than asserted |
+
+Gates: `npm run owl:reason:corpus` and `owl:reason:arbiter` both OK under ELK +
+HermiT; contracts 186 passed (was 176); `npm run validate` 1328 machines, 0
+invalid. The corpus-wide merge (~18 min) was not run.
+
+#### One axiom was removed rather than written
+
+The invariant "every source mapping write exercises a declared completion
+mapping" was first encoded in OWL, as a defined class over
+`owl:maxCardinality 0`. It was **inert** — under the open world a write with no
+asserted mapping is not a write with zero mappings, so nothing is entailed, and
+HermiT classified the negative fixture as nothing. An empty extension and an
+unsatisfiable class are indistinguishable from outside.
+
+Same shape as `re:EscalationDetermination`, which was correct, open-world, and
+evaluated 2 of 80 escalations. Same remedy: the OWL stays open-world and the
+closed-world half moved to
+`RealityEngine_Machines/tests/contracts/integration_vocabulary_test.py`.
+
+This roadmap already assigns that check to M3 ("Deterministic mapping check")
+and M5 ("Deterministic closed-world checks"), so nothing moved milestone. It is
+recorded because an OWL class that appeared to do the job would have made M2
+look finished while checking nothing.
+
+#### Carried into M3
+
+- `generate-owl.py` emits no `re:CompletionMapping` individuals, so the corpus's
+  own completion routes remain undescribed — the two in
+  `semantics/integration/examples.ttl` are the only ones in the repository.
+  Generator work, and the natural first step of M3's "every completion writes
+  only through an approved PE source mapping".
+- `re:ResponseMapping` is the remaining declared class with an empty extension.
 
 ### M3 - Static Workflow Provability
 
