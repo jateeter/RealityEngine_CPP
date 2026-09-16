@@ -204,9 +204,19 @@ become blocking after drift is eliminated."
 - R6 cannot reach the 625 trigger-rule-only machines. Joinability is M4's
   problem, and M4 needs it anyway for runtime traces.
 
-### M4 - Runtime Trace RDF
+### M4 - Runtime Trace RDF - COMPLETE 2026-09-16
 
 Target: runtime data paths are reasoner-visible.
+
+Delivered in `RealityEngine_Machines#151` as `scripts/export-runtime-trace.py`.
+Ontology `0.4.0 -> 0.5.0`.
+
+**The join was already there.** The engines emit `GET /api/audit/semantics`
+records whose `machineIri`, `sequenceIri`, `stepIri` and `determinationIri` are
+byte-identical to the IRIs `generate-owl.py` writes into the ABox, so the second
+criterion was a thing to verify rather than a thing to build. The corpus join
+goes through `machineName`, never `machineId`: ids are re-minted per runtime, so
+an id-keyed trace measures the runtime rather than the corpus.
 
 Emit or derive RDF/JSON-LD for:
 
@@ -221,11 +231,42 @@ Emit or derive RDF/JSON-LD for:
 
 Acceptance criteria:
 
-| Criterion | Expected result |
-| --- | --- |
-| Trace export | CI can save a complete RDF/JSON-LD trace for one PE.x.RE.x.PE cycle. |
-| Joinability | Every runtime event joins to a machine IRI or an explicit external-provider IRI. |
-| Non-blocking PE | Runtime trace export does not add synchronous ROBOT calls to `POST /api/push`. |
+| Criterion | Expected result | Measured 2026-09-16 |
+| --- | --- | --- |
+| Trace export | CI can save a complete RDF/JSON-LD trace for one PE.x.RE.x.PE cycle. | **1440 events**, 14,521 lines of Turtle + JSON-LD, merges and reports clean under ROBOT |
+| Joinability | Every runtime event joins to a machine IRI or an explicit external-provider IRI. | **1440/1440** |
+| Non-blocking PE | Runtime trace export does not add synchronous ROBOT calls to `POST /api/push`. | **zero** reasoner references across all four runtime source trees; push ~1.2s |
+
+Gates: `npm run trace:export`, `npm run trace:check`, both required by
+`tests/contracts/runtime_trace_test.py`. Contracts 205 passed (was 197).
+
+Criterion 3 holds by construction rather than by discipline - the exporter reads
+finished surfaces over HTTP and is not linked into any runtime, so it cannot be
+on the push path. Its test is the one M4 test that never skips; the other two
+describe a run and skip with a reason when no universe is up, which must not
+take the hot-path guard down with them.
+
+#### Three identifiers the exporter refuses to invent
+
+A push id, a correlation id on PE source writes, and the output region on a
+sequence observation. No runtime surface emits any of them. They are reported as
+counted gaps rather than synthesised: a generated push id would look exactly
+like a real one and would join two events that nothing actually connected.
+Closing them is engine work, and M5 wants them.
+
+#### A finding: 7 machines are live but not in the corpus
+
+`localai/agent_activity_classifier` and six siblings are loaded by the engine
+and have no ABox - localAIStack injects them at runtime rather than the corpus
+authoring them. They are attributed to an explicit `re:IntegrationProvider` IRI,
+which is what this criterion names second, and counted as a gap so the number
+stays visible.
+
+#### Not traced in this deployment
+
+Dispatches ran in dry-run mode, so no completion write-back existed to trace,
+and no MCP invocation was recorded during the traced cycle. Those two event
+kinds have vocabulary and fixtures but no live evidence yet.
 
 ### M5 - Dynamic ROBOT Runtime Validation
 
