@@ -1,6 +1,6 @@
 # Semantic OWL Framework Roadmap
 
-Last reviewed: 2026-09-16
+Last reviewed: 2026-09-16 · Status: **M1-M5 complete**; see Final Completion Criteria for what remains beyond the milestones
 
 ## Objective
 
@@ -28,9 +28,22 @@ data paths are provable across:
 
 ## Milestones
 
-### M1 - Blocking Static ROBOT Gate
+### M1 - Blocking Static ROBOT Gate - COMPLETE (verified 2026-09-16)
 
 Target: selected limited semantic profiles.
+
+Delivered before this milestone sequence and confirmed while closing M5, because
+a roadmap claiming M1-M5 complete should have checked M1 rather than assumed it.
+
+| Criterion | Verified |
+| --- | --- |
+| `owl-reasoner-check.sh` fails if ROBOT is missing in semantic CI | the script is non-blocking by design and both lanes that run it - `.github/workflows/owl-corpus-wide.yml` and `e2e-tests.yml` - install ROBOT v1.9.10 pinned, so it cannot skip there |
+| ROBOT report: zero ERROR rows | 0 ERROR, 0 WARN **and 0 INFO** on every merge run during M2-M5 |
+| ROBOT reason: classified output | ELK and HermiT both produce classified output; HermiT is required because ELK does not implement the constructs the escalation invariant relies on |
+
+The pin is deliberate: `semantics/robot-report-profile.txt` lists all 32 rules
+ROBOT ships rather than expressing a delta, so an unpinned upgrade could drop a
+rule by omission.
 
 Actions:
 
@@ -268,9 +281,20 @@ Dispatches ran in dry-run mode, so no completion write-back existed to trace,
 and no MCP invocation was recorded during the traced cycle. Those two event
 kinds have vocabulary and fixtures but no live evidence yet.
 
-### M5 - Dynamic ROBOT Runtime Validation
+### M5 - Dynamic ROBOT Runtime Validation - COMPLETE 2026-09-16
 
 Target: actual runs are checked against authored semantics.
+
+Delivered in `RealityEngine_Machines#153` as
+`scripts/validate-runtime-trace.py`. The whole sequence - merge, report, reason
+under HermiT, deterministic closed-world checks - runs against a live trace in
+**~10 seconds**.
+
+The closed-world step is not ROBOT's and cannot be. ROBOT answers what a graph
+entails; it cannot answer "this write went two cells past the region its mapping
+declares" (arithmetic over asserted values) nor "this endpoint is not in the
+allowed catalogue" (absence from a list is not a contradiction). This milestone
+names those three explicitly, and they are implemented closed-world.
 
 Validation sequence:
 
@@ -285,11 +309,41 @@ Validation sequence:
 
 Acceptance criteria:
 
-| Criterion | Expected result |
+| Criterion | Expected result | Measured 2026-09-16 |
+| --- | --- | --- |
+| MCP/localAIStack trace | Invocation, evidence, completion, and PE write-back classify cleanly. | all four classify in the merged reasoned graph |
+| ACP/OpenClaw trace | Dispatch, agent binding, completion, and PE write-back classify cleanly. | all four classify; dispatch and write-back from the **live** run |
+| Guardrail violation fixture | Dynamic validation fails and produces a named violation record. | **6** bad traces, each rejected **with** a named record |
+
+Gates: `npm run trace:validate`, `npm run trace:validate:check`, both required by
+`tests/contracts/dynamic_validation_test.py`. Contracts 212 passed (was 205).
+
+#### The live/example split, stated rather than blurred
+
+| from the live run | from the M2 worked examples |
 | --- | --- |
-| MCP/localAIStack trace | Invocation, evidence, completion, and PE write-back classify cleanly. |
-| ACP/OpenClaw trace | Dispatch, agent binding, completion, and PE write-back classify cleanly. |
-| Guardrail violation fixture | Dynamic validation fails and produces a named violation record. |
+| `re:ACPDispatch`, `re:SourceMappingWrite`, 100 x `re:SequenceObservation`, `re:PerceptionPush`, `re:TraceRun` | `re:MCPInvocation`, `re:MCPToolResult`, `re:EvidenceArtifact`, `re:OpenClawAgentBinding` |
+
+The reason is `RealityEngine_Machines#152`: a localAI invocation succeeds and
+leaves **no record** in the dispatch ledger, the integration status or the audit
+surface - measured twice. A live trace cannot contain an invocation today. The
+vocabulary models it and the examples exercise it; the runtime surface is the
+missing half.
+
+The OpenClaw gateway was not listening during this work, so the ACP dispatch
+traced from the live run was recorded in dry-run mode. The dispatch record and
+its completion are real; the agent execution behind them was not.
+`re:OpenClawAgentBinding` classifies from the examples because the live dispatch
+ledger records an agent name but no binding IRI.
+
+#### M3's R2 gap has a source of truth after all
+
+M3 reported R2's workflow-class half as ungated because no `integrations.json`
+entry declares `allowedOperations`. The PE serves one:
+`GET /api/integrations/localai/catalog` returns `allowedEndpoints` with ids,
+methods and paths, which is why a static check of `integrations.json` could not
+see it. M5's validator reads it for forbidden-endpoint use. Wiring the static R2
+check to the same catalogue is noted in #152.
 
 ## PE.x.MCP/localAIStack Completion Definition
 
