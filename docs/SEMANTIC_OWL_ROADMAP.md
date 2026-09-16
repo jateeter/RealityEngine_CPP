@@ -112,9 +112,20 @@ look finished while checking nothing.
   only through an approved PE source mapping".
 - `re:ResponseMapping` is the remaining declared class with an empty extension.
 
-### M3 - Static Workflow Provability
+### M3 - Static Workflow Provability - COMPLETE 2026-09-16
 
 Target: prove authored workflows before runtime.
+
+Delivered in `RealityEngine_Machines#150` as `scripts/prove-workflows.py`, which
+implements all six rules over a named corpus profile and emits findings as
+`re:SemanticGuardrailViolation` individuals - the M2 class whose extension had
+been empty since it was declared.
+
+Five of the six rules are **absence** checks ("every X *has* a known Y"), which
+is exactly what OWL's open world will not conclude, so they are deterministic
+and closed over a profile. This roadmap already says so per rule. The reasoner
+keeps classification and the RED contradiction `re:EscalationDetermination`
+catches.
 
 Rules to encode and check:
 
@@ -129,11 +140,69 @@ Rules to encode and check:
 
 Acceptance criteria:
 
-| Criterion | Expected result |
-| --- | --- |
-| Limited corpus profile | Static semantic check passes. |
-| Intentional bad binding fixture | Static semantic check fails. |
-| OpenClaw regression profile | `generate-regression-profile.py --check` is required before OpenClaw validation. |
+| Criterion | Expected result | Measured 2026-09-16 |
+| --- | --- | --- |
+| Limited corpus profile | Static semantic check passes. | `standard-deployment`, 12 machines, **0 violations** |
+| Intentional bad binding fixture | Static semantic check fails. | **5 fixtures**, each producing exactly its expected violation |
+| OpenClaw regression profile | `generate-regression-profile.py --check` is required before OpenClaw validation. | **now required**, see below |
+
+Gates: `npm run prove:workflows`, `npm run prove:workflows:fixtures`, both
+required by `tests/contracts/static_provability_test.py` and
+`openclaw_profile_drift_test.py`. Contracts 197 passed (was 186); `npm run
+validate` 1328 machines, 0 invalid.
+
+#### Criterion 3 was not met, and not for the reason it looked like
+
+`generate-regression-profile.py` has carried `--check` since it was written, and
+its docstring says "Run it in CI and after any corpus change". A search across
+every shell script, workflow and test in the workspace found **nothing that
+calls it**. It was available, not required - a weaker thing that reads the same
+in a status table.
+
+It now runs in the contract suite of `RealityEngine_Machines`, the repository
+that owns the corpus the profile is derived from and therefore the place the
+profile goes stale.
+
+#### Two rules were wrong before their numbers meant anything
+
+Recorded because each produced a plausible result that was false.
+
+R6 first required `re:EscalationAction`, and reported all five RED
+determinations in the limited profile as violations - all five prescribe
+`re:RouteReferral` or `re:RouteReview`, which are notifications and do reach a
+person. The bar is this roadmap's own wording: "downgraded to non-critical
+*automation*".
+
+R6 then attributed a RED trigger rule to every determination of its sequence.
+`AICapacityThrottler` carries seven rules over seven determinations, two RED and
+five AMBER; that reported nominal outputs as unactioned RED and inflated the
+corpus result to 567. **The join does not exist in the ABox**:
+`re:matchesOutputPosition` indexes the machine's output value vector, not the
+sequence's determination list. R6 now reads only what is asserted and reports
+the reach limit - 625 machines state RED only on a trigger rule - as an explicit
+ungated line.
+
+#### What the six rules found, and what is gated
+
+Corpus-wide (1328 machines) R6 evaluates 80 critical determinations - matching
+the 80 escalating output events `escalation_rag_test.py` documents - and finds
+13 violations: 8 critical determinations prescribing no action at all, and 5
+life-safety determinations prescribing only `re:DispatchAgent`, which
+`re-core.ttl` defines as having "no direct human recipient". Tracked in
+`RealityEngine_Machines#149`, with the classification question left open.
+
+**The gate is the limited profile only.** Gating the full corpus would either
+block unrelated changes or invite the rule to be widened until the corpus
+passed. That split is S7's: "Limited profile remains checkable; wider profiles
+become blocking after drift is eliminated."
+
+#### Still ungated, and reported as such
+
+- R2's workflow-class half has no source of truth: no `integrations.json` entry
+  declares `allowedOperations`, so endpoint membership is checked and
+  per-workflow-class operation permission is not.
+- R6 cannot reach the 625 trigger-rule-only machines. Joinability is M4's
+  problem, and M4 needs it anyway for runtime traces.
 
 ### M4 - Runtime Trace RDF
 
