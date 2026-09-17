@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-06-22
 
-See `/Users/johnt/workspace/GitHub/claude.md` for the integrated application map. Update both this file and the root map when C++ engine ownership, startup behavior, API parity, or PE integration changes.
+See `/Users/johnt/workspace/GitHub/CLAUDE.md` for the integrated application map. Update both this file and the root map when C++ engine ownership, startup behavior, API parity, or PE integration changes.
 
 ## Role
 
