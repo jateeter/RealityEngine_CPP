@@ -158,6 +158,71 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: put_api_config_threshold
+  /api/engine/config:
+    get:
+      tags:
+      - Configuration
+      summary: Get /api/engine/config
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_engine_config
+  /api/engine/config/{control}:
+    get:
+      tags:
+      - Configuration
+      summary: Get /api/engine/config/{control}
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_engine_config_control
+    put:
+      tags:
+      - Configuration
+      summary: Put /api/engine/config/{control}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: put_api_engine_config_control
+    delete:
+      tags:
+      - Configuration
+      summary: Delete /api/engine/config/{control}
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: delete_api_engine_config_control
   /api/runtime/metrics:
     get:
       tags:
@@ -286,7 +351,7 @@ paths:
     get:
       tags:
       - Vectors
-      summary: Read a vector
+      summary: Read a vector from THIS engine's store (internal; external callers use /api/engine/{id}/vectors/{vectorId})
       parameters:
       - &id001
         name: id
