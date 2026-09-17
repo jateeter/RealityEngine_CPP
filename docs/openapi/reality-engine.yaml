@@ -1692,7 +1692,7 @@ components:
       properties:
         historyLimit:
           type: integer
-          example: 256
+          example: 250
         includeMachineResults:
           type: boolean
         includePerceptualSpace:

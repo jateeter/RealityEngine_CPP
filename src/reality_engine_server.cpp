@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -352,44 +353,41 @@ public:
     server.route("GET", "/api/engine/config", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
       Json::Array controls;
-      controls.push_back(transitions_inhibited_control());
+      for (const auto& c : engine_controls()) controls.push_back(c.read());
       return ok(Json::Object{{"controls", controls}});
     });
     server.route("GET", "/api/engine/config/:control", [this](const http::Request& req) {
       const auto& name = req.pathParams.at("control");
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
-      if (name != "transitionsInhibited") return http::error_response("Unknown control: " + name, 404);
-      return ok(transitions_inhibited_control());
+      for (const auto& c : engine_controls())
+        if (c.name == name) return ok(c.read());
+      return http::error_response("Unknown control: " + name, 404);
     });
     server.route("PUT", "/api/engine/config/:control", [this](const http::Request& req) {
       const auto& name = req.pathParams.at("control");
       auto body = parse_body(req);
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
-      if (name != "transitionsInhibited") return http::error_response("Unknown control: " + name, 404);
-      if (!body.at("value").is_bool())
-        return http::error_response("transitionsInhibited requires a boolean `value`", 400);
-      const bool value = body.at("value").as_bool();
-      // Machine-scoped: a write names a machine, or omits it to set every one.
-      // Naming a machine that does not exist is a 404 rather than a silent
-      // no-op — a write that lands nowhere and answers 200 is the shape of
-      // failure this whole surface exists to remove.
-      if (body.at("machine").is_string()) {
-        const std::string id = body.at("machine").as_string();
-        if (!spaceRuntime.set_transitions_inhibited(id, value))
-          return http::error_response("Machine not found: " + id, 404);
-      } else {
-        spaceRuntime.set_transitions_inhibited_all(value);
+      for (const auto& c : engine_controls()) {
+        if (c.name != name) continue;
+        std::string error;
+        int status = 400;
+        if (!c.write(body, error, status)) return http::error_response(error, status);
+        return ok(c.read());
       }
-      return ok(transitions_inhibited_control());
+      return http::error_response("Unknown control: " + name, 404);
     });
     server.route("DELETE", "/api/engine/config/:control", [this](const http::Request& req) {
       const auto& name = req.pathParams.at("control");
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
-      if (name != "transitionsInhibited") return http::error_response("Unknown control: " + name, 404);
-      // "Restore the declared default", not "remove the control". Controls are
-      // fixed by the specification and cannot be created or destroyed here.
-      spaceRuntime.set_transitions_inhibited_all(false);
-      return ok(transitions_inhibited_control());
+      for (const auto& c : engine_controls()) {
+        if (c.name != name) continue;
+        // "Restore the declared default", not "remove the control". Controls
+        // are fixed by the specification and cannot be created or destroyed
+        // here.
+        c.reset();
+        return ok(c.read());
+      }
+      return http::error_response("Unknown control: " + name, 404);
     });
     server.route("GET", "/api/engine/active", [this](const http::Request&) { return ok(Json::Object{{"activeEvents", active_vectors_json()}}); });
     server.route("GET", "/api/engine/history", [this](const http::Request& req) {
@@ -1404,33 +1402,157 @@ private:
   // `default` is the specification's value, restated here so a reader of the
   // response can see what the runtime is supposed to hold as well as what it
   // does hold.
-  Json transitions_inhibited_control() const {
-    Json::Object value;
-    for (const auto& [id, inhibited] : spaceRuntime.transitions_inhibited())
-      value[id] = inhibited;
+  static Json control_json(const std::string& name, const std::string& scope,
+                           Json value, Json declaredDefault) {
     return Json::Object{
-      {"name", "transitionsInhibited"},
-      {"scope", "machine"},
-      {"value", value},
-      {"default", false},
+      {"name", name},
+      {"scope", scope},
+      {"value", std::move(value)},
+      {"default", std::move(declaredDefault)},
       {"mutable", true}
     };
   }
 
+  Json transitions_inhibited_control() const {
+    Json::Object value;
+    for (const auto& [id, inhibited] : spaceRuntime.transitions_inhibited())
+      value[id] = inhibited;
+    return control_json("transitionsInhibited", "machine", value, false);
+  }
+
+  // Every control on the pathway, in one table.
+  //
+  // Phase 1 carried its single control as `if (name != "transitionsInhibited")`
+  // in each of four handlers. A branch per control is how a runtime implements
+  // four of five and answers 404 for the rest while reporting success on
+  // everything it does support — and this surface exists to be compared, so a
+  // control missing from one runtime is the defect, not a difference.
+  //
+  // `write` reports its own failure rather than returning void: a write that
+  // lands nowhere and answers 200 is the shape this pathway removes.
+  struct EngineControl {
+    std::string name;
+    std::string scope;
+    std::function<Json()> read;
+    std::function<bool(const Json& body, std::string& error, int& status)> write;
+    std::function<void()> reset;
+  };
+
+  // Callers hold spaceRuntimeMutex; nothing in here re-locks it, because
+  // std::mutex is not recursive and re-locking on this thread deadlocks the
+  // request.
+  std::vector<EngineControl> engine_controls() {
+    std::vector<EngineControl> controls;
+
+    // An engine-scoped boolean: read it, write `value`, reset to the declared
+    // default. Written once rather than four times, so the four cannot drift
+    // apart the way the runtimes they mirror did.
+    auto boolean_control = [this](std::string name, bool* slot, bool declaredDefault) {
+      return EngineControl{
+        name, "engine",
+        [this, name, slot, declaredDefault] {
+          return control_json(name, "engine", *slot, declaredDefault);
+        },
+        [name, slot](const Json& body, std::string& error, int& status) {
+          if (!body.at("value").is_bool()) {
+            error = name + " requires a boolean `value`";
+            status = 400;
+            return false;
+          }
+          *slot = body.at("value").as_bool();
+          return true;
+        },
+        [slot, declaredDefault] { *slot = declaredDefault; }
+      };
+    };
+
+    controls.push_back(EngineControl{
+      "historyLimit", "engine",
+      [this] {
+        return control_json("historyLimit", "engine",
+                            static_cast<double>(spaceRuntime.history_limit()), 250.0);
+      },
+      [this](const Json& body, std::string& error, int& status) {
+        // A negative or fractional limit is refused rather than cast into a
+        // size_t, where -1 becomes 18 446 744 073 709 551 615 and the bound
+        // stops bounding anything.
+        const Json& v = body.at("value");
+        if (!v.is_number() || v.as_number() < 0 ||
+            v.as_number() != std::floor(v.as_number())) {
+          error = "historyLimit requires a non-negative whole-number `value`";
+          status = 400;
+          return false;
+        }
+        spaceRuntime.set_history_limit(static_cast<size_t>(v.as_number()));
+        return true;
+      },
+      [this] { spaceRuntime.set_history_limit(250); }
+    });
+    controls.push_back(boolean_control("includeActiveRegions", &includeActiveRegionsDefault, true));
+    controls.push_back(boolean_control("includeMachineResults", &includeMachineResultsDefault, true));
+    controls.push_back(boolean_control("includePerceptualSpace", &includePerceptualSpaceDefault, true));
+    controls.push_back(EngineControl{
+      "phaseDetail", "engine",
+      [this] { return control_json("phaseDetail", "engine", spaceRuntime.phase_detail(), false); },
+      [this](const Json& body, std::string& error, int& status) {
+        if (!body.at("value").is_bool()) {
+          error = "phaseDetail requires a boolean `value`";
+          status = 400;
+          return false;
+        }
+        spaceRuntime.set_phase_detail(body.at("value").as_bool());
+        return true;
+      },
+      [this] { spaceRuntime.set_phase_detail(false); }
+    });
+    controls.push_back(EngineControl{
+      "transitionsInhibited", "machine",
+      [this] { return transitions_inhibited_control(); },
+      [this](const Json& body, std::string& error, int& status) {
+        if (!body.at("value").is_bool()) {
+          error = "transitionsInhibited requires a boolean `value`";
+          status = 400;
+          return false;
+        }
+        const bool value = body.at("value").as_bool();
+        // Machine-scoped: a write names a machine, or omits it to set every
+        // one. Naming a machine that does not exist is 404 rather than a
+        // silent no-op.
+        if (body.at("machine").is_string()) {
+          const std::string id = body.at("machine").as_string();
+          if (!spaceRuntime.set_transitions_inhibited(id, value)) {
+            error = "Machine not found: " + id;
+            status = 404;
+            return false;
+          }
+        } else {
+          spaceRuntime.set_transitions_inhibited_all(value);
+        }
+        return true;
+      },
+      [this] { spaceRuntime.set_transitions_inhibited_all(false); }
+    });
+    return controls;
+  }
+
+  // The flat view of the same state `/api/engine/config` enumerates. Two views,
+  // one store — a runtime holding two copies that can disagree does not conform
+  // (SURFACE_SPEC.md, "/api/runtime/options and /api/engine/config are one
+  // state").
+  //
+  // `projectionControls` is gone. It was an object of prose describing
+  // request-body fields, emitted here and by Scala with a different key set,
+  // absent on LSP, and read by nothing in any repository. Documentation of a
+  // request field belongs in SURFACE_SPEC, where there is one copy; carried in
+  // a response it was three copies that had already drifted, and it made this
+  // surface impossible to compare byte-for-byte.
   Json runtime_options() const {
     return Json::Object{
       {"historyLimit", static_cast<double>(spaceRuntime.history_limit())},
+      {"includeActiveRegions", includeActiveRegionsDefault},
       {"includeMachineResults", includeMachineResultsDefault},
       {"includePerceptualSpace", includePerceptualSpaceDefault},
-      {"includeActiveRegions", includeActiveRegionsDefault},
-      {"phaseDetail", spaceRuntime.phase_detail()},
-      {"projectionControls", Json::Object{
-        {"includeMachineResults", "boolean request field on /api/perceive"},
-        {"includePerceptualSpace", "boolean request field on /api/perceive"},
-        {"compact", "sets includeMachineResults false when includeMachineResults is omitted"},
-        {"only", "object request field on /api/perceive: {sequenceIds[], machineNames[]} restricts "
-                 "mergeBatch, eventBus, activeRegions and machineResults to the named subset"}
-      }}
+      {"phaseDetail", spaceRuntime.phase_detail()}
     };
   }
 

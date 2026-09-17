@@ -822,7 +822,11 @@ private:
   RegionMapping configuredInputRegion;
   long configuredStepDelayMs = 100;
   std::optional<int> configuredMaxSteps;
-  size_t maxHistory = 256;
+  // 250, declared in SURFACE_SPEC.md ("Phase 2 — the observational filters")
+  // rather than chosen here. It was 256 on this runtime, 250 on LSP and 1000 on
+  // Scala: three reasonable values for one control, which is what happens when
+  // each runtime picks its own.
+  size_t maxHistory = 250;
   int currentStep = 0;
   int immediateStepCount = 0;
   bool running = false;
