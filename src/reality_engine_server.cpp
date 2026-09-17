@@ -92,8 +92,18 @@ public:
       vectorStore[id] = vector;
       return ok(Json::Object{{"success", true}, {"vector", vector}});
     });
-    server.route("GET", "/api/vectors/:id", [](const http::Request& req) {
-      return ok(Json::Object{{"message", "Vector retrieval endpoint"}, {"id", req.pathParams.at("id")}});
+    server.route("GET", "/api/vectors/:id", [this](const http::Request& req) {
+      // Reads this runtime's own store. Ids are engine-scoped -- a document
+      // posted here exists here and on no other engine -- so 404 means "this
+      // engine does not hold it", which is the only thing this engine can
+      // honestly say about an id (RealityEngine_CI#397).
+      //
+      // This used to return 200 with a fixed message for every id, including
+      // ids that existed nowhere, so a caller read "not found" as "found".
+      std::lock_guard<std::mutex> lock(vectorMutex);
+      auto it = vectorStore.find(req.pathParams.at("id"));
+      if (it == vectorStore.end()) return http::error_response("Vector not found", 404);
+      return ok(Json::Object{{"vector", it->second}});
     });
     server.route("DELETE", "/api/vectors/:id", [this](const http::Request& req) {
       std::lock_guard<std::mutex> lock(vectorMutex);
