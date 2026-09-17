@@ -128,6 +128,10 @@ public:
       sequences[seq.id] = seq;
       return ok(Json::Object{{"success", true}, {"sequence", seq.to_json()}});
     });
+    // Internal surface. Sequence ids are engine-scoped, like vector ids, so the
+    // external read is the Manager's GET /api/engine/:id/sequences/:sequenceId
+    // — a bare id here answers from whichever engine the caller reached
+    // (RealityEngine_CI#397).
     server.route("GET", "/api/sequences/:id", [this](const http::Request& req) {
       std::lock_guard<std::mutex> lock(sequenceMutex);
       auto it = sequences.find(req.pathParams.at("id"));
