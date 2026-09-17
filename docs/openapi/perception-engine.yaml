@@ -893,6 +893,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
   schemas:
     Machine:
       type: object

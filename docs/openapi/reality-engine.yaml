@@ -162,14 +162,14 @@ paths:
     get:
       tags:
       - Configuration
-      summary: Get /api/engine/config
+      summary: Every runtime control, with its scope and declared default
       responses:
         '200':
           description: Success
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Object'
+                $ref: '#/components/schemas/EngineConfig'
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: get_api_engine_config
@@ -177,49 +177,69 @@ paths:
     get:
       tags:
       - Configuration
-      summary: Get /api/engine/config/{control}
+      summary: Read one runtime control
+      parameters:
+      - &id001
+        name: control
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Control name, as declared in SURFACE_SPEC
       responses:
         '200':
           description: Success
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Object'
+                type: object
+                properties:
+                  control:
+                    $ref: '#/components/schemas/EngineControl'
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: get_api_engine_config_control
     put:
       tags:
       - Configuration
-      summary: Put /api/engine/config/{control}
+      summary: Set one runtime control
+      parameters:
+      - *id001
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: '#/components/schemas/EngineControlWrite'
       responses:
         '200':
           description: Success
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Object'
+                type: object
+                properties:
+                  control:
+                    $ref: '#/components/schemas/EngineControl'
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: put_api_engine_config_control
     delete:
       tags:
       - Configuration
-      summary: Delete /api/engine/config/{control}
+      summary: Restore a control to its declared default
+      parameters:
+      - *id001
       responses:
         '200':
           description: Success
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Success'
+                type: object
+                properties:
+                  control:
+                    $ref: '#/components/schemas/EngineControl'
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: delete_api_engine_config_control
@@ -353,7 +373,7 @@ paths:
       - Vectors
       summary: Read a vector from THIS engine's store (internal; external callers use /api/engine/{id}/vectors/{vectorId})
       parameters:
-      - &id001
+      - &id002
         name: id
         in: path
         required: true
@@ -376,7 +396,7 @@ paths:
       - Vectors
       summary: Delete a vector
       parameters:
-      - *id001
+      - *id002
       responses:
         '200':
           description: Success
@@ -431,7 +451,7 @@ paths:
       - Sequences
       summary: Read a sequence
       parameters:
-      - *id001
+      - *id002
       responses:
         '200':
           description: Success
@@ -449,7 +469,7 @@ paths:
       - Sequences
       summary: Delete a sequence
       parameters:
-      - *id001
+      - *id002
       responses:
         '200':
           description: Success
@@ -468,7 +488,7 @@ paths:
       - Sequences
       summary: Reset sequence state
       parameters:
-      - *id001
+      - *id002
       requestBody:
         required: true
         content:
@@ -494,7 +514,7 @@ paths:
       - Sequences
       summary: Append vectors to sequence
       parameters:
-      - *id001
+      - *id002
       requestBody:
         required: true
         content:
@@ -705,7 +725,7 @@ paths:
       - Machines
       summary: Read a machine
       parameters:
-      - *id001
+      - *id002
       responses:
         '200':
           description: Success
@@ -726,7 +746,7 @@ paths:
       - Machines
       summary: Replace a machine
       parameters:
-      - *id001
+      - *id002
       requestBody:
         required: true
         content:
@@ -750,7 +770,7 @@ paths:
       - Machines
       summary: Patch machine metadata
       parameters:
-      - *id001
+      - *id002
       requestBody:
         required: false
         content:
@@ -775,7 +795,7 @@ paths:
       - Machines
       summary: Remove a machine
       parameters:
-      - *id001
+      - *id002
       responses:
         '200':
           description: Success
@@ -794,7 +814,7 @@ paths:
       - Machines
       summary: Process machine-local input vector
       parameters:
-      - *id001
+      - *id002
       requestBody:
         required: true
         content:
@@ -824,7 +844,7 @@ paths:
       - Machines
       summary: Resolve universal input and process one machine
       parameters:
-      - *id001
+      - *id002
       requestBody:
         required: true
         content:
@@ -854,7 +874,7 @@ paths:
       - Machines
       summary: What-if with machine-local input vector
       parameters:
-      - *id001
+      - *id002
       requestBody:
         required: true
         content:
@@ -884,7 +904,7 @@ paths:
       - Machines
       summary: What-if with universal input space
       parameters:
-      - *id001
+      - *id002
       requestBody:
         required: true
         content:
@@ -1000,7 +1020,7 @@ paths:
       - Machines
       summary: Export machine to JSON
       parameters:
-      - *id001
+      - *id002
       responses:
         '200':
           description: Success
@@ -1019,7 +1039,7 @@ paths:
       - Machines
       summary: List machine checkpoints
       parameters:
-      - *id001
+      - *id002
       responses:
         '200':
           description: Success
@@ -1037,7 +1057,7 @@ paths:
       - Machines
       summary: Create machine checkpoint
       parameters:
-      - *id001
+      - *id002
       requestBody:
         required: true
         content:
@@ -1063,13 +1083,13 @@ paths:
       - Machines
       summary: Restore machine from checkpoint
       parameters:
-      - &id002
+      - &id003
         name: machineId
         in: path
         required: true
         schema:
           type: string
-      - &id003
+      - &id004
         name: cpId
         in: path
         required: true
@@ -1100,8 +1120,8 @@ paths:
       - Machines
       summary: Delete machine checkpoint
       parameters:
-      - *id002
       - *id003
+      - *id004
       responses:
         '200':
           description: Success
@@ -1135,7 +1155,7 @@ paths:
       - Machines
       summary: Get /api/buses/semantic/{id}
       parameters:
-      - *id001
+      - *id002
       responses:
         '200':
           description: Success
@@ -1625,6 +1645,48 @@ components:
         collectionName:
           type: string
           example: reality-events
+    EngineControl:
+      type: object
+      required:
+      - name
+      - scope
+      - value
+      - default
+      - mutable
+      properties:
+        name:
+          type: string
+          example: transitionsInhibited
+        scope:
+          type: string
+          enum:
+          - engine
+          - machine
+        value:
+          description: Scalar when scope is engine; an object keyed by machine id when scope is machine
+        default:
+          description: The default this document declares
+        mutable:
+          type: boolean
+          description: Whether PUT is accepted; a derived reading is reported, not set
+    EngineConfig:
+      type: object
+      properties:
+        controls:
+          type: array
+          items:
+            $ref: '#/components/schemas/EngineControl'
+          description: Emitted sorted by name
+    EngineControlWrite:
+      type: object
+      required:
+      - value
+      properties:
+        machine:
+          type: string
+          description: Required when the control's scope is machine
+        value:
+          description: The value to set
     RuntimeOptions:
       type: object
       properties:
@@ -1692,11 +1754,12 @@ components:
         timestamp:
           type: number
         machineOutput:
-          type: array
+          type:
+          - array
+          - 'null'
           items:
             type: number
             format: double
-          nullable: true
         sequenceResults:
           type: array
           items:
