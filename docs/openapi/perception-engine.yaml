@@ -678,6 +678,21 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: post_api_integrations_localai_invoke
+  /api/integrations/localai/ledger:
+    get:
+      tags:
+      - Integrations
+      summary: Get /api/integrations/localai/ledger
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_integrations_localai_ledger
   /api/dispatch/ledger:
     get:
       tags:
