@@ -31,7 +31,7 @@ Read the contract before building or deploying:
     RealityEngine_CI/docs/BUILD_CONTROL_CONTRACT.md
 
 ```bash
-cd ../RealityEngine_CI && ./scripts/regression-test.sh --build-only
+cd ../RealityEngine_CI && ./scripts/regression-test.sh --execute --build-only
 ```
 
 The per-repo commands below are for working on this repository alone — never as
