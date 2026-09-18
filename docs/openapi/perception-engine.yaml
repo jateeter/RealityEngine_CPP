@@ -919,6 +919,18 @@ components:
           items:
             type: object
             additionalProperties: true
+    MachineEnvelope:
+      type: object
+      required:
+      - version
+      - machine
+      properties:
+        version:
+          type: string
+          description: Corpus file format version. Required in this shape and validated on its major component; the bare Machine
+            schema does not declare it.
+        machine:
+          $ref: '#/components/schemas/Machine'
     Object:
       type: object
       additionalProperties: true
