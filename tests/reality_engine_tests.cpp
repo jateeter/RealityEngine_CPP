@@ -1217,7 +1217,8 @@ int main() {
     //
     // RealityEngine_CI#254 established that the machines which RUN are the
     // runtime's, and fixed POST /api/engine/process. The five per-machine
-    // routes were left calling process_input on the server registry, whose
+    // routes were left calling process_input on the server's machine registry,
+    // whose
     // copies carry transitionsInhibited, so each returned the shape of a
     // machine that matched nothing: 200, `sequenceResults: {}`,
     // `totalInputs: 0`. That is not a shape a caller can tell from a universe

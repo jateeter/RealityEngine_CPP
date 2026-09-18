@@ -398,8 +398,8 @@ curl -sf "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/machines" | assert_mac
 # ── The per-machine process routes actually process ──────────────────────────
 #
 # These answered 200 with `sequenceResults: {}` and `totalInputs: 0` for every
-# machine, because they called process_input on the server registry's copy and
-# every registry copy carries transitionsInhibited (RealityEngine_CI#254 fixed
+# machine, because they called process_input on the server's machine registry
+# copy and every machine registry copy carries transitionsInhibited (RealityEngine_CI#254 fixed
 # only the engine-wide route). Nothing caught it: the reply is well formed, and
 # "no sequence matched" is a legitimate answer — it is only wrong because it is
 # the answer to every input on every machine.
@@ -448,7 +448,8 @@ for route in ("process", "whatif"):
     if meta["totalInputs"] == 0 and not results:
         raise SystemExit(
             f"{route}: {probe['name']!r} evaluated no sequences — totalInputs=0, "
-            f"sequenceResults={{}}. This is what an inhibited registry copy "
+            f"sequenceResults={{}}. This is what an inhibited machine registry "
+            f"copy 
             f"returns for every input (RealityEngine_CI#254).")
     print(f"  {route}: {probe['name']!r} evaluated {len(results)} sequence(s), "
           f"totalInputs={meta['totalInputs']}")
