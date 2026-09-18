@@ -2201,11 +2201,40 @@ Machine load_machine_from_json_string(const std::string& raw,
                                       std::optional<std::string> overrideId,
                                       const LoadOptions& opts) {
   Json root = json::parse(raw);
-  // Version check — same validation Scala MachineLoader enforces.
-  const auto& verField = root.at("version");
-  if (!verField.is_string())
+
+  // Two accepted shapes, disambiguated by an object-valued `machine` key:
+  //
+  //   {"version": "1.0.0", "machine": {…}}   the corpus file envelope
+  //   {"name": …, "perceptualMapping": …}    the bare Machine object
+  //
+  // The second is what `docs/openapi/*-re.yaml` declares for POST
+  // /api/machines — `$ref: '#/components/schemas/Machine'` — and this refused
+  // it in the worst available way: `root.at("machine")` on a bare body returns
+  // the static null Value rather than throwing, so every field fell to its
+  // default. The route then answered 200 with a machine named "unnamed"
+  // carrying no sequences and no mapping, and because a machine without a
+  // perceptualMapping never reaches the spaceRuntime, GET /api/machines could
+  // not see it either. A caller was told a machine was created, handed a body
+  // describing it, and had nothing (RealityEngine_CI#419).
+  //
+  // The rule is LSP's, which had it right — `src/loader.lisp:248`. Adopting the
+  // existing correct implementation rather than inventing a third reading.
+  //
+  // Safe across the corpus: all 1328 files carry the envelope and none has an
+  // inner machine with its own object-valued `machine` key, so there is no
+  // machine for which the two readings differ.
+  const bool enveloped = root.at("machine").is_object();
+
+  // Version belongs to the envelope, not to the machine. It is required and
+  // validated there — every corpus file has it, and loosening that would let a
+  // file of the wrong major version load silently. The bare Machine schema does
+  // not declare `version`, so it is optional for that shape and validated only
+  // if a caller supplies one.
+  const auto& verField = root.at("version").is_string() ? root.at("version")
+                                                        : root.at("machine").at("version");
+  if (enveloped && !verField.is_string())
     throw std::runtime_error("Missing required field: version");
-  {
+  if (verField.is_string()) {
     std::string ver = verField.as_string();
     int major = 0;
     auto dotPos = ver.find('.');
@@ -2219,7 +2248,7 @@ Machine load_machine_from_json_string(const std::string& raw,
   // option of the same name.  Runs before any RealityEvent is constructed so
   // a violating life-safety machine cannot reach the engine.
   if (opts.strictSta) sta::assert_sta_for_life_safety(root);
-  const Json& m = root.at("machine");
+  const Json& m = enveloped ? root.at("machine") : root;
   std::string id = overrideId.value_or(make_id("machine"));
   std::string name = m.at("name").as_string("unnamed");
   std::string desc = m.at("description").as_string();

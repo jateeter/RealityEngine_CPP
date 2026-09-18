@@ -1213,6 +1213,75 @@ int main() {
   }
 
   {
+    // ── POST /api/machines accepts the schema its own document declares ──────
+    //
+    // Two shapes, disambiguated by an object-valued `machine` key: the corpus
+    // file envelope `{version, machine}`, and the bare Machine object — which
+    // is what docs/openapi/*-re.yaml declares for this route.
+    //
+    // The bare shape was refused in the worst available way. `root.at("machine")`
+    // returns the static null Value rather than throwing, so every field fell to
+    // its default and the route answered 200 with a machine named "unnamed"
+    // carrying nothing. Measured before the fix, counting residency either side
+    // of the post: `200, name='unnamed', seqs=0, resident 1 -> 1`. The caller was
+    // told a machine was created and had none (RealityEngine_CI#419).
+    //
+    // The rule is LSP's (src/loader.lisp:248), which had it right; this adopts
+    // the existing correct implementation rather than inventing a third reading.
+    const std::string machineBody = R"({
+      "name": "Shape Fixture",
+      "description": "either-shape acceptance",
+      "arbiterRule": "PASSTHROUGH",
+      "perceptualMapping": {"input": {"offset": 0, "length": 2},
+                            "output": {"offset": 8, "length": 2}},
+      "sequences": [{"id": "seq-shape", "name": "Shape Seq",
+                     "vectors": [{"id": "v1", "name": "A", "isInitial": true,
+                                  "values": [1, 0]}]}]
+    })";
+
+    // The bare object — the declared schema. Every field must survive, which is
+    // the half that silently did not: a name defaulting to "unnamed" and zero
+    // sequences is exactly what this looked like when it was broken.
+    Machine bare = load_machine_from_json_string(machineBody, "machine-bare");
+    assert(bare.name == "Shape Fixture");
+    assert(bare.sequence_count() == 1);
+    assert(bare.perceptualMapping.has_value());
+    assert(bare.perceptualMapping->input.offset == 0);
+
+    // The corpus file envelope, carrying the same machine.
+    Machine enveloped = load_machine_from_json_string(
+        R"({"version": "1.0.0", "machine": )" + machineBody + "}", "machine-env");
+    assert(enveloped.name == bare.name);
+    assert(enveloped.sequence_count() == bare.sequence_count());
+    assert(enveloped.perceptualMapping->input.offset == bare.perceptualMapping->input.offset);
+
+    // Version belongs to the envelope and stays required and validated there —
+    // every corpus file carries it, and loosening that would let a file of the
+    // wrong major version load silently.
+    bool refused = false;
+    try {
+      load_machine_from_json_string(R"({"machine": {"name": "No Version"}})");
+    } catch (const std::exception&) { refused = true; }
+    assert(refused);
+
+    refused = false;
+    try {
+      load_machine_from_json_string(
+          R"({"version": "9.0.0", "machine": {"name": "Wrong Major"}})");
+    } catch (const std::exception&) { refused = true; }
+    assert(refused);
+
+    // The bare Machine schema does not declare `version`, so its absence is not
+    // an error for that shape — but a version a caller does supply is still
+    // checked, rather than ignored because of which shape it arrived in.
+    refused = false;
+    try {
+      load_machine_from_json_string(R"({"name": "Bare Wrong Major", "version": "9.0.0"})");
+    } catch (const std::exception&) { refused = true; }
+    assert(refused);
+  }
+
+  {
     // ── The per-machine process routes drive the RUNNING machine ────────────
     //
     // RealityEngine_CI#254 established that the machines which RUN are the
