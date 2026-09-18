@@ -779,6 +779,21 @@ public:
   // max(offset + length) over every input and output mapping. Returned by
   // /api/runtime/vector-space so external clients can detect a stale PE.
   int required_dimension() const;
+
+  // Widen the perceptual space. Returns false without mutating for ANY request
+  // that would not widen it — the space is read-only downward (SURFACE_SPEC,
+  // "PUT /api/config/dimension is read-only downward"; RealityEngine_CI#425).
+  //
+  // The floor is max(required_dimension(), dimension()): a request below what
+  // the resident corpus needs, and equally a request below the width the engine
+  // already has, are both refused. The caller answers 400 and names the bound.
+  //
+  // Refused rather than clamped, and refused rather than accepted-and-ignored.
+  // Answering 200 for a request that did not take effect is the failure this
+  // route already had in three different forms, and it is the same shape as
+  // reporting a launch seed where a runtime fact was asked for (#364): the
+  // caller cannot tell a write that worked from one that did nothing.
+  bool widen_to(int requested);
   // Bumped on every add_machine / remove_machine that changes the
   // dimension or the set of mappings. External clients can cache shape
   // assumptions keyed by this value.

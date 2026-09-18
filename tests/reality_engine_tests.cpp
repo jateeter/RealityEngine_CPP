@@ -1213,6 +1213,65 @@ int main() {
   }
 
   {
+    // ── The perceptual space is read-only downward ───────────────────────────
+    //
+    // SURFACE_SPEC, "PUT /api/config/dimension is read-only downward". The floor
+    // is max(required_dimension, current width): a request below what the
+    // resident corpus needs, and equally one below the width already held, are
+    // both refused without mutating.
+    //
+    // The route previously assigned a server-side seed member that nothing reads
+    // for the space, and answered success: true. A caller could not tell that
+    // from a write that took effect — the same shape as reporting a launch seed
+    // where a runtime fact was asked for (RealityEngine_CI#425, #364).
+    PerceptualSpaceRuntime sim(64);
+    Machine m("Width Probe", "", ArbiterRule::Passthrough,
+              PerceptualMapping{RegionMapping{0, 4}, RegionMapping{100, 4}},
+              "machine-width-probe");
+    sim.add_machine(m);
+
+    // add_machine already grew the space to fit the mapping, so the requirement
+    // and the width coincide here — which is the ordinary steady state.
+    assert(sim.required_dimension() == 104);
+    assert(sim.dimension() == 104);
+
+    // Below the corpus requirement: refused, nothing moves.
+    assert(!sim.widen_to(64));
+    assert(sim.dimension() == 104);
+    assert(!sim.widen_to(103));
+    assert(sim.dimension() == 104);
+
+    // Equal to the current width is not a widening, but it is not a lowering
+    // either, and it must not be refused — a caller re-asserting the width it
+    // already has has asked for nothing impossible.
+    assert(sim.widen_to(104));
+    assert(sim.dimension() == 104);
+
+    // Above: applied.
+    assert(sim.widen_to(512));
+    assert(sim.dimension() == 512);
+
+    // Below the width now held but ABOVE the corpus requirement. This is the
+    // case that makes the floor max() rather than the requirement alone: it
+    // violates no corpus constraint, so a requirement-only check would accept it
+    // and answer success while the space stayed at 512.
+    assert(sim.required_dimension() == 104);
+    assert(!sim.widen_to(256));
+    assert(sim.dimension() == 512);
+
+    // A machine mapped beyond the current width raises the requirement, and the
+    // floor follows it rather than being captured at construction.
+    Machine far("Far Probe", "", ArbiterRule::Passthrough,
+                PerceptualMapping{RegionMapping{2000, 4}, RegionMapping{3000, 4}},
+                "machine-far-probe");
+    sim.add_machine(far);
+    assert(sim.required_dimension() == 3004);
+    assert(sim.dimension() >= 3004);
+    assert(!sim.widen_to(512));
+    assert(sim.dimension() >= 3004);
+  }
+
+  {
     // ── POST /api/machines accepts the schema its own document declares ──────
     //
     // Two shapes, disambiguated by an object-valued `machine` key: the corpus
