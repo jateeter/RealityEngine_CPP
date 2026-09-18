@@ -18,7 +18,7 @@ inline constexpr int output_length = 6;
 enum class StateId {
   AihrCritical,  // aihr-critical
   AihrDegraded,  // aihr-degraded
-  AihrHealthy,  // aihr-healthy
+  AihrInHealthy,  // aihr-in-healthy
   AihrNetFault,  // aihr-net-fault
   AihrNetNominal,  // aihr-net-nominal
   AihrWarning  // aihr-warning
@@ -28,7 +28,7 @@ constexpr std::string_view state_id_string(StateId s) {
   switch (s) {
     case StateId::AihrCritical: return "aihr-critical";
     case StateId::AihrDegraded: return "aihr-degraded";
-    case StateId::AihrHealthy: return "aihr-healthy";
+    case StateId::AihrInHealthy: return "aihr-in-healthy";
     case StateId::AihrNetFault: return "aihr-net-fault";
     case StateId::AihrNetNominal: return "aihr-net-nominal";
     case StateId::AihrWarning: return "aihr-warning";
