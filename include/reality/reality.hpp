@@ -458,6 +458,11 @@ struct DeprecationMark {
 struct MergeOperation {
   RegionMapping region;
   std::string machineId;
+  // Corpus-declared and globally unique, and the reason it is here: the batch is
+  // ordered by it. `machineId` is minted per runtime for any machine the corpus
+  // does not declare an id for, so sorting on that gave three runtimes three
+  // orders over identical content (RealityEngine_CI#374).
+  std::string machineName;
   // The CESs whose completed Reality Events folded into `values` — sorted and
   // deduplicated. Replaces the scalar sequenceId: one operation now covers the
   // whole machine, so there is no single firing to name, and collapsing the set
