@@ -801,7 +801,7 @@ static void verify_state_reports_expiry_without_a_reset() {
   assert(pe.update_sensor_value("sensor.lapsing", {1.0, 0.0}));
   assert(pe.update_sensor_value("sensor.holding", {0.5, 0.25}));
 
-  Json before = pe.state_json(std::nullopt, false, 0);
+  Json before = pe.state_json(Json(nullptr), false, 0);
   assert(find_serialized_source(before, "sensor-lapsing").at("active").as_bool());
   assert(find_serialized_source(before, "sensor-holding").at("active").as_bool());
 
@@ -809,7 +809,7 @@ static void verify_state_reports_expiry_without_a_reset() {
   // the suite slow. No reset between the two reads.
   std::this_thread::sleep_for(std::chrono::milliseconds(60));
 
-  Json after = pe.state_json(std::nullopt, false, 0);
+  Json after = pe.state_json(Json(nullptr), false, 0);
   assert(!find_serialized_source(after, "sensor-lapsing").at("active").as_bool());
   // The fresh one is unaffected — expiry is per source, not a blanket sweep.
   assert(find_serialized_source(after, "sensor-holding").at("active").as_bool());
@@ -819,7 +819,7 @@ static void verify_state_reports_expiry_without_a_reset() {
   assert(pe.get_source("sensor-lapsing")->active);
   assert(pe.get_source("sensor-lapsing")->lastValue == Vector({1.0, 0.0}));
   assert(pe.update_sensor_value("sensor.lapsing", {0.75, 0.75}));
-  Json revived = pe.state_json(std::nullopt, false, 0);
+  Json revived = pe.state_json(Json(nullptr), false, 0);
   assert(find_serialized_source(revived, "sensor-lapsing").at("active").as_bool());
 
   // The reported flag and the assembled contribution agree throughout: the
@@ -843,18 +843,18 @@ static void verify_exhausted_test_source_serializes_inactive() {
   played.active = true;
   pe.add_source(played);
 
-  assert(find_serialized_source(pe.state_json(std::nullopt, false, 0), "test-exhausted")
+  assert(find_serialized_source(pe.state_json(Json(nullptr), false, 0), "test-exhausted")
            .at("active").as_bool());
 
   pe.advance();  // steps off the end of a one-entry sequence
 
-  Json exhausted = find_serialized_source(pe.state_json(std::nullopt, false, 0), "test-exhausted");
+  Json exhausted = find_serialized_source(pe.state_json(Json(nullptr), false, 0), "test-exhausted");
   assert(!exhausted.at("active").as_bool());
   // Still declared, with its sequence intact — inactive is not absent, and a
   // reset can rewind it to the top and validate it live again.
   assert(exhausted.at("inputs").array().size() == 1);
   pe.reset();
-  assert(find_serialized_source(pe.state_json(std::nullopt, false, 0), "test-exhausted")
+  assert(find_serialized_source(pe.state_json(Json(nullptr), false, 0), "test-exhausted")
            .at("active").as_bool());
 }
 

@@ -545,7 +545,10 @@ public:
         std::lock_guard<std::mutex> lock(stateMutex);
         sources = static_cast<int>(engine.get_sources().size());
         globalStep = engine.globalStep;
-        lastPushMs = lastPush.value_or(0);
+        // The metric stays a timestamp; it now reads the one inside the step.
+        lastPushMs = lastPush.is_object() && lastPush.at("timestamp").is_number()
+          ? static_cast<long long>(lastPush.at("timestamp").as_number())
+          : 0;
         vectorSize = engine.vector_dimension();
       }
       return http::Response{200, semantic_metrics_text(sources, globalStep, vectorSize, lastPushMs),
@@ -811,7 +814,7 @@ public:
       {
         std::lock_guard<std::mutex> lock(stateMutex);
         engine.reset();
-        lastPush.reset();
+        lastPush = Json(nullptr);
       }
       broadcast_state();
       return ok(Json::Object{{"success", true}});
@@ -2891,7 +2894,10 @@ private:
           engine.update_from_perceptual_space(ps);
         }
         engine.advance();
-        lastPush = ts;
+        // The step itself, which already carries its own `timestamp`, so the
+        // "when" this field used to hold is still readable as
+        // `lastPush.timestamp`.
+        lastPush = parsed;
         step = engine.globalStep;
       }
       // Semantic audit (SEMANTIC_AUDIT_CONTRACT.md): one re:PerceptionEvent
@@ -3495,7 +3501,11 @@ private:
   static constexpr size_t pushRecordCapacity = 256;
   bool autoRunning = false;
   long autoIntervalMs = 1000;
-  std::optional<long long> lastPush;
+  // The last step object, or null before any push — SURFACE_SPEC.md,
+  // "`lastPush` is the last step, not when it happened". It held a timestamp,
+  // which LSP did not, and a client reconnecting could not render the last
+  // result from it (RealityEngine_CI#407).
+  Json lastPush = Json(nullptr);
   // Skip machines that already have a source instead of reloading them.
   // Off by default; see the constructor note. PE_SOURCE_MERGE=true.
   bool sourceMergeOnly = false;

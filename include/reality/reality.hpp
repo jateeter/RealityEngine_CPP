@@ -904,7 +904,11 @@ public:
   void update_from_perceptual_space(const Vector& values);
   void advance();
   void reset();
-  Json state_json(std::optional<long long> lastPush, bool autoRunning, long autoIntervalMs) const;
+  // `lastPush` is the last step object, not a timestamp: SURFACE_SPEC.md,
+  // "`lastPush` is the last step, not when it happened". `Json(nullptr)` before
+  // any push. The timestamp a caller used to read is `lastPush.timestamp`,
+  // carried inside the object, so nothing is lost (RealityEngine_CI#407).
+  Json state_json(const Json& lastPush, bool autoRunning, long autoIntervalMs) const;
   // Number of elements this engine will actually read and write.  Grows as
   // sources are added and as the RE reports a larger perceptual space, so a
   // machine whose perceptualMapping extends past the configured default still
