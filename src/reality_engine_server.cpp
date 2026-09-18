@@ -56,8 +56,30 @@ public:
       return ok(Json::Object{{"status", "healthy"}});
     });
     server.route("GET", "/api/config", [this](const http::Request&) {
+      // The dimension a caller asks for here is the width of the perceptual
+      // space **as it stands**, not the seed the process was launched with.
+      //
+      // The two are not the same and were never meant to be. The launch value
+      // seeds the space; PerceptualSpaceRuntime::add_machine then grows it to
+      // fit every machine's declared mapping, which every runtime is required
+      // to do. Seeded at 7680 against the full corpus this engine loads 1328
+      // machines, 125 of them mapped at or above 7680, and its space ends at
+      // 16944 — while this route reported 7680, because `dimension` is the
+      // server's own member, set once from argv and never synced to the
+      // runtime that actually owns the space.
+      //
+      // Nothing was broken by the growth; it is the reporting that was wrong,
+      // and it was wrong in the direction that looks like a capacity problem.
+      // A default launch read as cpp=7680, scala=7680, lsp=16944 — lsp being
+      // the one runtime that reports its grown space — and that 2-1 split was
+      // investigated as an engine disagreement and very nearly answered with a
+      // harness change sizing the seed from the corpus. Reporting a
+      // configuration input in a field that names a runtime fact is how a
+      // measurement ends up describing the launch command
+      // (RealityEngine_CI#422).
       std::shared_lock<std::shared_mutex> lock(registryMutex);
-      return ok(Json::Object{{"eventDimension", static_cast<double>(dimension)}, {"matchThreshold", matchThreshold}, {"qdrantUrl", qdrant_url()}, {"collectionName", collection_name()}});
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      return ok(Json::Object{{"eventDimension", static_cast<double>(spaceRuntime.dimension())}, {"matchThreshold", matchThreshold}, {"qdrantUrl", qdrant_url()}, {"collectionName", collection_name()}});
     });
     server.route("PUT", "/api/config/dimension", [this](const http::Request& req) {
       auto it = req.queryParams.find("dimension");
@@ -1671,6 +1693,12 @@ private:
   mutable std::mutex sequenceMutex;
   mutable std::mutex checkpointMutex;
   mutable std::mutex historyMutex;
+  // The launch SEED, not the width of the perceptual space. add_machine grows
+  // the space past this during loading and never writes back here, so this
+  // stops being the answer to "how wide is the space" the moment the first
+  // machine mapped beyond it loads. Ask spaceRuntime.dimension() for that
+  // (RealityEngine_CI#422). Kept because PerceptionMapper is constructed
+  // from it and PUT /api/config/dimension sets it.
   int dimension = 768;
   double matchThreshold = 0.5;
   PerceptualSpaceRuntime spaceRuntime;

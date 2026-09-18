@@ -395,6 +395,54 @@ wait_for_http "http://localhost:${OPENAI_STUB_E2E_PORT}/v1/models" "OpenAI stub"
 
 curl -sf "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/machines" | assert_machine_count_gt_zero
 
+# ── /api/config reports the space as it stands, not the launch seed ──────────
+#
+# The launch value seeds the perceptual space; add_machine grows it to fit every
+# machine's declared mapping. This route reported the seed, because it read the
+# server's own member rather than the runtime that owns the space — so a universe
+# seeded at 7680 and grown to 16944 reported 7680 forever (RealityEngine_CI#422).
+#
+# This asserts the reported width covers every resident machine's regions. Not a
+# fixed number: the corpus grows, and a test asserting 16944 would fail on the
+# next machine added rather than on the defect.
+python3 - "http://localhost:${REALITY_ENGINE_E2E_PORT}" <<'DIM_PY'
+import json, sys, urllib.request
+
+base = sys.argv[1]
+def get(path):
+    with urllib.request.urlopen(base + path, timeout=60) as r:
+        return json.load(r)
+
+reported = get("/api/config").get("eventDimension")
+if not isinstance(reported, int):
+    raise SystemExit(f"/api/config eventDimension is {reported!r}, not an integer")
+
+machines = get("/api/machines")
+machines = machines.get("machines", machines)
+required, furthest = 0, None
+for m in machines:
+    mapping = m.get("perceptualMapping") or {}
+    for key in ("input", "output"):
+        region = mapping.get(key) or {}
+        try:
+            end = int(region["offset"]) + int(region["length"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end > required:
+            required, furthest = end, f"{m.get('name')!r} {key} {region}"
+
+if required == 0:
+    raise SystemExit("no machine declared a region — cannot check the reported width")
+if reported < required:
+    raise SystemExit(
+        f"/api/config reports eventDimension={reported}, but a resident machine "
+        f"maps to {required} ({furthest}). The space grew and the report did "
+        f"not — this is the seed being reported as the dimension "
+        f"(RealityEngine_CI#422).")
+print(f"  /api/config: eventDimension={reported} covers the furthest resident "
+      f"region {required} ({furthest})")
+DIM_PY
+
 # ── The per-machine process routes actually process ──────────────────────────
 #
 # These answered 200 with `sequenceResults: {}` and `totalInputs: 0` for every
