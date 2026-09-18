@@ -819,7 +819,7 @@ MachineTransitionResult Machine::process_input(const Vector& input, std::optiona
   // caller that has no way to act on it.
   if (transitionsInhibited) {
     return {input, now_ms(), {}, std::nullopt,
-            {to_string(arbiter.get_rule()), 0, 0, false}};
+            {to_string(arbiter.get_rule()), 0, 0, false}, std::nullopt};
   }
   std::map<std::string, SequenceResult> seqResults;
   std::map<std::string, std::vector<OutputVector>> seqOutputs;
@@ -829,7 +829,28 @@ MachineTransitionResult Machine::process_input(const Vector& input, std::optiona
     seqResults[seqId] = std::move(result);
   }
   auto decision = arbiter.arbitrate(seqOutputs, static_cast<int>(sequences.size()));
-  return {input, now_ms(), seqResults, decision.machineOutput, {to_string(decision.rule), decision.totalInputs, decision.sequencesWithOutput, decision.shouldOutput}};
+
+  // The fold, alongside the arbiter's pick. Same inputs the step folds — every
+  // asserted output, in the arbiter's canonical order — and the same
+  // transformation, so the two surfaces cannot report different values for the
+  // same transition. chainTop is the declared outputAlphabetTop and cannot be
+  // derived from bitsPerElement, which is the representable range rather than
+  // the chain (RealityEngine_CI#158).
+  std::optional<Vector> merged;
+  if (decision.shouldOutput) {
+    std::vector<Vector> values;
+    for (const auto& [_, outs] : seqOutputs)
+      for (const auto& o : outs) values.push_back(o.vector);
+    if (!values.empty())
+      merged = fold_outputs(values, outputMergeTransformation,
+                            perceptualMapping ? perceptualMapping->outputAlphabetTop
+                                              : std::nullopt);
+  }
+
+  return {input, now_ms(), seqResults, decision.machineOutput,
+          {to_string(decision.rule), decision.totalInputs,
+           decision.sequencesWithOutput, decision.shouldOutput},
+          merged};
 }
 void Machine::reset() { for (auto& [_, s] : sequences) s.reset(); }
 Json Machine::to_json(bool full) const {
@@ -2467,7 +2488,14 @@ Json to_json(const MachineTransitionResult& r) {
   Json::Object seqs;
   for (const auto& [id, sr] : r.sequenceResults) seqs[id] = to_json(sr);
   Json output = r.machineOutput ? to_json(*r.machineOutput) : Json(nullptr);
-  return Json::Object{{"inputEvent", json::numbers(r.inputVector)}, {"timestamp", static_cast<double>(r.timestamp)}, {"sequenceResults", seqs}, {"machineOutput", output}, {"arbiterMetadata", Json::Object{{"rule", r.arbiterMetadata.rule}, {"totalInputs", static_cast<double>(r.arbiterMetadata.totalInputs)}, {"sequencesWithOutput", static_cast<double>(r.arbiterMetadata.sequencesWithOutput)}, {"shouldOutput", r.arbiterMetadata.shouldOutput}}}};
+  // `mergedOutput` is what the machine PRESENTS; `machineOutput` is the
+  // arbiter's representative member. The step reports both as
+  // `mergedOutputVector` and `outputVector`; this surface reported only the
+  // pick, so a caller here could not obtain the presented value at all
+  // (RealityEngine_CI#418). Null on a refusing fold, and null is the absence —
+  // never an empty array, which would read as a machine that presented zeros.
+  Json merged = r.mergedOutput ? Json(json::numbers(*r.mergedOutput)) : Json();
+  return Json::Object{{"inputEvent", json::numbers(r.inputVector)}, {"timestamp", static_cast<double>(r.timestamp)}, {"sequenceResults", seqs}, {"machineOutput", output}, {"mergedOutput", merged}, {"arbiterMetadata", Json::Object{{"rule", r.arbiterMetadata.rule}, {"totalInputs", static_cast<double>(r.arbiterMetadata.totalInputs)}, {"sequencesWithOutput", static_cast<double>(r.arbiterMetadata.sequencesWithOutput)}, {"shouldOutput", r.arbiterMetadata.shouldOutput}}}};
 }
 Json to_json(const TrajectoryEntry& entry) {
   Json::Array cells;

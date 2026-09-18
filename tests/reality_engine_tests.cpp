@@ -1213,6 +1213,76 @@ int main() {
   }
 
   {
+    // ── A transition reports the fold as well as the arbiter's pick ──────────
+    //
+    // Two different things can be said about a machine that completed several
+    // Reality Events: which member the arbiter presents as representative, and
+    // what the collection folds to. The step already says both, as
+    // `outputVector` and `mergedOutputVector`. The single-machine transition
+    // routes said only the first, so a caller of POST /api/machines/:id/process
+    // could not obtain what the machine presents — on a surface where no step
+    // result exists to consult instead — while the pick carried `combinedFrom`
+    // and `sources` metadata describing a combination it was not
+    // (RealityEngine_CI#418).
+    //
+    // Measured on localai/session_rag_context before the fix: the route
+    // reported [0,0,1,0] while the step wrote [1,1,1,0] for the same machine on
+    // the same stimulus.
+    Machine m = make_multi_sequence_machine("machine-both", {
+        {"a-seq", Vector{1.0, 0.0}},
+        {"b-seq", Vector{0.0, 1.0}},
+    }, 20, 2);
+
+    auto r = m.process_input(Vector{1.0});
+    assert(r.machineOutput.has_value());
+    assert(r.mergedOutput.has_value());
+
+    // The pick is one member; the fold is the combination. They must differ
+    // here, or this fixture is not exercising the distinction at all.
+    assert((*r.mergedOutput == Vector{1.0, 1.0}));
+    assert(r.machineOutput->vector != *r.mergedOutput);
+
+    // The metadata describes the fold's inputs, and now sits beside a value
+    // that is actually the fold.
+    assert(r.machineOutput->metadata.at("combinedFrom").as_number() == 2.0);
+
+    // A single contributor folds to itself, so the two agree — the case that
+    // would hide a broken fold if it were the only one tested.
+    Machine solo = make_multi_sequence_machine("machine-solo-fold", {
+        {"only-seq", Vector{1.0, 0.0}},
+    }, 20, 2);
+    auto s = solo.process_input(Vector{1.0});
+    assert(s.mergedOutput.has_value());
+    assert(s.machineOutput->vector == *s.mergedOutput);
+
+    // A refusing fold presents nothing and KEEPS the pick. The sequences did
+    // complete, and the pick is the evidence they did — which is why this is an
+    // added field rather than a redefinition of machineOutput. Redefining it
+    // would have deleted the only record that a refusing machine fired, and it
+    // is what verify_fold_refusal_contributes_nothing already asserts one layer
+    // up (FOLD_PLACEMENT.md 2; #158).
+    Machine refuse = make_multi_sequence_machine("machine-refuse-fold", {
+        {"a-seq", Vector{1.0, 0.0}},
+        {"b-seq", Vector{0.0, 1.0}},
+    }, 20, 2);
+    refuse.outputMergeTransformation = OutputMergeTransformation::StrongDisjunction;
+    auto rf = refuse.process_input(Vector{1.0});
+    assert(!rf.mergedOutput.has_value());
+    assert(rf.machineOutput.has_value());
+
+    // Declaring the chain top makes the same machine fold normally, which is
+    // what confirms the refusal was about k and not about the machine.
+    refuse.perceptualMapping->outputAlphabetTop = 1;
+    auto declared = refuse.process_input(Vector{1.0});
+    assert(declared.mergedOutput.has_value());
+
+    // Null, never an empty array: an absent fold is the machine presenting
+    // nothing, and [] would read as a machine that presented zeros.
+    assert(to_json(rf).at("mergedOutput").is_null());
+    assert(to_json(r).at("mergedOutput").is_array());
+  }
+
+  {
     // ── The perceptual space is read-only downward ───────────────────────────
     //
     // SURFACE_SPEC, "PUT /api/config/dimension is read-only downward". The floor

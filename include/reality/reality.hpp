@@ -181,6 +181,23 @@ struct MachineTransitionResult {
   std::map<std::string, SequenceResult> sequenceResults;
   std::optional<OutputVector> machineOutput;
   ArbiterMetadata arbiterMetadata;
+  // The asserted outputs folded by the machine's declared transformation —
+  // what the machine PRESENTS, as distinct from `machineOutput`, which is the
+  // arbiter's representative member.
+  //
+  // The step already reports both, as `mergedOutputVector` and `outputVector`
+  // on machineResults. The single-machine transition routes reported only the
+  // pick, so a caller of POST /api/machines/:id/process could not obtain what
+  // the machine presents, on a surface with no step result to consult instead —
+  // while the pick carried `combinedFrom` and `sources` metadata describing a
+  // combination it was not (RealityEngine_CI#418).
+  //
+  // nullopt when the fold refuses: the Łukasiewicz pair without a declared
+  // chain top presents nothing rather than guessing a chain. `machineOutput`
+  // survives that, because the sequences did complete and the pick is the
+  // evidence they did — which is why this is an added field and not a
+  // redefinition of the existing one.
+  std::optional<Vector> mergedOutput;
 };
 
 class RealityEvent {
