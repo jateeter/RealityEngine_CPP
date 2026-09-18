@@ -1053,6 +1053,11 @@ int PerceptualSpaceRuntime::required_dimension() const {
   }
   return req;
 }
+bool PerceptualSpaceRuntime::widen_to(int requested) {
+  if (requested < required_dimension() || requested < space.dimension()) return false;
+  space.grow_to(requested);
+  return true;
+}
 long PerceptualSpaceRuntime::mapping_version() const { return mappingVersion; }
 CesCoverageRegistry& PerceptualSpaceRuntime::ces_coverage() { return coverage; }
 const CesCoverageRegistry& PerceptualSpaceRuntime::ces_coverage() const { return coverage; }

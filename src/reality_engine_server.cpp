@@ -81,10 +81,52 @@ public:
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       return ok(Json::Object{{"eventDimension", static_cast<double>(spaceRuntime.dimension())}, {"matchThreshold", matchThreshold}, {"qdrantUrl", qdrant_url()}, {"collectionName", collection_name()}});
     });
+    // Read-only downward (SURFACE_SPEC, "PUT /api/config/dimension is read-only
+    // downward"; RealityEngine_CI#425).
+    //
+    // This assigned the server's `dimension` seed member — which nothing reads
+    // for the perceptual space — and answered `success: true`. So the control
+    // reported that it had worked and changed nothing observable, which a
+    // caller cannot tell from a write that took effect. All three runtimes had a
+    // version of that: scala echoed the parameter without assigning anything,
+    // and lsp set its state dimension unconditionally, shrinking below what the
+    // corpus needs.
+    //
+    // Refused, never clamped. Applying the requirement instead of the requested
+    // value would make the response disagree with the request while still
+    // reporting success — the same shape as reporting a launch seed where a
+    // runtime fact was asked for (#364).
     server.route("PUT", "/api/config/dimension", [this](const http::Request& req) {
       auto it = req.queryParams.find("dimension");
-      if (it != req.queryParams.end() && !it->second.empty()) dimension = std::stoi(it->second);
-      return ok(Json::Object{{"success", true}, {"dimension", static_cast<double>(dimension)}});
+      if (it == req.queryParams.end() || it->second.empty())
+        return http::error_response("dimension query parameter is required", 400);
+      int requested = 0;
+      try {
+        requested = std::stoi(it->second);
+      } catch (const std::exception&) {
+        return http::error_response("dimension must be an integer", 400);
+      }
+
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      const int required = spaceRuntime.required_dimension();
+      const int current  = spaceRuntime.dimension();
+      if (!spaceRuntime.widen_to(requested)) {
+        // Name the bound that was violated. "Below the corpus requirement" and
+        // "below the width already held" are different facts, and a caller can
+        // only act on the one that applies to them.
+        const std::string why =
+            requested < required
+                ? "the " + std::to_string(required) + " the resident corpus requires"
+                : "the " + std::to_string(current) + " this engine already holds";
+        return http::error_response(
+            "dimension " + std::to_string(requested) + " is below " + why
+            + "; the perceptual space is read-only downward", 400);
+      }
+      // The width the engine actually has, never the value asked for — those
+      // differ whenever the space was already wider than the request.
+      return ok(Json::Object{{"success", true},
+                             {"dimension", static_cast<double>(spaceRuntime.dimension())},
+                             {"requiredDimension", static_cast<double>(required)}});
     });
     server.route("PUT", "/api/config/threshold", [this](const http::Request& req) {
       auto it = req.queryParams.find("threshold");
