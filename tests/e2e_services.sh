@@ -550,8 +550,33 @@ for expected in (requested_name, f"{requested_name} v2", f"{requested_name} v3")
 if len(after) != len(before_names) + 2:
     raise SystemExit(f"expected 2 new machines, went from {len(before_names)} to {len(after)}")
 
+# 6. Residency is runtime state: DELETE frees the name.
+#
+# Versioning answers a collision at the moment of ingestion; it is not a
+# permanent mark on a name. Remove every machine holding it and the next POST is
+# not a conflict — no suffix, and the DECLARED mapping is honoured rather than a
+# fresh allocation.
+for victim in (requested_name, f"{requested_name} v2", f"{requested_name} v3"):
+    mid = next((m["id"] for m in machines() if m["name"] == victim), None)
+    if mid:
+        req = urllib.request.Request(base + f"/api/machines/{mid}", method="DELETE")
+        urllib.request.urlopen(req, timeout=60).read()
+
+if any(m["name"] == requested_name for m in machines()):
+    raise SystemExit(f"{requested_name!r} still resident after DELETE")
+
+freed = post(dict(body))["machine"]
+if freed["name"] != requested_name:
+    raise SystemExit(
+        f"DELETE did not free the name: re-POST produced {freed['name']!r}, "
+        f"expected {requested_name!r}")
+if freed["perceptualMapping"] != declared:
+    raise SystemExit(
+        f"a non-conflicting POST must honour the declared mapping; "
+        f"got {freed['perceptualMapping']} for declared {declared}")
+
 print(f"  POST /api/machines: {requested_name!r} -> v2 {regions(ingested)}, v3 {regions(second)}; "
-      f"original untouched")
+      f"original untouched; DELETE frees the name and restores the declared mapping")
 INGEST_PY
 
 # ── The per-machine process routes actually process ──────────────────────────
