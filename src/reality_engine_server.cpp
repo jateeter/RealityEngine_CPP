@@ -574,15 +574,30 @@ public:
         return http::error_response(std::string("semantic bus registry unavailable: ") + e.what(), 404);
       }
     });
+    // A body this route cannot parse is the caller's error, not the server's.
+    // Unhandled, the parse throws and http.cpp's catch-all answers 500 — which
+    // tells a caller to retry something that will never succeed, and puts a
+    // client mistake in the server's error budget. 400 with the parse message
+    // says what to change (RealityEngine_CI#419).
     server.route("POST", "/api/machines", [this](const http::Request& req) {
-      Machine m = load_machine_from_json_string(req.body);
+      Machine m;
+      try {
+        m = load_machine_from_json_string(req.body);
+      } catch (const std::exception& e) {
+        return http::error_response(e.what(), 400);
+      }
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
     });
     server.route("PUT", "/api/machines/:id", [this](const http::Request& req) {
-      Machine m = load_machine_from_json_string(req.body, req.pathParams.at("id"));
+      Machine m;
+      try {
+        m = load_machine_from_json_string(req.body, req.pathParams.at("id"));
+      } catch (const std::exception& e) {
+        return http::error_response(e.what(), 400);
+      }
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       remove_machine(req.pathParams.at("id"));
