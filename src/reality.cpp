@@ -743,7 +743,21 @@ OutputArbiter::Decision OutputArbiter::arbitrate(const std::map<std::string, std
   if (rule == ArbiterRule::Passthrough) should = !all.empty();
   std::optional<OutputVector> output;
   if (should && !all.empty()) {
-    output = OutputVector{make_id("machine-output"), all.front().vector, {{"arbiter", true}, {"combinedFrom", static_cast<double>(all.size())}}, now_ms(), all.front().provenance};
+    // `sources` names the OUTPUT events folded here; `provenance` names the
+    // INPUT events that caused them. Different facts, and both contractual
+    // (SURFACE_SPEC.md, "A combined machine output reports both where it came
+    // from and what it is").
+    //
+    // This runtime carried only `provenance`, Scala only `sources`, so a
+    // consumer asking either question got an answer from some runtimes and
+    // null from the rest (RealityEngine_CI#410).
+    Json::Array sources;
+    for (const auto& o : all) sources.emplace_back(o.id);
+    output = OutputVector{make_id("machine-output"), all.front().vector,
+                          {{"arbiter", true},
+                           {"combinedFrom", static_cast<double>(all.size())},
+                           {"sources", sources}},
+                          now_ms(), all.front().provenance};
   }
   return {should, output, rule, totalSequences, withOutput};
 }
