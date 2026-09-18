@@ -1503,6 +1503,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     MergeOperation op;
     op.region      = result.mapping.output;
     op.machineId   = result.id;
+    op.machineName = machineIt != machines.end() ? machineIt->second.name : std::string();
     op.values      = *merged;
     op.sequenceIds = firings.sequenceIds;
     op.provenance  = firings.provenance;
@@ -1599,16 +1600,28 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
     }
   }
 
-  // Canonical merge ordering — by machineId alone, which is total now that the
-  // batch carries one operation per machine. sequenceId and outputIndex were the
-  // secondary keys that made the old per-firing batch orderable; with one entry
-  // per machine they are constant within a machine and no longer sort keys at
-  // all (FOLD_PLACEMENT.md 6). The ordering exists so every runtime emits the
-  // same mergeBatch sequence for the same input.
+  // Canonical merge ordering — by machineName then region.offset, both
+  // corpus-declared (SURFACE_SPEC.md, "Merge batch").
+  //
+  // This sorted by machineId alone and called it total. Total it is, within one
+  // runtime; the same key on three runtimes it is not. `machineId` is minted per
+  // runtime for any machine the corpus does not declare an id for, so the same
+  // operations came back permuted — four of the five reproduced disagreements in
+  // domain:digital-logic were this, with region, values, provenance and
+  // sequenceIds identical on all three (RealityEngine_CI#374).
+  //
+  // RealityEngine_CI#270 had already rejected id-based ordering for the
+  // engine-process join, in these words: "a minted id is per-runtime by
+  // construction". It moved that join to machineName and did not reach this
+  // field, which kept the key #270 had just discarded.
+  //
+  // region.offset breaks ties for a machine writing more than one region and is
+  // corpus-declared too, so neither half of the key is minted.
   phaseTimings.mergeBuildNs += tick();
   std::sort(step.mergeBatch.begin(), step.mergeBatch.end(),
             [](const MergeOperation& a, const MergeOperation& b) {
-              return a.machineId < b.machineId;
+              if (a.machineName != b.machineName) return a.machineName < b.machineName;
+              return a.region.offset < b.region.offset;
             });
   // GATHER -> RESOLVE -> COMMIT (ARBITER_CONTRACT.md 2).
   //
@@ -2476,6 +2489,9 @@ Json to_json(const SimulationStep& step, bool includeMachineResults, bool includ
     Json::Object obj{
       {"region", to_json(op.region)},
       {"machineId", op.machineId},
+      // The key the batch is ordered by, on the wire so a consumer can verify
+      // the order it is told to rely on (SURFACE_SPEC.md, "Merge batch").
+      {"machineName", op.machineName},
       {"sequenceIds", json::strings(op.sequenceIds)},
       {"values", json::numbers(op.values)},
       {"provenance", provArr}
