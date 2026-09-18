@@ -298,15 +298,16 @@ public:
   std::optional<PerceptualMapping> perceptualMapping;
   ComparatorType matchAlgorithm = ComparatorType::Gte;
   OutputMergeTransformation outputMergeTransformation = OutputMergeTransformation::Or;
-  // Registry copies do not perceive reality.
+  // Machine registry copies do not perceive reality.
   //
-  // add_machine stores every machine twice — once in the server registry, once
-  // in the spaceRuntime — and only the spaceRuntime's is stepped by the PE->RE->PE
-  // path. Anything that stepped a registry copy advanced a machine nothing else
-  // observes, forking the two permanently and silently: the endpoint reported a
-  // transition that the running corpus never made.
+  // add_machine stores every machine twice — once in the server's machine
+  // registry, once in the spaceRuntime — and only the spaceRuntime's is stepped
+  // by the PE->RE->PE path. Anything that stepped a machine registry copy
+  // advanced a machine nothing else observes, forking the two permanently and
+  // silently: the endpoint reported a transition that the running corpus never
+  // made.
   //
-  // Set on the registry copy only. process_input() then refuses to transition,
+  // Set on the machine registry copy only. process_input() then refuses to transition,
   // so the inhibition holds at one choke point rather than depending on every
   // present and future call site reaching for the spaceRuntime instead. A consumer
   // that wants activity is thereby forced to observe the machines actually in
@@ -715,7 +716,7 @@ public:
   //
   // Lives here rather than in the route because the machines that RUN are the
   // runtime's, and because the domain worker pool the fan-out uses is in this
-  // translation unit. The route previously walked the SERVER's registry, whose
+  // translation unit. The route previously walked the SERVER's machine registry, whose
   // copies carry transitionsInhibited — so every machine refused to transition
   // and the route could never produce an output. Scala and LSP both return 167
   // outputs on the same input where this returned 0.
@@ -730,7 +731,7 @@ public:
   //
   // The per-machine process routes need this for the same reason
   // process_across_machines does, and #254 fixed only the engine-wide one: the
-  // server registry's copies all carry transitionsInhibited, so
+  // server's machine registry copies all carry transitionsInhibited, so
   // `machines.find(id)->second.process_input(...)` returns the shape of a
   // machine that matched nothing — 200, `sequenceResults: {}`,
   // `totalInputs: 0`, on every machine, forever. LSP and Scala return three
@@ -748,7 +749,7 @@ public:
   // and for the same reason.
   //
   // Copied from the RUNNING machine, so the question is asked of the state the
-  // universe is actually in. Copying the registry's machine asks it of the
+  // universe is actually in. Copying the machine registry's copy asks it of the
   // machine as declared at load, which is a different and much less useful
   // question — and silently so.
   std::optional<MachineTransitionResult> whatif_machine(
@@ -758,7 +759,7 @@ public:
   // Runtime controls — SURFACE_SPEC.md, "/api/engine/config".
   //
   // transitionsInhibited is machine-scoped: one value per machine, not one for
-  // the engine. It is exposed here rather than read off the registry because
+  // the engine. It is exposed here rather than read off the machine registry because
   // the machines that RUN are the runtime's, and the control has to describe
   // the collection whose behaviour it governs.
   std::map<std::string, bool> transitions_inhibited() const;
@@ -795,22 +796,23 @@ public:
   bool remove_machine(const std::string& machineId);
   // The machine as it is *running*, Reality Event activation included.
   //
-  // add_machine keeps two copies: one in the server's registry and one here,
-  // and only this one is stepped. Serving machine detail from the registry
-  // therefore reported every RE with its initial isActive no matter how far the
-  // machine had advanced, so activation was unobservable from outside the
+  // add_machine keeps two copies: one in the server's machine registry and one
+  // here, and only this one is stepped. Serving machine detail from the machine
+  // registry therefore reported every RE with its initial isActive no matter how
+  // far the machine had advanced, so activation was unobservable from outside the
   // process (#37). nullptr when this spaceRuntime holds no such machine — a
   // machine without a perceptualMapping is never added here.
   const Machine* running_machine(const std::string& machineId) const;
   // The operational machine corpus — every machine this spaceRuntime is stepping.
   //
-  // The server keeps a second registry of machines as declared, which is never
-  // stepped. Anything answering "what is the engine running" must come from
-  // here; the registry answers "what was loaded", which is a different question
-  // and has repeatedly been served in place of this one (#37, #58).
+  // The server keeps a second machine registry, of machines as declared, which
+  // is never stepped. Anything answering "what is the engine running" must come
+  // from here; the machine registry answers "what was loaded", which is a
+  // different question and has repeatedly been served in place of this one
+  // (#37, #58).
   const std::map<std::string, Machine>& running_machines() const;
   // Retune the merge knob on the machine this spaceRuntime is stepping. The
-  // registry holds a separate copy; both are set so a read of either agrees.
+  // machine registry holds a separate copy; both are set so a read of either agrees.
   bool set_output_merge_transformation(const std::string& machineId, OutputMergeTransformation t);
   bool set_output_merge_locked(const std::string& machineId, bool locked);
   void configure(std::vector<Vector> inputSequence, RegionMapping inputRegion, long stepDelayMs, std::optional<int> maxSteps = std::nullopt);

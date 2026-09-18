@@ -433,9 +433,9 @@ public:
       auto body = parse_body(req);
       auto vec = json::to_numbers(body.at("vector"));
       Json::Array outputs;
-      // Runs against the RUNTIME's machines, not the registry's.
+      // Runs against the RUNTIME's machines, not the machine registry's.
       //
-      // This walked `machines` — the server registry — whose copies carry
+      // This walked `machines` — the server's machine registry — whose copies carry
       // transitionsInhibited, so every one returned the shape of a machine that
       // matched nothing and this route could never emit an output. LSP and
       // Scala both return 167 on the input that returned 0 here
@@ -485,9 +485,10 @@ public:
       Json::Array arr;
       // The operational machine corpus: what the Reality Engine is running.
       //
-      // This served the server registry, which holds machines as declared and
-      // is never stepped — and, since registry copies became transition-
-      // inhibited, can never advance at all. Both membership and runtime state
+      // This served the server's machine registry, which holds machines as
+      // declared and is never stepped — and, since machine registry copies became
+      // transition-inhibited, can never advance at all. Both membership and
+      // runtime state
       // now come from the spaceRuntime, because "what was loaded" and "what is
       // running" are different questions and this endpoint is the second one.
       //
@@ -517,12 +518,12 @@ public:
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       // Prefer the spaceRuntime's copy: add_machine registers the machine twice,
       // here and in the spaceRuntime, and only the spaceRuntime's is stepped. Serving
-      // this from the registry reported every Reality Event with its initial
+      // this from the machine registry reported every Reality Event with its initial
       // isActive however far the machine had advanced, so activation could not
       // be observed from outside the process — a machine firing on every step
       // still read as holding only its initial REs (#37).
       //
-      // The registry copy remains the fallback for a machine the spaceRuntime does
+      // The machine registry copy remains the fallback for a machine the spaceRuntime does
       // not hold, which is any machine without a perceptualMapping.
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       if (const Machine* live = spaceRuntime.running_machine(req.pathParams.at("id")))
@@ -588,18 +589,20 @@ public:
       bool removed = remove_machine(req.pathParams.at("id"));
       return ok(Json::Object{{"success", removed}});
     });
-    // The four routes below drive the RUNTIME's machine, not the registry's,
-    // for the reason recorded on POST /api/engine/process: the registry's
-    // copies carry transitionsInhibited, so process_input on one returns the
-    // shape of a machine that matched nothing — 200, `sequenceResults: {}`,
+    // The four routes below drive the RUNTIME's machine, not the machine
+    // registry's, for the reason recorded on POST /api/engine/process: the
+    // machine registry's copies carry transitionsInhibited, so process_input on
+    // one returns the shape of a machine that matched nothing — 200,
+    // `sequenceResults: {}`,
     // `totalInputs: 0`. Measured on a live three-runtime universe, every C++
     // machine answered that way while LSP and Scala returned three sequence
     // results for the same call. #254 fixed the engine-wide route and left
     // these five behind, and SURFACE_SPEC marks all of them implemented on all
     // three runtimes — presence without behaviour.
     //
-    // The registry fallback is for a machine the runtime does not hold, whose
-    // registry copy is the only one and is no longer inhibited (add_machine).
+    // The machine registry fallback is for a machine the runtime does not hold,
+    // whose machine registry copy is the only one and is no longer inhibited
+    // (add_machine).
     server.route("POST", "/api/machines/:id/process", [this](const http::Request& req) {
       const auto id = req.pathParams.at("id");
       const Vector input = json::to_numbers(parse_body(req).at("inputEvent"));
@@ -632,23 +635,23 @@ public:
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       PerceptionMapper resolver(dimension);
       // Resolved against the runtime's machines — the set that runs — so a
-      // machine present in the registry and absent from the runtime is not
-      // handed a slice it can do nothing with. Those still answer, below, from
-      // the registry, which for them is the only copy.
+      // machine present in the machine registry and absent from the runtime is
+      // not handed a slice it can do nothing with. Those still answer, below,
+      // from the machine registry, which for them is the only copy.
       auto resolved = resolver.resolve_inputs_for_machines(universal, spaceRuntime.running_machines());
       Json::Object results;
       for (auto& [id, input] : resolved) {
         if (auto result = spaceRuntime.process_machine(id, input)) results[id] = to_json(*result);
       }
-      auto registryOnly = resolver.resolve_inputs_for_machines(universal, machines);
-      for (auto& [id, input] : registryOnly) {
+      auto machineRegistryOnly = resolver.resolve_inputs_for_machines(universal, machines);
+      for (auto& [id, input] : machineRegistryOnly) {
         if (results.find(id) == results.end()) results[id] = to_json(machines[id].process_input(input));
       }
       return ok(Json::Object{{"results", results}});
     });
     // What-if asks what WOULD happen, so it persists nothing — but it must ask
-    // of the state the universe is actually in. Copying the registry's machine
-    // asked it of the machine as declared at load, and the copy inherited
+    // of the state the universe is actually in. Copying the machine registry's
+    // copy asked it of the machine as declared at load, and that copy inherited
     // transitionsInhibited, so the answer was "nothing" regardless.
     server.route("POST", "/api/machines/:id/whatif", [this](const http::Request& req) {
       const auto id = req.pathParams.at("id");
@@ -831,7 +834,7 @@ public:
     // produces a run whose results mean nothing and which nothing distinguishes
     // from a valid one, so unlocking is a separate, deliberate act.
     //
-    // Every write applies to the spaceRuntime's machine as well as the registry
+    // Every write applies to the spaceRuntime's machine as well as the machine registry
     // copy: those are two objects and only the spaceRuntime's is stepped, so
     // setting one alone would leave the knob reading differently from the knob
     // in force.
@@ -898,7 +901,7 @@ public:
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
       // Snapshot the machine as it is *running*, not as it was loaded. The
-      // registry copy is never stepped — the spaceRuntime holds the one that is —
+      // machine registry copy is never stepped — the spaceRuntime holds the one that is —
       // so checkpointing it captured the machine's initial Reality Event
       // activation whatever state it had reached, and restoring it could not
       // return the machine to the step it was captured at (#37).
@@ -1347,15 +1350,15 @@ private:
 
   void add_machine(const Machine& m) {
     machines[m.id] = m;
-    // The registry holds the machine as declared; the runtime holds the one
+    // The machine registry holds the machine as declared; the runtime holds the one
     // that runs. Where both exist only the runtime's may transition — without
-    // that, any endpoint calling process_input on a registry machine advances a
+    // that, any endpoint calling process_input on a machine registry copy advances a
     // copy nothing else observes and forks the two silently for the life of the
     // process.
     //
     // Where the runtime holds no copy, there is nothing to fork from. A machine
     // with no perceptualMapping cannot enter the perceptual space, so the
-    // registry's is the only copy in existence; inhibiting it protects no
+    // machine registry's is the only copy in existence; inhibiting it protects no
     // invariant and only makes the machine permanently unable to answer. This
     // used to be set unconditionally, which is the half of #254 that the
     // engine-wide fix did not reach.
@@ -1379,10 +1382,11 @@ private:
     for (const auto& [id, registered] : machines) {
       // Read the machine as it is *running*, not as it was registered.
       //
-      // add_machine keeps two copies — one in this registry, one in the
-      // spaceRuntime — and only the spaceRuntime's is stepped. Reading the registry
-      // here reported every Reality Event with its post-ingestion isActive no
-      // matter how far the machine had advanced: the list was correct at step 0
+      // add_machine keeps two copies — one in this machine registry, one in the
+      // spaceRuntime — and only the spaceRuntime's is stepped. Reading the machine
+      // registry here reported every Reality Event with its post-ingestion
+      // isActive no matter how far the machine had advanced: the list was correct
+      // at step 0
       // and then frozen for the life of the process. Matching still worked, so
       // mergeBatch, stepNumber and globalStep all agreed with LSP and Scala
       // while GET /api/engine/active stood still at the 27 initial events.
@@ -1390,7 +1394,7 @@ private:
       // This is #37 again, on a second endpoint. That issue added
       // running_machine() for exactly this reason — "the machine as it is
       // running, Reality Event activation included" — and fixed the
-      // machine-detail path; this one was left on the registry and reproduced
+      // machine-detail path; this one was left on the machine registry and reproduced
       // the defect verbatim.
       //
       // Falls back to the registered copy when the spaceRuntime holds no such
