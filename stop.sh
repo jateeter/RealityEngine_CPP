@@ -98,7 +98,19 @@ check_port_released() {
   local port="$2"
   command -v lsof >/dev/null 2>&1 || return 0
   local holder
-  holder="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $2; exit}')"
+  # `|| true` because lsof exits 1 when nothing is listening — which is the
+  # success case here. Under `set -euo pipefail` that status propagated through
+  # the pipe and terminated the script, so stop.sh exited 1 whenever the ports
+  # WERE released and 0 only while something still held them: the exit status
+  # meant the opposite of what it said.
+  #
+  # It stopped before reaching the second port check, the summary, or the
+  # explicit `exit 1` below, so a clean shutdown produced a bare non-zero with
+  # no message explaining it. RealityEngine_CI/stopUniverse.sh then reported
+  # "CPP stop.sh failed — the engine may still be running" on every clean
+  # teardown (RealityEngine_CI#322), which is how a new failure signal becomes
+  # one everybody learns to ignore.
+  holder="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $2; exit}' || true)"
   [ -n "$holder" ] || return 0
   still_bound=1
   warn "$label port $port is still held by PID $holder after shutdown"
