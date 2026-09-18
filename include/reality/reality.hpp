@@ -726,6 +726,35 @@ public:
   // machine-space, and length says which"; RealityEngine_CI#267).
   std::vector<OutputVector> process_across_machines(const Vector& input);
 
+  // Drive ONE running machine, by id.
+  //
+  // The per-machine process routes need this for the same reason
+  // process_across_machines does, and #254 fixed only the engine-wide one: the
+  // server registry's copies all carry transitionsInhibited, so
+  // `machines.find(id)->second.process_input(...)` returns the shape of a
+  // machine that matched nothing — 200, `sequenceResults: {}`,
+  // `totalInputs: 0`, on every machine, forever. LSP and Scala return three
+  // sequence results on the same call.
+  //
+  // Returns nullopt when no machine carries `id`, so the route answers 404
+  // rather than manufacturing an empty transition for a machine that is absent.
+  std::optional<MachineTransitionResult> process_machine(
+      const std::string& machineId, const Vector& input,
+      std::optional<ComparatorType> overrideType = std::nullopt);
+
+  // The same evaluation against a copy, persisting nothing — what-if asks what
+  // WOULD happen. The copy clears inhibition: a copy of an inhibited machine is
+  // still inhibited, which is what made the whatif routes inert in the same way
+  // and for the same reason.
+  //
+  // Copied from the RUNNING machine, so the question is asked of the state the
+  // universe is actually in. Copying the registry's machine asks it of the
+  // machine as declared at load, which is a different and much less useful
+  // question — and silently so.
+  std::optional<MachineTransitionResult> whatif_machine(
+      const std::string& machineId, const Vector& input,
+      std::optional<ComparatorType> overrideType = std::nullopt) const;
+
   // Runtime controls — SURFACE_SPEC.md, "/api/engine/config".
   //
   // transitionsInhibited is machine-scoped: one value per machine, not one for

@@ -588,52 +588,97 @@ public:
       bool removed = remove_machine(req.pathParams.at("id"));
       return ok(Json::Object{{"success", removed}});
     });
+    // The four routes below drive the RUNTIME's machine, not the registry's,
+    // for the reason recorded on POST /api/engine/process: the registry's
+    // copies carry transitionsInhibited, so process_input on one returns the
+    // shape of a machine that matched nothing — 200, `sequenceResults: {}`,
+    // `totalInputs: 0`. Measured on a live three-runtime universe, every C++
+    // machine answered that way while LSP and Scala returned three sequence
+    // results for the same call. #254 fixed the engine-wide route and left
+    // these five behind, and SURFACE_SPEC marks all of them implemented on all
+    // three runtimes — presence without behaviour.
+    //
+    // The registry fallback is for a machine the runtime does not hold, whose
+    // registry copy is the only one and is no longer inhibited (add_machine).
     server.route("POST", "/api/machines/:id/process", [this](const http::Request& req) {
-      std::unique_lock<std::shared_mutex> lock(registryMutex);
-      auto it = machines.find(req.pathParams.at("id"));
-      if (it == machines.end()) return http::error_response("Machine not found", 404);
-      auto body = parse_body(req);
-      auto result = it->second.process_input(json::to_numbers(body.at("inputEvent")));
-      return ok(to_json(result));
-    });
-    server.route("POST", "/api/machines/:id/process-universal", [this](const http::Request& req) {
-      auto id = req.pathParams.at("id");
-      std::unique_lock<std::shared_mutex> lock(registryMutex);
+      const auto id = req.pathParams.at("id");
+      const Vector input = json::to_numbers(parse_body(req).at("inputEvent"));
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       auto it = machines.find(id);
       if (it == machines.end()) return http::error_response("Machine not found", 404);
-      auto body = parse_body(req);
-      auto resolved = perception.resolve_input_event_vector_for_machine(json::to_numbers(body.at("universalInputSpace")), it->second);
-      auto result = it->second.process_input(resolved);
-      return ok(to_json(result));
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      if (auto result = spaceRuntime.process_machine(id, input)) return ok(to_json(*result));
+      return ok(to_json(it->second.process_input(input)));
+    });
+    server.route("POST", "/api/machines/:id/process-universal", [this](const http::Request& req) {
+      const auto id = req.pathParams.at("id");
+      const Vector universal = json::to_numbers(parse_body(req).at("universalInputSpace"));
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
+      auto it = machines.find(id);
+      if (it == machines.end()) return http::error_response("Machine not found", 404);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      // Resolved against the mapping of the machine that will be driven, so the
+      // slice and the transition cannot be taken from two different copies.
+      const Machine* running = spaceRuntime.running_machine(id);
+      const Vector resolved = perception.resolve_input_event_vector_for_machine(
+          universal, running ? *running : it->second);
+      if (auto result = spaceRuntime.process_machine(id, resolved)) return ok(to_json(*result));
+      return ok(to_json(it->second.process_input(resolved)));
     });
     server.route("POST", "/api/machines/process-universal/all", [this](const http::Request& req) {
       auto body = parse_body(req);
       auto universal = json::to_numbers(body.at("universalInputSpace"));
-      std::unique_lock<std::shared_mutex> lock(registryMutex);
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       PerceptionMapper resolver(dimension);
-      auto resolved = resolver.resolve_inputs_for_machines(universal, machines);
+      // Resolved against the runtime's machines — the set that runs — so a
+      // machine present in the registry and absent from the runtime is not
+      // handed a slice it can do nothing with. Those still answer, below, from
+      // the registry, which for them is the only copy.
+      auto resolved = resolver.resolve_inputs_for_machines(universal, spaceRuntime.running_machines());
       Json::Object results;
-      for (auto& [id, input] : resolved) results[id] = to_json(machines[id].process_input(input));
+      for (auto& [id, input] : resolved) {
+        if (auto result = spaceRuntime.process_machine(id, input)) results[id] = to_json(*result);
+      }
+      auto registryOnly = resolver.resolve_inputs_for_machines(universal, machines);
+      for (auto& [id, input] : registryOnly) {
+        if (results.find(id) == results.end()) results[id] = to_json(machines[id].process_input(input));
+      }
       return ok(Json::Object{{"results", results}});
     });
+    // What-if asks what WOULD happen, so it persists nothing — but it must ask
+    // of the state the universe is actually in. Copying the registry's machine
+    // asked it of the machine as declared at load, and the copy inherited
+    // transitionsInhibited, so the answer was "nothing" regardless.
     server.route("POST", "/api/machines/:id/whatif", [this](const http::Request& req) {
-      std::shared_lock<std::shared_mutex> lock(registryMutex);
-      auto it = machines.find(req.pathParams.at("id"));
+      const auto id = req.pathParams.at("id");
+      const Vector input = json::to_numbers(parse_body(req).at("inputEvent"));
+      std::shared_lock<std::shared_mutex> registryLock(registryMutex);
+      auto it = machines.find(id);
       if (it == machines.end()) return http::error_response("Machine not found", 404);
-      Machine copy = it->second;
-      lock.unlock();
-      auto result = copy.process_input(json::to_numbers(parse_body(req).at("inputEvent")));
-      return ok(to_json(result));
+      Machine fallback = it->second;
+      registryLock.unlock();
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      if (auto result = spaceRuntime.whatif_machine(id, input)) return ok(to_json(*result));
+      fallback.transitionsInhibited = false;
+      return ok(to_json(fallback.process_input(input)));
     });
     server.route("POST", "/api/machines/:id/whatif-universal", [this](const http::Request& req) {
-      std::shared_lock<std::shared_mutex> lock(registryMutex);
-      auto it = machines.find(req.pathParams.at("id"));
+      const auto id = req.pathParams.at("id");
+      const Vector universal = json::to_numbers(parse_body(req).at("universalInputSpace"));
+      std::shared_lock<std::shared_mutex> registryLock(registryMutex);
+      auto it = machines.find(id);
       if (it == machines.end()) return http::error_response("Machine not found", 404);
-      Machine copy = it->second;
-      lock.unlock();
+      Machine fallback = it->second;
+      registryLock.unlock();
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       PerceptionMapper resolver(dimension);
-      auto input = resolver.resolve_input_event_vector_for_machine(json::to_numbers(parse_body(req).at("universalInputSpace")), copy);
-      return ok(to_json(copy.process_input(input)));
+      const Machine* running = spaceRuntime.running_machine(id);
+      const Vector input = resolver.resolve_input_event_vector_for_machine(
+          universal, running ? *running : fallback);
+      if (auto result = spaceRuntime.whatif_machine(id, input)) return ok(to_json(*result));
+      fallback.transitionsInhibited = false;
+      return ok(to_json(fallback.process_input(input)));
     });
     server.route("GET", "/api/machines/json/list", [this](const http::Request&) {
       Json::Array arr;
@@ -1302,15 +1347,23 @@ private:
 
   void add_machine(const Machine& m) {
     machines[m.id] = m;
-    // The registry holds the machine as declared, and it stays that way: only
-    // the spaceRuntime's copy is stepped by the PE->RE->PE path, so only it may
-    // transition. Without this, any endpoint calling process_input on a
-    // registry machine advanced a copy nothing else observes and forked the two
-    // silently for the life of the process.
-    machines[m.id].transitionsInhibited = true;
+    // The registry holds the machine as declared; the runtime holds the one
+    // that runs. Where both exist only the runtime's may transition — without
+    // that, any endpoint calling process_input on a registry machine advances a
+    // copy nothing else observes and forks the two silently for the life of the
+    // process.
+    //
+    // Where the runtime holds no copy, there is nothing to fork from. A machine
+    // with no perceptualMapping cannot enter the perceptual space, so the
+    // registry's is the only copy in existence; inhibiting it protects no
+    // invariant and only makes the machine permanently unable to answer. This
+    // used to be set unconditionally, which is the half of #254 that the
+    // engine-wide fix did not reach.
+    bool running = false;
     if (m.perceptualMapping) {
-      try { spaceRuntime.add_machine(m); } catch (...) {}
+      try { spaceRuntime.add_machine(m); running = true; } catch (...) {}
     }
+    machines[m.id].transitionsInhibited = running;
   }
   bool remove_machine(const std::string& id) {
     spaceRuntime.remove_machine(id);

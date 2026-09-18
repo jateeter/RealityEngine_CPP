@@ -915,6 +915,28 @@ void PerceptualSpaceRuntime::set_transitions_inhibited_all(bool value) {
   for (auto& [_, m] : machines) m.transitionsInhibited = value;
 }
 
+std::optional<MachineTransitionResult> PerceptualSpaceRuntime::process_machine(
+    const std::string& machineId, const Vector& input,
+    std::optional<ComparatorType> overrideType) {
+  auto it = machines.find(machineId);
+  if (it == machines.end()) return std::nullopt;
+  return it->second.process_input(input, overrideType);
+}
+
+std::optional<MachineTransitionResult> PerceptualSpaceRuntime::whatif_machine(
+    const std::string& machineId, const Vector& input,
+    std::optional<ComparatorType> overrideType) const {
+  auto it = machines.find(machineId);
+  if (it == machines.end()) return std::nullopt;
+  Machine copy = it->second;
+  // The copy is not the machine the universe observes, so nothing forks by
+  // letting it transition — which is the whole condition inhibition exists to
+  // prevent. Clearing it here is what makes this a what-if rather than a
+  // second way to ask a machine that refuses to answer.
+  copy.transitionsInhibited = false;
+  return copy.process_input(input, overrideType);
+}
+
 std::vector<OutputVector> PerceptualSpaceRuntime::process_across_machines(const Vector& input) {
   // 1. Atomic collection. The machine set is sampled once, as one consistent
   //    view, so a machine added or removed partway cannot appear in some
