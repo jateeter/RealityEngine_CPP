@@ -443,6 +443,117 @@ print(f"  /api/config: eventDimension={reported} covers the furthest resident "
       f"region {required} ({furthest})")
 DIM_PY
 
+# ── POST /api/machines always ingests; a conflict is versioned and reallocated ─
+#
+# SURFACE_SPEC, "POST /api/machines always ingests". The route used to mint a
+# fresh id and keep the requested name, so two resident machines answered to one
+# name — and a caller's bad retry became corrupted engine state that went
+# unnoticed until a count mismatch (RealityEngine_CI#357).
+#
+# It must never reject and never replace. The conflict is resolved by versioning
+# the REQUESTED name and allocating fresh regions, and the response has to report
+# what was ingested, because that is the caller's only way to find out.
+python3 - "http://localhost:${REALITY_ENGINE_E2E_PORT}" <<'INGEST_PY'
+import json, sys, urllib.request
+
+base = sys.argv[1]
+
+
+def get(path):
+    with urllib.request.urlopen(base + path, timeout=60) as r:
+        return json.load(r)
+
+
+def post(body):
+    req = urllib.request.Request(base + "/api/machines", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"},
+                                 method="POST")
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+
+def machines():
+    m = get("/api/machines")
+    return m.get("machines", m)
+
+
+def regions(m):
+    pm = m.get("perceptualMapping") or {}
+    out = []
+    for key in ("input", "output"):
+        region = pm.get(key)
+        if region:
+            out.append((int(region["offset"]), int(region["offset"]) + int(region["length"])))
+    return out
+
+
+def overlaps(a, b):
+    return a[0] < b[1] and b[0] < a[1]
+
+
+# A machine with a mapping and sequences, posted twice.
+probe = next((m for m in machines()
+              if (m.get("perceptualMapping") or {}).get("input")
+              and m.get("sequenceCount", len(m.get("sequenceIds") or []))), None)
+if probe is None:
+    raise SystemExit("no resident machine with a mapping to conflict against")
+
+detail = get(f"/api/machines/{probe['id']}")
+body = detail.get("machine", detail)
+requested_name = body["name"]
+declared = dict(body["perceptualMapping"])
+body = {k: v for k, v in body.items() if k != "id"}
+
+before_names = sorted(m["name"] for m in machines())
+
+first = post(dict(body))
+ingested = first["machine"]
+
+# 1. It ingested. Not 4xx, not a replacement.
+if ingested["name"] == requested_name:
+    raise SystemExit(f"name was not versioned: still {requested_name!r}")
+if ingested["name"] != f"{requested_name} v2":
+    raise SystemExit(f"expected {requested_name + ' v2'!r}, got {ingested['name']!r}")
+
+# 2. The resident machine is untouched — same id, same name, same regions.
+still = get(f"/api/machines/{probe['id']}")
+still = still.get("machine", still)
+if still["name"] != requested_name or still["perceptualMapping"] != declared:
+    raise SystemExit(f"the RESIDENT machine was modified: {still['name']!r} {still['perceptualMapping']}")
+
+# 3. The declared regions were NOT reused, and overlap nothing resident.
+if ingested["perceptualMapping"] == declared:
+    raise SystemExit("the conflicted machine kept the declared mapping; it must be reallocated")
+for region in regions(ingested):
+    for other in machines():
+        if other["id"] == ingested["id"]:
+            continue
+        for existing in regions(other):
+            if overlaps(region, existing):
+                raise SystemExit(
+                    f"allocated region {region} overlaps {other['name']!r} at {existing}")
+
+# 4. A second conflict takes v3, not v2 again.
+second = post(dict(body))["machine"]
+if second["name"] != f"{requested_name} v3":
+    raise SystemExit(f"expected {requested_name + ' v3'!r}, got {second['name']!r}")
+for region in regions(second):
+    for existing in regions(ingested):
+        if overlaps(region, existing):
+            raise SystemExit(f"v3 region {region} overlaps v2 at {existing}")
+
+# 5. Both are resident alongside the original — nothing was replaced.
+after = sorted(m["name"] for m in machines())
+for expected in (requested_name, f"{requested_name} v2", f"{requested_name} v3"):
+    if expected not in after:
+        raise SystemExit(f"{expected!r} is not resident after ingestion")
+if len(after) != len(before_names) + 2:
+    raise SystemExit(f"expected 2 new machines, went from {len(before_names)} to {len(after)}")
+
+print(f"  POST /api/machines: {requested_name!r} -> v2 {regions(ingested)}, v3 {regions(second)}; "
+      f"original untouched")
+INGEST_PY
+
 # ── The per-machine process routes actually process ──────────────────────────
 #
 # These answered 200 with `sequenceResults: {}` and `totalInputs: 0` for every
