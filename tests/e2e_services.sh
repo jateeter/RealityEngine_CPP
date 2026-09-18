@@ -395,6 +395,72 @@ wait_for_http "http://localhost:${OPENAI_STUB_E2E_PORT}/v1/models" "OpenAI stub"
 
 curl -sf "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/machines" | assert_machine_count_gt_zero
 
+# ── The per-machine process routes actually process ──────────────────────────
+#
+# These answered 200 with `sequenceResults: {}` and `totalInputs: 0` for every
+# machine, because they called process_input on the server registry's copy and
+# every registry copy carries transitionsInhibited (RealityEngine_CI#254 fixed
+# only the engine-wide route). Nothing caught it: the reply is well formed, and
+# "no sequence matched" is a legitimate answer — it is only wrong because it is
+# the answer to every input on every machine.
+#
+# So this drives a machine with its OWN declared first input and asserts it saw
+# something. Asserting the shape would have passed throughout.
+python3 - "http://localhost:${REALITY_ENGINE_E2E_PORT}" <<'PROCESS_PY'
+import json, sys, urllib.request
+
+base = sys.argv[1]
+
+
+def get(path):
+    with urllib.request.urlopen(base + path, timeout=60) as r:
+        return json.load(r)
+
+
+def post(path, body):
+    req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"},
+                                 method="POST")
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+
+machines = get("/api/machines")
+machines = machines.get("machines", machines)
+
+# A machine with sequences and a declared input width, so a zero vector of that
+# width is a well-formed event for it.
+probe = next((m for m in machines
+              if (m.get("perceptualMapping") or {}).get("input", {}).get("length")
+              and m.get("sequenceCount", len(m.get("sequenceIds") or []))), None)
+if probe is None:
+    raise SystemExit("no machine with sequences and an input mapping to probe")
+
+width = probe["perceptualMapping"]["input"]["length"]
+event = [0.0] * width
+
+for route in ("process", "whatif"):
+    body = post(f"/api/machines/{probe['id']}/{route}", {"inputEvent": event})
+    meta = body.get("arbiterMetadata") or {}
+    results = body.get("sequenceResults")
+    if results is None or meta.get("totalInputs") is None:
+        raise SystemExit(f"{route}: malformed reply for {probe['name']!r}: {body!r}")
+    if meta["totalInputs"] == 0 and not results:
+        raise SystemExit(
+            f"{route}: {probe['name']!r} evaluated no sequences — totalInputs=0, "
+            f"sequenceResults={{}}. This is what an inhibited registry copy "
+            f"returns for every input (RealityEngine_CI#254).")
+    print(f"  {route}: {probe['name']!r} evaluated {len(results)} sequence(s), "
+          f"totalInputs={meta['totalInputs']}")
+
+# What-if persists nothing: the machine as declared must be unchanged by it.
+before = get(f"/api/machines/{probe['id']}")
+post(f"/api/machines/{probe['id']}/whatif", {"inputEvent": event})
+if get(f"/api/machines/{probe['id']}") != before:
+    raise SystemExit("whatif mutated the machine it was asked about")
+print("  whatif: persisted nothing")
+PROCESS_PY
+
 curl -sf "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/demo/multi-step" >/dev/null
 curl -sf "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/demo/data-center" >/dev/null
 curl -sf "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/demo/kleene-star" >/dev/null

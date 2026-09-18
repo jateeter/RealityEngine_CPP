@@ -1213,6 +1213,49 @@ int main() {
   }
 
   {
+    // ── The per-machine process routes drive the RUNNING machine ────────────
+    //
+    // RealityEngine_CI#254 established that the machines which RUN are the
+    // runtime's, and fixed POST /api/engine/process. The five per-machine
+    // routes were left calling process_input on the server registry, whose
+    // copies carry transitionsInhibited, so each returned the shape of a
+    // machine that matched nothing: 200, `sequenceResults: {}`,
+    // `totalInputs: 0`. That is not a shape a caller can tell from a universe
+    // in which nothing fired, which is why it survived — measured live, every
+    // C++ machine answered that way at every offset while LSP and Scala
+    // returned three sequence results for the same call.
+    //
+    // These check the runtime entry points the routes now use. The route
+    // wiring itself is checked in tests/e2e_services.sh, against a server.
+    PerceptualSpaceRuntime sim(32);
+    sim.add_machine(make_rs_like_machine());
+    const std::string id = "machine-test";
+    const Vector fires{1.0, 0.0};
+
+    // A machine the runtime does not hold is nullopt, never an empty
+    // transition — the route needs to answer 404, and an empty transition is
+    // exactly the shape this whole defect wore.
+    assert(!sim.process_machine("machine-absent", fires).has_value());
+    assert(!sim.whatif_machine("machine-absent", fires).has_value());
+
+    // The running machine transitions. `totalInputs` is the field that read 0
+    // on every call for as long as anyone had looked.
+    auto ran = sim.process_machine(id, fires);
+    assert(ran.has_value());
+    assert(ran->arbiterMetadata.totalInputs == 1);
+    assert(ran->sequenceResults.size() == 1);
+
+    // What-if evaluates and persists nothing. Both halves matter: a copy of an
+    // inhibited machine is still inhibited, so the copy answered "nothing"
+    // while looking like a well-formed reply.
+    const std::string before = json::stringify(sim.running_machine(id)->to_json(true));
+    auto asked = sim.whatif_machine(id, fires);
+    assert(asked.has_value());
+    assert(asked->sequenceResults.size() == 1);
+    assert(json::stringify(sim.running_machine(id)->to_json(true)) == before);
+  }
+
+  {
     // The fold's move into the machine's atomic step.
     verify_single_contributor_is_byte_identical();
     verify_governance_join();
