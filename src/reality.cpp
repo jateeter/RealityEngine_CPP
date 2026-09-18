@@ -2134,14 +2134,14 @@ Vector PerceptionEngine::source_values(const SourceConfig& s) const {
   }
   return out;
 }
-Json PerceptionEngine::state_json(std::optional<long long> lastPush, bool autoRunning, long autoIntervalMs) const {
+Json PerceptionEngine::state_json(const Json& lastPush, bool autoRunning, long autoIntervalMs) const {
   // Via get_sources() so /api/pe/state and /api/pe/sources agree on order.
   // One clock reading for the pass (RealityEngine_CI#175): two sensors with the
   // same lastUpdated and ttlMs must report the same activity in one payload.
   Json::Array srcs;
   const long long now = now_ms();
   for (const auto& s : get_sources()) srcs.push_back(to_json(s, now));
-  return Json::Object{{"sources", srcs}, {"assembledVector", json::numbers(assemble_vector())}, {"globalStep", static_cast<double>(globalStep)}, {"auto", Json::Object{{"running", autoRunning}, {"intervalMs", static_cast<double>(autoIntervalMs)}}}, {"lastPush", lastPush ? Json(static_cast<double>(*lastPush)) : Json(nullptr)}, {"matchAlgorithm", to_string(matchAlgorithm)}, {"perceptionDimension", static_cast<double>(dimension)}};
+  return Json::Object{{"sources", srcs}, {"assembledVector", json::numbers(assemble_vector())}, {"globalStep", static_cast<double>(globalStep)}, {"auto", Json::Object{{"running", autoRunning}, {"intervalMs", static_cast<double>(autoIntervalMs)}}}, {"lastPush", lastPush}, {"matchAlgorithm", to_string(matchAlgorithm)}, {"perceptionDimension", static_cast<double>(dimension)}};
 }
 
 static RegionMapping parse_region(const Json& j) {
