@@ -1460,9 +1460,23 @@ private:
     }
     if (!resident) return false;
 
-    const std::string requested = m.name;
+    // The requested name's BASE — its trailing " v<n>" removed, if it has one.
+    //
+    // Appending to the requested name verbatim would give "Foo v2 v2" and then
+    // "Foo v2 v2 v2", so a caller re-posting what it received would drift
+    // further from the base on every attempt. Recovering the base keeps one
+    // version sequence per machine name however the caller addresses it.
+    std::string baseName = m.name;
+    {
+      const auto marker = baseName.rfind(" v");
+      if (marker != std::string::npos && marker + 2 < baseName.size()) {
+        const std::string digits = baseName.substr(marker + 2);
+        if (digits.find_first_not_of("0123456789") == std::string::npos)
+          baseName = baseName.substr(0, marker);
+      }
+    }
     for (int n = 2; ; ++n) {
-      const std::string candidate = requested + " v" + std::to_string(n);
+      const std::string candidate = baseName + " v" + std::to_string(n);
       bool taken = false;
       for (const auto& [_, existing] : machines) {
         if (existing.name == candidate) { taken = true; break; }

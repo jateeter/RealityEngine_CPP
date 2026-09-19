@@ -550,13 +550,35 @@ for expected in (requested_name, f"{requested_name} v2", f"{requested_name} v3")
 if len(after) != len(before_names) + 2:
     raise SystemExit(f"expected 2 new machines, went from {len(before_names)} to {len(after)}")
 
-# 6. Residency is runtime state: DELETE frees the name.
+# 6. The version sequence continues; suffixes do not nest.
+#
+# A caller re-posting what it received must not drift. Appending to the
+# requested name verbatim gives "Foo v2 v2", then "Foo v2 v2 v2"; the base is
+# recovered so one sequence serves the machine however the caller addresses it.
+echoed = dict(body)
+echoed["name"] = f"{requested_name} v2"
+again = post(echoed)["machine"]
+if " v2 v" in again["name"] or again["name"].count(" v") > 1:
+    raise SystemExit(f"version suffixes nested: {again['name']!r}")
+if again["name"] != f"{requested_name} v4":
+    raise SystemExit(f"expected {requested_name + ' v4'!r}, got {again['name']!r}")
+
+# A versioned name that is NOT resident is taken as requested — the base is
+# consulted only to number a conflict, never to rewrite a name that has none.
+spare = dict(body)
+spare["name"] = f"{requested_name} v9"
+taken = post(spare)["machine"]
+if taken["name"] != f"{requested_name} v9":
+    raise SystemExit(f"a non-resident versioned name was rewritten to {taken['name']!r}")
+
+# 7. Residency is runtime state: DELETE frees the name.
 #
 # Versioning answers a collision at the moment of ingestion; it is not a
 # permanent mark on a name. Remove every machine holding it and the next POST is
 # not a conflict — no suffix, and the DECLARED mapping is honoured rather than a
 # fresh allocation.
-for victim in (requested_name, f"{requested_name} v2", f"{requested_name} v3"):
+for victim in (requested_name, f"{requested_name} v2", f"{requested_name} v3",
+               f"{requested_name} v4", f"{requested_name} v9"):
     mid = next((m["id"] for m in machines() if m["name"] == victim), None)
     if mid:
         req = urllib.request.Request(base + f"/api/machines/{mid}", method="DELETE")
