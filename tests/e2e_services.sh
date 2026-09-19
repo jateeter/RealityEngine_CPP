@@ -443,6 +443,101 @@ print(f"  /api/config: eventDimension={reported} covers the furthest resident "
       f"region {required} ({furthest})")
 DIM_PY
 
+# ── The export is a corpus document and must satisfy the corpus schema ────────
+#
+# GET /api/machines/:id/export returns `{version: "1.0.0", machine: {...}}`,
+# which is exactly RealityEngine_Machines/schemas/machine.schema.json. The
+# payload claims to be a corpus file, so it has to validate as one — and it did
+# not, in two ways, both from exporting this engine's INTERNAL form rather than
+# the document (RealityEngine_CI#436):
+#
+#   arbiterRule='passthrough'   against   enum: ["PASSTHROUGH"]
+#   inputSequences inside metadata, where the schema declares it at machine level
+#
+# Checked against the real schema rather than a restatement of it: a copy here
+# would drift from the corpus and start asserting the wrong shape.
+python3 - "http://localhost:${REALITY_ENGINE_E2E_PORT}" "${MACHINES_DIR}/../schemas/machine.schema.json" <<'SCHEMA_PY'
+import json, sys, urllib.request
+from pathlib import Path
+
+base, schema_path = sys.argv[1], Path(sys.argv[2])
+if not schema_path.exists():
+    print(f"  skipped: no corpus schema at {schema_path}")
+    raise SystemExit(0)
+
+schema = json.loads(schema_path.read_text())
+machine_def = schema["$defs"]["machine"]
+enum      = machine_def["properties"]["arbiterRule"].get("enum") or []
+required  = machine_def.get("required") or []
+declared_at_machine_level = "inputSequences" in machine_def["properties"]
+
+
+def get(path):
+    with urllib.request.urlopen(base + path, timeout=60) as r:
+        return json.load(r)
+
+
+machines = get("/api/machines")
+machines = machines.get("machines", machines)
+probe = next((m for m in machines
+              if m.get("sequenceCount", len(m.get("sequenceIds") or []))), None)
+if probe is None:
+    raise SystemExit("no machine with sequences to export")
+
+payload = get(f"/api/machines/{probe['id']}/export")
+if payload.get("version") is None or "machine" not in payload:
+    raise SystemExit(f"export is not a {{version, machine}} envelope: {sorted(payload)}")
+
+m = payload["machine"]
+errors = []
+
+if enum and m.get("arbiterRule") not in enum:
+    errors.append(f"arbiterRule={m.get('arbiterRule')!r} is not in the schema enum {enum}")
+
+for field in required:
+    if field not in m:
+        errors.append(f"missing schema-required field {field!r}")
+
+if declared_at_machine_level:
+    meta = m.get("metadata") or {}
+    if "inputSequences" in meta and "inputSequences" not in m:
+        errors.append("inputSequences is carried in metadata; the schema declares "
+                      "it at machine level")
+
+if errors:
+    raise SystemExit("export does not satisfy machine.schema.json:\n  " +
+                     "\n  ".join(errors))
+
+# And it must survive re-ingestion AS a corpus document — not merely survive as
+# an opaque metadata blob, which is how the old placement round-tripped.
+before = len(m.get("inputSequences") or [])
+req = urllib.request.Request(base + "/api/machines", data=json.dumps(payload).encode(),
+                             headers={"Content-Type": "application/json"}, method="POST")
+with urllib.request.urlopen(req, timeout=60) as r:
+    reingested = json.load(r)["machine"]
+again = get(f"/api/machines/{reingested['id']}/export")["machine"]
+after = len(again.get("inputSequences") or [])
+if before != after or (before == 0 and (m.get("metadata") or {}).get("inputSequences")):
+    raise SystemExit(f"inputSequences did not survive re-ingestion at machine level: "
+                     f"{before} -> {after}")
+
+# Exporting must not CONSUME anything. Converting the internal form to the
+# corpus document moves inputSequences out of metadata, and doing that in place
+# mutates the stored machine: the first export carries them and every export
+# after it returns none. That is what happened in the LSP implementation of this
+# same change — export #1 carried 3, #2 and #3 carried 0 — and the round-trip
+# check above does not catch it, because it re-exports the NEW machine, which
+# has its own metadata. Only exporting the SAME machine twice shows it.
+second = get(f"/api/machines/{probe['id']}/export")["machine"]
+again = len(second.get("inputSequences") or [])
+if again != before:
+    raise SystemExit(f"exporting consumed state: the same machine gave {before} "
+                     f"inputSequences then {again}")
+
+print(f"  export: valid corpus document (arbiterRule={m['arbiterRule']!r}, "
+      f"{before} inputSequences at machine level, round-trips, repeatable)")
+SCHEMA_PY
+
 # ── POST /api/machines always ingests; a conflict is versioned and reallocated ─
 #
 # SURFACE_SPEC, "POST /api/machines always ingests". The route used to mint a
