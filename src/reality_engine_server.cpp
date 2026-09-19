@@ -630,8 +630,17 @@ public:
       }
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      // Always ingests. A resident name is versioned and reallocated rather
+      // than rejected or replaced — this used to mint a fresh id and keep the
+      // requested name, so two resident machines answered to one name and a
+      // caller's bad retry became corrupted engine state (#357).
+      const bool versioned = version_on_conflict(m);
       add_machine(m);
-      return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
+      // The machine AS INGESTED, not as requested: versioned name, minted id,
+      // allocated regions. A caller has no other way to learn what it received.
+      return ok(Json::Object{{"success", true},
+                             {"versioned", versioned},
+                             {"machine", m.to_json(true)}});
     });
     server.route("PUT", "/api/machines/:id", [this](const http::Request& req) {
       Machine m;
@@ -1425,6 +1434,67 @@ private:
       }
       operation.object()["valuesPacked"] = packed;
     }
+  }
+
+  // Resolve a name conflict by versioning the REQUESTED name and reallocating
+  // its regions (SURFACE_SPEC, "POST /api/machines always ingests"; #357).
+  //
+  // The resident machine is never touched. The ingested one takes the lowest
+  // unused ` v<n>`, n >= 2, and a fresh input and output region appended at the
+  // end of the current perceptual space — input first, then output,
+  // contiguously.
+  //
+  // The allocation is fixed rather than free because regions are NOT
+  // engine-scoped the way ids are: mergeBatch carries region.offset,
+  // activeRegions is ordered on it, and the merge batch is ordered by
+  // (machineName, region.offset). An allocator choosing differently per runtime
+  // would place every conflicted machine's output somewhere different on each
+  // engine, and every comparison over those fields would report an allocation
+  // difference as an engine divergence.
+  //
+  // Caller holds registryMutex and spaceRuntimeMutex.
+  bool version_on_conflict(Machine& m) {
+    bool resident = false;
+    for (const auto& [_, existing] : machines) {
+      if (existing.name == m.name) { resident = true; break; }
+    }
+    if (!resident) return false;
+
+    // The requested name's BASE — its trailing " v<n>" removed, if it has one.
+    //
+    // Appending to the requested name verbatim would give "Foo v2 v2" and then
+    // "Foo v2 v2 v2", so a caller re-posting what it received would drift
+    // further from the base on every attempt. Recovering the base keeps one
+    // version sequence per machine name however the caller addresses it.
+    std::string baseName = m.name;
+    {
+      const auto marker = baseName.rfind(" v");
+      if (marker != std::string::npos && marker + 2 < baseName.size()) {
+        const std::string digits = baseName.substr(marker + 2);
+        if (digits.find_first_not_of("0123456789") == std::string::npos)
+          baseName = baseName.substr(0, marker);
+      }
+    }
+    for (int n = 2; ; ++n) {
+      const std::string candidate = baseName + " v" + std::to_string(n);
+      bool taken = false;
+      for (const auto& [_, existing] : machines) {
+        if (existing.name == candidate) { taken = true; break; }
+      }
+      if (!taken) { m.name = candidate; break; }
+    }
+
+    // The declared mapping is DISCARDED. A machine with no mapping cannot be
+    // given one here — it never enters the perceptual space at all — so it is
+    // ingested under its versioned name and nothing is allocated.
+    if (!m.perceptualMapping) return true;
+
+    const int base = spaceRuntime.dimension();
+    const int inLen  = m.perceptualMapping->input.length;
+    const int outLen = m.perceptualMapping->output.length;
+    m.perceptualMapping->input  = RegionMapping{base, inLen};
+    m.perceptualMapping->output = RegionMapping{base + inLen, outLen};
+    return true;
   }
 
   void add_machine(const Machine& m) {
