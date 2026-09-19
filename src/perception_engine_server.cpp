@@ -2748,6 +2748,90 @@ private:
     }), allOk ? 200 : 207);
   }
 
+  // Narrow a step to the caller's requested subset, in place
+  // (RealityEngine_CI#367).
+  //
+  // The Reality Engine applies the same selector to the step it builds, and
+  // this must produce the identical payload: the acceptance criterion is
+  // tri-runtime byte equivalence, and a caller cannot be expected to know
+  // whether it reached the engine directly or through here. The predicates
+  // below are `to_json(SimulationStep, ..., StepSelector)` in reality.cpp,
+  // transcribed against parsed JSON rather than the typed step.
+  //
+  // Both sets are read from the UNFILTERED step — `selectedIds` from the full
+  // machineResults, `keepResult`'s sequence test from the full mergeBatch —
+  // so the order the fields are rewritten in cannot change the answer.
+  static void apply_step_selector(Json& step, const Json& only) {
+    if (!only.is_object() || !step.is_object()) return;
+    const auto sequenceIds = json::to_strings(only.at("sequenceIds"));
+    const auto machineNames = json::to_strings(only.at("machineNames"));
+    // No early return for an `only` that names nothing. The selector is active
+    // because it is *present*, and naming nothing then selects nothing — which
+    // is what the Reality Engine does, and what keeps a selector built from an
+    // empty list from silently widening to the universe. That is the same
+    // unfalsifiability argument as the unknown-sequence-id case.
+    const std::set<std::string> wantSeq(sequenceIds.begin(), sequenceIds.end());
+    const std::set<std::string> wantName(machineNames.begin(), machineNames.end());
+
+    const Json& results = step.at("machineResults");
+    std::set<std::string> selectedIds;
+    if (results.is_object()) {
+      for (const auto& [id, mr] : results.object()) {
+        if (wantName.count(mr.at("machineName").as_string()) > 0) selectedIds.insert(id);
+      }
+    }
+    // Machines carrying a requested sequence id on an operation they actually
+    // produced this step. Declared membership is not enough: a machine whose
+    // sequence did not fire has no operation, and the engine keeps it out.
+    std::set<std::string> sequenceIds_machines;
+    const Json& batch = step.at("mergeBatch");
+    if (batch.is_array()) {
+      for (const auto& op : batch.array()) {
+        for (const auto& sid : json::to_strings(op.at("sequenceIds"))) {
+          if (wantSeq.count(sid) > 0) { sequenceIds_machines.insert(op.at("machineId").as_string()); break; }
+        }
+      }
+    }
+    const auto keepId = [&](const std::string& id) {
+      return selectedIds.count(id) > 0 || sequenceIds_machines.count(id) > 0;
+    };
+
+    if (results.is_object()) {
+      Json::Object kept;
+      for (const auto& [id, mr] : results.object()) if (keepId(id)) kept[id] = mr;
+      step.object()["machineResults"] = Json(std::move(kept));
+    }
+    if (batch.is_array()) {
+      Json::Array kept;
+      for (const auto& op : batch.array()) {
+        bool want = selectedIds.count(op.at("machineId").as_string()) > 0;
+        if (!want) {
+          for (const auto& sid : json::to_strings(op.at("sequenceIds"))) {
+            if (wantSeq.count(sid) > 0) { want = true; break; }
+          }
+        }
+        if (want) kept.push_back(op);
+      }
+      step.object()["mergeBatch"] = Json(std::move(kept));
+    }
+    if (step.at("eventBus").is_array()) {
+      Json::Array kept;
+      for (const auto& w : step.at("eventBus").array()) {
+        if (wantSeq.count(w.at("producerSequenceId").as_string()) > 0 ||
+            selectedIds.count(w.at("producerMachineId").as_string()) > 0 ||
+            selectedIds.count(w.at("subscriberMachineId").as_string()) > 0) kept.push_back(w);
+      }
+      step.object()["eventBus"] = Json(std::move(kept));
+    }
+    if (step.at("activeRegions").is_array()) {
+      Json::Array kept;
+      for (const auto& r : step.at("activeRegions").array()) {
+        if (selectedIds.count(r.at("machineId").as_string()) > 0) kept.push_back(r);
+      }
+      step.object()["activeRegions"] = Json(std::move(kept));
+    }
+  }
+
   http::Response do_push(bool includeMachineResults = true, bool async = false,
                          const Json& only = Json()) {
     // Catalog only. A push used to run the full corpus sync here, so every
@@ -2869,18 +2953,33 @@ private:
       {"includeMachineResults", true},
       {"includePerceptualSpace", true},
     };
-    // The caller's subset selector is forwarded (RealityEngine_CI#367), but it
-    // narrows only the *observation* fields — mergeBatch, eventBus,
-    // activeRegions. machineResults and perceptualSpace stay unconditional
-    // above, for the reason the comment there gives: this engine merges
-    // machineResults into the next input vector, so trimming them would change
-    // what the engine computes rather than what it reports.
+    // The caller's subset selector is deliberately NOT forwarded. It is applied
+    // to the reply below instead, next to the includeMachineResults trim and
+    // for the same reason (RealityEngine_CI#367).
     //
-    // That leaves machineResults as the residual cost on this hop, and it is
-    // the larger term at corpus scale. #367 narrows what a caller is *sent*;
-    // fully removing the RE->PE transfer needs the aggregation to move into the
-    // RE, which is a separate change.
-    if (only.is_object()) payload.object()["only"] = only;
+    // Forwarding it was wrong, and wrong in exactly the way the comment above
+    // describes: the claim was that `only` narrows the observation fields while
+    // machineResults "stays unconditional above". It does not.
+    // `includeMachineResults` controls whether the RE emits the field;
+    // `only` controls which entries go in it, and the RE's `keepResult`
+    // filters it like everything else. So a forwarded selector handed this
+    // engine a machineResults with one entry, and
+    // `aggregate_machine_outputs` merged that one instead of the corpus's.
+    //
+    // Measured on the live universe, one push, 1338 machines resident:
+    //
+    //     no selector   machineResults=1338   feeding the aggregator: 408
+    //     only=<name>   machineResults=1      feeding the aggregator:   0
+    //
+    // The next InputSpaceVector therefore depended on what the caller asked to
+    // be *shown* — the same defect the `compact` flag caused before it, in the
+    // same function, for the same reason. `dispatch_triggers_from_step` read
+    // the filtered step too, so trigger dispatch moved with it.
+    //
+    // The RE->PE hop consequently stays proportional to the resident corpus.
+    // That is the decided shape, not a gap: #367 narrows what a *caller* is
+    // sent, and moving the aggregation into the RE to shrink this hop is
+    // explicitly rejected on that issue.
     try {
       std::string raw = http::post_json(realityEngineUrl + "/api/perceive", json::stringify(payload));
       Json parsed = json::parse(raw);
@@ -2924,6 +3023,11 @@ private:
       // Trim the reply to what the caller asked for. Done after the state
       // update and the dispatch pass, so asking for less never changes what the
       // engine did — only what it reports.
+      // Applied before the machineResults erase, because the selector is
+      // defined in terms of that field: `selectedIds` resolves the caller's
+      // machine *names* to this runtime's minted ids, and there is nowhere else
+      // in the step those two are carried together.
+      apply_step_selector(parsed, only);
       if (!includeMachineResults && parsed.is_object()) parsed.object().erase("machineResults");
       Json result = Json::Object{{"success", true}, {"step", parsed}, {"timestamp", static_cast<double>(ts)}, {"globalStep", static_cast<double>(step)}, {"error", nullptr}};
       if (dispatch.is_object()) result.object()["dispatch"] = dispatch;
