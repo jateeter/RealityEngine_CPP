@@ -897,11 +897,31 @@ public:
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
     });
+    // The export is a CORPUS DOCUMENT, and must satisfy the corpus schema.
+    //
+    // It declares `version: "1.0.0"` in the `{version, machine}` envelope, which
+    // is exactly `RealityEngine_Machines/schemas/machine.schema.json` — so the
+    // payload claims to be a corpus file and ought to validate as one. It did
+    // not, in two ways (RealityEngine_CI#436):
+    //
+    //   arbiterRule='passthrough'  against  enum: ["PASSTHROUGH"]
+    //   inputSequences inside metadata, where the schema declares it at machine
+    //   level
+    //
+    // Both come from exporting this engine's INTERNAL form: the arbiter rule is
+    // normalised to lower case at parse, and inputSequences is stashed in
+    // metadata at load. Scala converts back to the corpus form on export and its
+    // payload validates; this one and LSP's do not.
+    //
+    // Scoped to the export rather than to Machine::to_json, which also serves
+    // GET /api/machines. That listing is a runtime view, makes no claim to be a
+    // corpus document, and consumers read its lower-case `arbiterRule` today.
     server.route("GET", "/api/machines/:id/export", [this](const http::Request& req) {
       std::shared_lock<std::shared_mutex> lock(registryMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
-      return ok(Json::Object{{"version", "1.0.0"}, {"machine", it->second.to_json(true)}});
+      return ok(Json::Object{{"version", "1.0.0"},
+                             {"machine", corpus_document(it->second)}});
     });
     server.route("GET", "/api/machines/:id/checkpoints", [this](const http::Request& req) {
       Json::Array arr;
@@ -1495,6 +1515,40 @@ private:
     m.perceptualMapping->input  = RegionMapping{base, inLen};
     m.perceptualMapping->output = RegionMapping{base + inLen, outLen};
     return true;
+  }
+
+  // A machine as a corpus document: this engine's internal form converted back
+  // to the shape machine.schema.json declares (RealityEngine_CI#436).
+  //
+  // Two conversions, both undoing a normalisation applied at load:
+  //   - `arbiterRule` upper-cased, because the schema's enum is ["PASSTHROUGH"]
+  //     and `arbiter_from_string` lower-cases on the way in;
+  //   - `inputSequences` lifted out of `metadata` to machine level, where the
+  //     schema declares it. It is stored in metadata internally by all three
+  //     runtimes; exporting it there exports the storage rather than the
+  //     document.
+  //
+  // Everything else is carried through unchanged, including the runtime state
+  // the schema does not declare — `isActive`, `state`, `wasJustMatched` — which
+  // `additionalProperties: true` permits and the Manager's live layer reads.
+  Json corpus_document(const Machine& m) const {
+    Json doc = m.to_json(true);
+    auto& obj = doc.object();
+
+    std::string rule = to_string(m.arbiter_rule());
+    for (auto& c : rule) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    obj["arbiterRule"] = rule;
+
+    auto metaIt = obj.find("metadata");
+    if (metaIt != obj.end() && metaIt->second.is_object()) {
+      auto& meta = metaIt->second.object();
+      auto seqIt = meta.find("inputSequences");
+      if (seqIt != meta.end()) {
+        obj["inputSequences"] = seqIt->second;
+        meta.erase(seqIt);
+      }
+    }
+    return doc;
   }
 
   void add_machine(const Machine& m) {
