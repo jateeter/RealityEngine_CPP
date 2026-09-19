@@ -521,8 +521,21 @@ if before != after or (before == 0 and (m.get("metadata") or {}).get("inputSeque
     raise SystemExit(f"inputSequences did not survive re-ingestion at machine level: "
                      f"{before} -> {after}")
 
+# Exporting must not CONSUME anything. Converting the internal form to the
+# corpus document moves inputSequences out of metadata, and doing that in place
+# mutates the stored machine: the first export carries them and every export
+# after it returns none. That is what happened in the LSP implementation of this
+# same change — export #1 carried 3, #2 and #3 carried 0 — and the round-trip
+# check above does not catch it, because it re-exports the NEW machine, which
+# has its own metadata. Only exporting the SAME machine twice shows it.
+second = get(f"/api/machines/{probe['id']}/export")["machine"]
+again = len(second.get("inputSequences") or [])
+if again != before:
+    raise SystemExit(f"exporting consumed state: the same machine gave {before} "
+                     f"inputSequences then {again}")
+
 print(f"  export: valid corpus document (arbiterRule={m['arbiterRule']!r}, "
-      f"{before} inputSequences at machine level, round-trips)")
+      f"{before} inputSequences at machine level, round-trips, repeatable)")
 SCHEMA_PY
 
 # ── POST /api/machines always ingests; a conflict is versioned and reallocated ─
