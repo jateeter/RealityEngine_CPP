@@ -581,6 +581,12 @@ public:
     server.route("POST", "/api/integrations/healthkit/ingest", [this](const http::Request& req) {
       return ingest_healthkit(parse_body(req), bearer_token(req));
     });
+    server.route("POST", "/api/integrations/healthkit/scope", [this](const http::Request& req) {
+      return healthkit_scope(parse_body(req), bearer_token(req));
+    });
+    server.route("POST", "/api/integrations/healthkit/resync", [this](const http::Request& req) {
+      return healthkit_resync(parse_body(req), bearer_token(req));
+    });
     server.route("GET", "/api/integrations/carekit/status", [this](const http::Request&) {
       return ok(carekit_status());
     });
@@ -1493,8 +1499,151 @@ private:
         {"singleSample", Json::Array{"type", "value", "sourceName"}},
         {"batchSamples", Json::Array{"bridgeId", "samples[]"}},
         {"auth", healthKitBridgeToken.empty() ? "none" : "bridgeToken|bearer"}
-      }}
+      }},
+      {"scope", healthkit_scope_json(healthKitBridgeId)}
     };
+  }
+
+  // ── HealthKit scope and resync (localHealthkitBridge INGEST_CONTRACT.md,
+  // "Scope and resync") ──────────────────────────────────────────────────
+  // The data scope -- which HealthKit types flow -- changes through an
+  // authorization workflow tied to the owner's Solid pod. The PE is the scope
+  // authority. A bridge is open until its first scope message; from then on
+  // only active types are ingested. Resync runs the other way: a consumer asks,
+  // through the PE, for the producer to re-send.
+  struct HkBridgeScope {
+    bool declared = false;
+    long long generation = 0;
+    std::map<std::string, Json> types;                         // type -> {state, source, updatedAt}
+    std::map<std::string, std::set<std::string>> sensorsByType; // type -> sensorIds it wrote
+    std::deque<Json> resyncRequests;
+  };
+  mutable std::mutex hkScopeMutex;
+  std::map<std::string, HkBridgeScope> hkScopes;
+
+  bool healthkit_authorized(const Json& body, const std::string& bearerToken) const {
+    const std::string t = body.at("bridgeToken").as_string(body.at("token").as_string());
+    return healthKitBridgeToken.empty() || t == healthKitBridgeToken || bearerToken == healthKitBridgeToken;
+  }
+
+  Json healthkit_scope_json(const std::string& bridgeId) const {
+    std::lock_guard<std::mutex> lock(hkScopeMutex);
+    Json::Object types;
+    Json::Array requests;
+    bool declared = false;
+    long long generation = 0;
+    auto it = hkScopes.find(bridgeId);
+    if (it != hkScopes.end()) {
+      declared = it->second.declared;
+      generation = it->second.generation;
+      for (const auto& [t, st] : it->second.types) types[t] = st;
+      for (const auto& r : it->second.resyncRequests) requests.push_back(r);
+    }
+    return Json::Object{{"declared", declared}, {"generation", static_cast<double>(generation)},
+                        {"types", Json(types)}, {"resyncRequests", Json(requests)}};
+  }
+
+  // "" when the type may be ingested, otherwise the refusal reason.
+  std::string healthkit_scope_refusal(const std::string& bridgeId, const std::string& type) const {
+    std::lock_guard<std::mutex> lock(hkScopeMutex);
+    auto it = hkScopes.find(bridgeId);
+    if (it == hkScopes.end() || !it->second.declared) return "";
+    auto t = it->second.types.find(type);
+    if (t == it->second.types.end()) return "not-in-scope";
+    const std::string state = t->second.at("state").as_string();
+    if (state == "active") return "";
+    return state == "locked" ? "locked" : "not-in-scope";
+  }
+
+  http::Response healthkit_scope(const Json& body, const std::string& bearerToken) {
+    if (!body.is_object()) return http::error_response("HealthKit scope body must be a JSON object", 400);
+    if (!healthkit_authorized(body, bearerToken)) return http::error_response("HealthKit bridge token rejected", 401);
+    const std::string bridgeId = body.at("bridgeId").as_string(healthKitBridgeId);
+    const std::string action = body.at("action").as_string();
+    static const std::map<std::string, std::string> kState{{"add", "active"}, {"lock", "locked"}, {"remove", "removed"}};
+    auto target = kState.find(action);
+    if (target == kState.end()) return http::error_response("scope action must be add, lock or remove", 400);
+    std::vector<std::string> types = json::to_strings(body.at("types"));
+    if (types.empty()) return http::error_response("scope requires a non-empty types array", 400);
+    const std::string source = body.at("source").as_string();
+    const long long now = now_ms();
+
+    Json::Array applied;
+    std::vector<std::string> sensorsToRemove;
+    long long generation = 0;
+    {
+      std::lock_guard<std::mutex> lock(hkScopeMutex);
+      HkBridgeScope& scope = hkScopes[bridgeId];
+      scope.declared = true;
+      for (const auto& type : types) {
+        auto prev = scope.types.find(type);
+        Json previous = prev == scope.types.end() ? Json(nullptr) : prev->second.at("state");
+        scope.types[type] = Json::Object{{"state", target->second},
+                                         {"source", source.empty() ? Json(nullptr) : Json(source)},
+                                         {"updatedAt", static_cast<double>(now)}};
+        if (action == "remove") {
+          for (const auto& sid : scope.sensorsByType[type]) sensorsToRemove.push_back(sid);
+          scope.sensorsByType.erase(type);
+        }
+        applied.push_back(Json::Object{{"type", type}, {"state", target->second}, {"previous", previous}});
+      }
+      generation = ++scope.generation;
+    }
+    // Removed means absent, not zero: the type's sources leave the PE.
+    for (const auto& sid : sensorsToRemove) {
+      if (auto src = sensor_source_by_id(sid)) engine.remove_source(src->id);
+    }
+    Json::Array typeArr;
+    for (const auto& t : types) typeArr.push_back(t);
+    hub_broadcast(json::stringify(Json::Object{
+      {"type", "healthkit.scope.changed"}, {"bridgeId", bridgeId}, {"action", action},
+      {"types", Json(typeArr)}, {"generation", static_cast<double>(generation)}}));
+    return ok(Json::Object{{"success", true}, {"bridgeId", bridgeId}, {"action", action},
+                           {"generation", static_cast<double>(generation)}, {"applied", Json(applied)}});
+  }
+
+  http::Response healthkit_resync(const Json& body, const std::string& bearerToken) {
+    if (!body.is_object()) return http::error_response("HealthKit resync body must be a JSON object", 400);
+    if (!healthkit_authorized(body, bearerToken)) return http::error_response("HealthKit bridge token rejected", 401);
+    const std::string bridgeId = body.at("bridgeId").as_string(healthKitBridgeId);
+    const std::string requestedBy = body.at("requestedBy").as_string();
+    if (requestedBy.empty()) return http::error_response("resync requires requestedBy", 400);
+    std::vector<std::string> requested = json::to_strings(body.at("types"));
+
+    std::lock_guard<std::mutex> lock(hkScopeMutex);
+    HkBridgeScope& scope = hkScopes[bridgeId];
+    if (requested.empty()) {
+      // Every type in scope; under open scope, every type seen from this bridge.
+      if (scope.declared) {
+        for (const auto& [t, st] : scope.types) if (st.at("state").as_string() == "active") requested.push_back(t);
+      } else {
+        for (const auto& [t, sensors] : scope.sensorsByType) requested.push_back(t);
+      }
+    }
+    Json::Array accepted, refused;
+    for (const auto& type : requested) {
+      std::string reason;
+      if (scope.declared) {
+        auto t = scope.types.find(type);
+        if (t == scope.types.end()) reason = "not-in-scope";
+        else if (t->second.at("state").as_string() == "locked") reason = "locked";
+        else if (t->second.at("state").as_string() != "active") reason = "not-in-scope";
+      }
+      if (reason.empty()) accepted.push_back(type);
+      else refused.push_back(Json::Object{{"type", type}, {"reason", reason}});
+    }
+    Json request = Json::Object{
+      {"id", make_id("hk-resync")}, {"bridgeId", bridgeId}, {"types", Json(accepted)},
+      {"requestedBy", requestedBy}, {"requestedAt", static_cast<double>(now_ms())},
+      {"state", "pending"}, {"fulfilledAt", Json(nullptr)}};
+    if (accepted.empty()) {
+      return http::json_response(json::stringify(Json::Object{
+        {"success", false}, {"request", Json(nullptr)}, {"refused", Json(refused)}}), 409);
+    }
+    scope.resyncRequests.push_back(request);
+    while (scope.resyncRequests.size() > 32) scope.resyncRequests.pop_front();
+    return http::json_response(json::stringify(Json::Object{
+      {"success", true}, {"request", request}, {"refused", Json(refused)}}), 202);
   }
 
   Json carekit_status() const {
@@ -2719,20 +2868,45 @@ private:
         && hkToken != healthKitBridgeToken && bearerToken != healthKitBridgeToken)
       return http::error_response("HealthKit bridge token rejected", 401);
 
+    const std::string bridgeId = body.at("bridgeId").as_string(healthKitBridgeId);
     Json::Array resolved, unmapped;
+    auto one = [&](const Json& sample) {
+      const std::string type = sample.at("type").as_string(sample.at("sampleType").as_string());
+      const std::string refusal = healthkit_scope_refusal(bridgeId, type);
+      if (!refusal.empty()) {
+        unmapped.push_back(Json::Object{{"unmapped", true}, {"type", type},
+                                        {"sourceName", sample.at("sourceName").as_string()},
+                                        {"reason", refusal}});
+        return;
+      }
+      Json r = ingest_healthkit_one(sample);
+      if (r.at("resolved").as_bool(false)) {
+        std::lock_guard<std::mutex> lock(hkScopeMutex);
+        hkScopes[bridgeId].sensorsByType[type].insert(r.at("sensorId").as_string());
+        resolved.push_back(r);
+      } else {
+        unmapped.push_back(r);
+      }
+    };
     try {
       const Json& samples = body.at("samples");
       if (samples.is_array()) {
-        for (const auto& sample : samples.array()) {
-          Json r = ingest_healthkit_one(sample);
-          (r.at("resolved").as_bool(false) ? resolved : unmapped).push_back(r);
-        }
+        for (const auto& sample : samples.array()) one(sample);
       } else {
-        Json r = ingest_healthkit_one(body);
-        (r.at("resolved").as_bool(false) ? resolved : unmapped).push_back(r);
+        one(body);
       }
     } catch (const std::exception& e) {
       return http::error_response(e.what(), 400);
+    }
+    const std::string resyncId = body.at("resyncId").as_string();
+    if (!resyncId.empty()) {
+      std::lock_guard<std::mutex> lock(hkScopeMutex);
+      for (auto& r : hkScopes[bridgeId].resyncRequests) {
+        if (r.at("id").as_string() == resyncId && r.at("state").as_string() == "pending") {
+          r.object()["state"] = "fulfilled";
+          r.object()["fulfilledAt"] = static_cast<double>(now_ms());
+        }
+      }
     }
 
     const bool allResolved = unmapped.empty();
@@ -2745,12 +2919,14 @@ private:
       {"unmapped", static_cast<double>(unmapped.size())},
       {"timestamp", static_cast<double>(now_ms())},
     }));
-    return http::json_response(json::stringify(Json::Object{
+    Json::Object out{
       {"success",  allResolved},
-      {"bridgeId", body.at("bridgeId").as_string(healthKitBridgeId)},
+      {"bridgeId", bridgeId},
       {"resolved", resolved},
       {"unmapped", unmapped},
-    }), status);
+    };
+    if (!resyncId.empty()) out["resyncId"] = resyncId;
+    return http::json_response(json::stringify(Json(out)), status);
   }
 
   Json::Object build_carekit_signal(const Json& body, const Json& mapping) const {
