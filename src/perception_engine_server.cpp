@@ -416,24 +416,6 @@ std::string test_source_id(const std::string& machineId) {
   return out.str();
 }
 
-bool endpoint_allowed(const std::string& endpoint) {
-  static const std::vector<std::string> prefixes{
-    "/",
-    "/health",
-    "/chat",
-    "/rag/query",
-    "/rag/ingest/text",
-    "/graph/schema",
-    "/graph/rag",
-    "/graph/agent",
-    "/graphql",
-  };
-  std::string path = endpoint.substr(0, endpoint.find('?'));
-  for (const auto& prefix : prefixes) {
-    if (path == prefix || (prefix != "/" && path.rfind(prefix + "/", 0) == 0)) return true;
-  }
-  return false;
-}
 
 class PerceptionService {
 public:
@@ -1302,17 +1284,10 @@ private:
       events = Json::Object{{"error", e.what()}};
     }
 
-    Json::Array endpoints{
-      Json::Object{{"id", "health"}, {"method", "GET"}, {"path", "/health"}, {"description", "Operational health for API, Ollama, Qdrant, and Redis."}},
-      Json::Object{{"id", "graph_schema"}, {"method", "GET"}, {"path", "/graph/schema"}, {"description", "LangGraph topology and Reality Engine binding schema."}},
-      Json::Object{{"id", "graph_rag"}, {"method", "POST"}, {"path", "/graph/rag"}, {"description", "Run corrective RAG graph."}},
-      Json::Object{{"id", "graph_agent"}, {"method", "POST"}, {"path", "/graph/agent"}, {"description", "Run ReAct agent graph."}},
-      Json::Object{{"id", "rag_query"}, {"method", "POST"}, {"path", "/rag/query"}, {"description", "Run RAG query endpoint."}},
-      Json::Object{{"id", "rag_ingest_text"}, {"method", "POST"}, {"path", "/rag/ingest/text"}, {"description", "Ingest text into localAIStack Qdrant collection."}},
-      Json::Object{{"id", "chat"}, {"method", "POST"}, {"path", "/chat"}, {"description", "Call Ollama-backed chat endpoint."}},
-      Json::Object{{"id", "graphql"}, {"method", "POST"}, {"path", "/graphql"}, {"description", "GraphQL trigger receiver."}},
-      Json::Object{{"id", "graphql_events"}, {"method", "GET"}, {"path", "/graphql/events"}, {"description", "Recent GraphQL trigger events."}},
-    };
+    // The allow-list is the configured policy, not a list kept here
+    // (SURFACE_SPEC.md, localAI invoke contract; INTEGRATION_ROADMAP §6 Q7).
+    std::string source;
+    Json endpoints = localai_allowed_operations(&source);
 
     broadcast_state();
     return Json::Object{
@@ -1322,6 +1297,7 @@ private:
       {"recentGraphQLEvents", events},
       {"invokeEndpoint", "/api/integrations/localai/invoke"},
       {"allowedEndpoints", endpoints},
+      {"allowedEndpointsSource", source.empty() ? Json(nullptr) : Json(source)},
       {"realityBridge", Json::Object{
         {"sensors", Json::Array{
           "localai_rag_retrieval",
@@ -1750,12 +1726,23 @@ private:
   }
 
   http::Response invoke_localai(const Json& body) const {
-    std::string method = body.at("method").as_string("POST");
-    std::transform(method.begin(), method.end(), method.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     std::string endpoint;
     if (body.at("endpoint").is_string()) endpoint = body.at("endpoint").as_string();
     else if (body.at("path").is_string()) endpoint = body.at("path").as_string();
-    else return http::error_response("localAI invocation requires endpoint or path", 400);
+    else return http::json_response(json::stringify(Json::Object{
+        {"success", false}, {"error", std::string("localAI invocation requires endpoint or path")}}), 400);
+    if (endpoint.empty() || endpoint[0] != '/') endpoint = "/" + endpoint;
+    const std::string routePath = endpoint.substr(0, endpoint.find('?'));
+    // method defaults to the allowed operation's own method for this path.
+    std::string method = body.at("method").is_string() ? body.at("method").as_string() : "";
+    if (method.empty()) {
+      const Json ops = localai_allowed_operations(nullptr);
+      for (const auto& op : ops.is_array() ? ops.array() : Json::Array{}) {
+        if (op.at("path").as_string() == routePath) { method = op.at("method").as_string(); break; }
+      }
+      if (method.empty()) method = "POST";
+    }
+    std::transform(method.begin(), method.end(), method.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
 
     // The correlation id is the whole point of the ledger: it is what lets a
     // completion write-back be joined to the invocation that justified it.
@@ -1812,47 +1799,68 @@ private:
       record_localai_invocation(Json(std::move(rec)));
     };
 
+    auto refusal = [&](int status, const std::string& error) {
+      return http::json_response(json::stringify(Json::Object{
+        {"success", false}, {"endpoint", endpoint}, {"method", method},
+        {"correlationId", correlationId}, {"invocationId", invocationId}, {"error", error}}), status);
+    };
+    const std::string operationId = operation_id_for(method, routePath);
+    bool pathSafe = true;
+    try { endpoint = normalize_endpoint(endpoint); } catch (const std::exception&) { pathSafe = false; }
+    if (!pathSafe || operationId.empty()) {
+      // Recorded before the refusal is returned. An attempt on a forbidden
+      // endpoint is exactly the event M5's forbidden-endpoint check exists to
+      // find, and it is the one an unrecorded path loses entirely.
+      record(false, "", Json(nullptr), "endpoint is not allowed");
+      return refusal(403, "localAI endpoint is not allowed");
+    }
     try {
-      endpoint = normalize_endpoint(endpoint);
-      if (!endpoint_allowed(endpoint)) {
-        // Recorded before the refusal is returned. An attempt on a forbidden
-        // endpoint is exactly the event M5's forbidden-endpoint check exists to
-        // find, and it is the one an unrecorded path loses entirely.
-        record(false, operation_id_for(endpoint), Json(nullptr),
-               "endpoint is not allowed");
-        return http::error_response("localAI endpoint is not allowed: " + endpoint, 403);
-      }
       std::string raw;
       if (method == "GET") {
         raw = http::get(localAIBaseUrl + endpoint);
-      } else if (method == "POST") {
-        Json payload = body.at("payload").is_null() ? Json::Object{} : body.at("payload");
-        raw = http::post_json(localAIBaseUrl + endpoint, json::stringify(payload));
       } else {
-        record(false, operation_id_for(endpoint), Json(nullptr),
-               "unsupported method");
-        return http::error_response("localAI invocation supports GET and POST only", 400);
+        Json payload = !body.at("payload").is_null() ? body.at("payload")
+                     : !body.at("body").is_null() ? body.at("body") : Json(Json::Object{});
+        raw = http::post_json(localAIBaseUrl + endpoint, json::stringify(payload));
       }
       Json parsed = json::parse(raw);
-      record(true, operation_id_for(endpoint), parsed, "");
+      record(true, operationId, parsed, "");
       return ok(Json::Object{{"success", true}, {"endpoint", endpoint}, {"method", method},
                              {"correlationId", correlationId}, {"invocationId", invocationId},
                              {"response", parsed}});
     } catch (const std::exception& e) {
-      record(false, operation_id_for(endpoint), Json(nullptr), e.what());
-      return http::json_response(json::stringify(Json::Object{{"success", false}, {"endpoint", endpoint}, {"method", method}, {"correlationId", correlationId}, {"error", e.what()}}), 502);
+      record(false, operationId, Json(nullptr), e.what());
+      return refusal(502, e.what());
     }
+  }
+
+  // The configured allow-list: allowedOperations on the localai integration of
+  // INTEGRATIONS_CONFIG. Empty when the config carries none -- deny by default.
+  // `source` receives the config path when a list was found.
+  Json localai_allowed_operations(std::string* source) const {
+    std::lock_guard<std::mutex> lock(integrationMutex);
+    const Json& items = integrationConfig.at("integrations");
+    for (const auto& item : items.is_array() ? items.array() : Json::Array{}) {
+      if (item.at("kind").as_string() != "localai") continue;
+      const Json& ops = item.at("allowedOperations");
+      if (!ops.is_array()) break;
+      if (source) *source = integrationConfigPath;
+      return ops;
+    }
+    return Json::Array{};
   }
 
   // The catalogue's own id for this endpoint, so the ledger names the operation
   // the deployment permits rather than a path this code invented. Empty when
   // the endpoint is not in the catalogue, which is itself the finding.
-  std::string operation_id_for(const std::string& endpoint) const {
-    const Json catalog = localai_catalog();
-    const Json& allowed = catalog.at("allowedEndpoints");
+  std::string operation_id_for(const std::string& method, const std::string& path) const {
+    const Json allowed = localai_allowed_operations(nullptr);
     if (!allowed.is_array()) return {};
     for (const auto& e : allowed.array()) {
-      if (e.at("path").as_string() == endpoint) return e.at("id").as_string();
+      std::string m = e.at("method").as_string();
+      std::transform(m.begin(), m.end(), m.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+      // Exact (method, path): no prefixes, no "/" wildcard (SURFACE_SPEC.md).
+      if (m == method && e.at("path").as_string() == path) return e.at("id").as_string();
     }
     return {};
   }
