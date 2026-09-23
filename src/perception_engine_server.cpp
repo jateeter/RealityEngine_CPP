@@ -971,6 +971,11 @@ private:
     int attempts = 0;
     Json providerReceipt = nullptr;
     Json envelope = Json::Object{};
+    // Corpus OWL link {machineIri, sequenceIri, actionCode}, fields null when
+    // the machine has no manifest entry (Machines SEMANTIC_AUDIT_CONTRACT.md M5).
+    Json semantics = nullptr;
+    // Id of the record this one replays; empty on a primary record.
+    std::string replayOf;
   };
   struct TriggerDispatchSummary {
     int mergeOps = 0;
@@ -978,6 +983,7 @@ private:
     int dispatchRecordsCreated = 0;
     int droppedNoGovernance = 0;
     int droppedNoDispatch = 0;
+    int droppedCatalogCold = 0;
     int errors = 0;
   };
   struct DispatchBinding {
@@ -1601,9 +1607,18 @@ private:
     };
   }
 
+  // Shape settled 3-of-3 in SURFACE_SPEC.md, "Dispatch surface shapes".
   Json trigger_status() const {
+    long long catalogRefreshedAt = 0;
+    size_t catalogSize = 0;
+    {
+      std::lock_guard<std::mutex> lock(machineCatalogMutex);
+      catalogRefreshedAt = machineCatalogRefreshedAt;
+      catalogSize = machineCatalog.is_object() ? machineCatalog.object().size() : 0;
+    }
     std::lock_guard<std::mutex> lock(dispatchMutex);
     return Json::Object{
+      {"participation", std::string(triggerDispatchEnabled ? "active" : "not-active")},
       {"enabled", triggerDispatchEnabled},
       {"mode", triggerDispatchMode},
       {"graphqlEndpoint", triggerGraphQLEndpoint},
@@ -1611,7 +1626,11 @@ private:
       {"envelopesCreated", static_cast<double>(triggerEnvelopesCreated)},
       {"droppedNoGovernance", static_cast<double>(triggerDroppedNoGovernance)},
       {"droppedNoDispatch", static_cast<double>(triggerDroppedNoDispatch)},
-      {"dispatchErrors", static_cast<double>(triggerDispatchErrors)}
+      {"droppedCatalogCold", static_cast<double>(triggerDroppedCatalogCold)},
+      {"dispatchErrors", static_cast<double>(triggerDispatchErrors)},
+      {"machineCatalogCold", catalogRefreshedAt == 0},
+      {"machineCatalogRefreshedAt", static_cast<double>(catalogRefreshedAt)},
+      {"machineCatalogSize", static_cast<double>(catalogSize)}
     };
   }
 
@@ -1631,9 +1650,13 @@ private:
       {"createdAt", static_cast<double>(r.createdAt)},
       {"updatedAt", static_cast<double>(r.updatedAt)},
       {"providerReceipt", r.providerReceipt.is_null() ? Json(nullptr) : r.providerReceipt},
-      {"envelope", r.envelope}
+      {"envelope", r.envelope},
+      // Always present, null when empty: the record's key set is part of the
+      // 3-of-3 contract, and an optional key makes it vary record to record.
+      {"error", r.error.empty() ? Json(nullptr) : Json(r.error)},
+      {"semantics", r.semantics.is_object() ? r.semantics : dispatch_semantics_unjoined()},
+      {"replayOf", r.replayOf.empty() ? Json(nullptr) : Json(r.replayOf)}
     };
-    if (!r.error.empty()) out["error"] = r.error;
     return out;
   }
 
@@ -3181,6 +3204,39 @@ private:
     return semanticsBases;
   }
 
+  static Json dispatch_semantics_unjoined() {
+    return Json::Object{{"machineIri", Json(nullptr)}, {"sequenceIri", Json(nullptr)}, {"actionCode", Json(nullptr)}};
+  }
+
+  // The dispatch record's link to the corpus ABox. Same derivation in every
+  // runtime (SURFACE_SPEC.md, Dispatch surface shapes): the base IRI is the
+  // manifest entry for the machine's name; the sequence is governance's
+  // sequenceId, else the sole contributing sequence; local names are
+  // sanitised to [A-Za-z0-9_-]. Also feeds semantic_dispatch_records_*,
+  // which were declared here and never incremented.
+  Json dispatch_semantics(const std::string& machineName, const Json& governance,
+                          const std::vector<std::string>& sequenceIds) {
+    std::string base;
+    {
+      const auto& bases = semantics_bases();
+      std::lock_guard<std::mutex> lock(semanticsMutex);
+      auto it = bases.find(machineName);
+      if (it != bases.end()) base = it->second;
+      ++semanticDispatchTotal;
+      if (!base.empty()) ++semanticDispatchJoined;
+    }
+    std::string sequence = governance.at("sequenceId").is_string() ? governance.at("sequenceId").as_string() : "";
+    if (sequence.empty() && sequenceIds.size() == 1) sequence = sequenceIds.front();
+    std::string local;
+    for (char c : sequence) local += (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') ? c : '_';
+    const std::string action = governance.at("actionCode").is_string() ? governance.at("actionCode").as_string() : "";
+    return Json::Object{
+      {"machineIri", base.empty() ? Json(nullptr) : Json(base + "#machine")},
+      {"sequenceIri", base.empty() || sequence.empty() ? Json(nullptr) : Json(base + "#seq-" + (local.empty() ? std::string("unnamed") : local))},
+      {"actionCode", action.empty() ? Json(nullptr) : Json(action)}
+    };
+  }
+
   void record_perception_event(const std::string& integration, bool joined) {
     std::lock_guard<std::mutex> lock(semanticsMutex);
     semanticEvents[integration] += 1;
@@ -3319,6 +3375,15 @@ private:
     }
     std::lock_guard<std::mutex> lock(machineCatalogMutex);
     machineCatalog = std::move(catalog);
+    machineCatalogRefreshedAt = now_ms();
+  }
+
+  // True until the first successful fetch. machineCatalogRefreshedAt starts at 0
+  // and only a successful load writes it, so 0 is an unambiguous never-loaded
+  // marker: distinct from "loaded, and this machine is not in it".
+  bool machine_catalog_cold() const {
+    std::lock_guard<std::mutex> lock(machineCatalogMutex);
+    return machineCatalogRefreshedAt == 0;
   }
 
   Json machine_catalog_snapshot() const {
@@ -3475,7 +3540,13 @@ private:
       std::string machineId = op.at("machineId").as_string();
       const Json& machine = machines.at(machineId);
       if (!machine.is_object()) {
-        ++summary.droppedNoDispatch;
+        // A catalog that has never loaded knows no machine, so the drop says
+        // nothing about this one. It used to count as droppedNoDispatch ("this
+        // machine declares no binding"), the opposite of the truth. Reported
+        // apart, as LSP has since RealityEngine_LSP#63 (SURFACE_SPEC.md,
+        // Dispatch surface shapes).
+        if (machine_catalog_cold()) ++summary.droppedCatalogCold;
+        else ++summary.droppedNoDispatch;
         continue;
       }
       const Json& md = machine.at("metadata");
@@ -3505,6 +3576,7 @@ private:
       record.updatedAt = record.createdAt;
       record.attempts = 0;
       record.envelope = envelope;
+      record.semantics = dispatch_semantics(machine.at("name").as_string(), op.at("governance"), record.sequenceIds);
 
       {
         std::lock_guard<std::mutex> lock(dispatchMutex);
@@ -3540,6 +3612,7 @@ private:
       std::lock_guard<std::mutex> lock(dispatchMutex);
       triggerDroppedNoGovernance += static_cast<size_t>(s.droppedNoGovernance);
       triggerDroppedNoDispatch += static_cast<size_t>(s.droppedNoDispatch);
+      triggerDroppedCatalogCold += static_cast<size_t>(s.droppedCatalogCold);
       triggerDispatchErrors += static_cast<size_t>(s.errors);
     }
     return Json::Object{
@@ -3561,6 +3634,7 @@ private:
   mutable std::mutex stateMutex;
   mutable std::mutex machineCatalogMutex;
   Json machineCatalog = Json::Object{};
+  long long machineCatalogRefreshedAt = 0;
   mutable std::mutex integrationMutex;
   bool integrationRegistryLoaded = false;
   std::string integrationConfigPath;
@@ -3656,6 +3730,7 @@ private:
   size_t triggerEnvelopesCreated = 0;
   size_t triggerDroppedNoGovernance = 0;
   size_t triggerDroppedNoDispatch = 0;
+  size_t triggerDroppedCatalogCold = 0;
   size_t triggerDispatchErrors = 0;
   // MQTT bridge — optional; null when MQTT_BROKER_HOST is unset.  Owned by
   // PerceptionService so its lifetime is bounded by the service's.
