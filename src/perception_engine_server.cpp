@@ -456,6 +456,12 @@ public:
     if (triggerDispatchMode.empty()) triggerDispatchMode = "dry-run";
     if (const char* endpoint = std::getenv("TRIGGER_GRAPHQL_URL")) triggerGraphQLEndpoint = endpoint;
     if (triggerGraphQLEndpoint.empty()) triggerGraphQLEndpoint = localAIBaseUrl + "/graphql";
+    if (const char* limit = std::getenv("TRIGGER_DISPATCH_LEDGER_LIMIT")) {
+      try {
+        const long parsed = std::stol(limit);
+        if (parsed > 0) dispatchRecordCapacity = static_cast<size_t>(parsed);
+      } catch (...) { /* malformed: keep the default */ }
+    }
     load_integration_registry();
     configure_ollama_from_environment();
     // The catalog is a read-through cache of the RE's machine list, used by
@@ -3625,7 +3631,12 @@ private:
   mutable std::mutex dispatchMutex;
   std::map<std::string, DispatchRecord> dispatchRecords;
   std::deque<std::string> dispatchRecordOrder;
-  static constexpr size_t dispatchRecordCapacity = 256;
+  // The dispatch ledger is a diagnostic window, not an audit trail: a bounded
+  // ring, oldest evicted first, lost on restart (INTEGRATION_ROADMAP.md §6 Q2).
+  // Capacity is TRIGGER_DISPATCH_LEDGER_LIMIT, default 256, the same in every
+  // runtime. It was a constant here while LSP and Scala read the variable with
+  // a default of 100, so one run left different histories on different engines.
+  size_t dispatchRecordCapacity = 256;
   // localAI/MCP invocation ledger (RealityEngine_Machines#152).
   //
   // The ACP path has recorded every dispatch since it was written; the MCP path
