@@ -605,6 +605,9 @@ public:
     server.route("PATCH", "/api/dispatch/records/:id", [this](const http::Request& req) {
       return update_dispatch_record(req.pathParams.at("id"), parse_body(req));
     });
+    server.route("POST", "/api/dispatch/records/:id/replay", [this](const http::Request& req) {
+      return replay_dispatch_record(req.pathParams.at("id"), parse_body(req));
+    });
     server.route("POST", "/api/signals", [this](const http::Request& req) {
       return ingest_signal(parse_body(req));
     });
@@ -1603,6 +1606,7 @@ private:
       {"droppedNoGovernance", static_cast<double>(triggerDroppedNoGovernance)},
       {"droppedNoDispatch", static_cast<double>(triggerDroppedNoDispatch)},
       {"droppedCatalogCold", static_cast<double>(triggerDroppedCatalogCold)},
+      {"replaysCreated", static_cast<double>(triggerReplaysCreated)},
       {"dispatchErrors", static_cast<double>(triggerDispatchErrors)},
       {"machineCatalogCold", catalogRefreshedAt == 0},
       {"machineCatalogRefreshedAt", static_cast<double>(catalogRefreshedAt)},
@@ -1702,6 +1706,63 @@ private:
     return ok(Json::Object{
       {"success", true},
       {"record", dispatch_record_json(updated)}
+    });
+  }
+
+  // POST /api/dispatch/records/:id/replay -- settled 3-of-3 (SURFACE_SPEC.md,
+  // "Dispatch replay"; INTEGRATION_ROADMAP §6 Q6, RealityEngine_CI#100). A new
+  // record re-emitting the original's envelope: mode "replay", replayOf set,
+  // delivery state reset, no provider called, no PE/RE state touched. With
+  // {"freshIds": true} the envelope and correlation ids are re-minted (in the
+  // envelope too); otherwise the replay keeps the original's causal chain.
+  http::Response replay_dispatch_record(const std::string& id, const Json& body) {
+    const bool freshIds = body.is_object() && body.at("freshIds").as_bool(false);
+    DispatchRecord replay;
+    {
+      std::lock_guard<std::mutex> lock(dispatchMutex);
+      auto it = dispatchRecords.find(id);
+      if (it == dispatchRecords.end()) return http::error_response("Dispatch record not found", 404);
+      const DispatchRecord& original = it->second;
+      const long long now = now_ms();
+      replay = original;
+      replay.id = make_id("dispatch");
+      replay.status = "recorded";
+      replay.mode = "replay";
+      replay.attempts = 0;
+      replay.providerReceipt = nullptr;
+      replay.error.clear();
+      replay.replayOf = original.id;
+      replay.createdAt = now;
+      replay.updatedAt = now;
+      if (freshIds) {
+        replay.envelopeId = make_id("trigger-envelope");
+        replay.correlationId = make_id("trigger-correlation");
+        if (replay.envelope.is_object()) {
+          replay.envelope.object()["envelopeId"] = replay.envelopeId;
+          replay.envelope.object()["correlationId"] = replay.correlationId;
+          replay.envelope.object()["emittedAtMs"] = static_cast<double>(now);
+        }
+      }
+      dispatchRecords[replay.id] = replay;
+      dispatchRecordOrder.push_back(replay.id);
+      ++triggerEnvelopesCreated;
+      ++triggerReplaysCreated;
+      trim_dispatch_records();
+    }
+    hub_broadcast(json::stringify(Json::Object{
+      {"type", "trigger.envelope.created"},
+      {"envelopeId", replay.envelopeId},
+      {"correlationId", replay.correlationId},
+      {"dispatchId", replay.id},
+      {"target", replay.target},
+      {"mode", replay.mode},
+      {"replayOf", replay.replayOf}
+    }));
+    return ok(Json::Object{
+      {"success", true},
+      {"record", dispatch_record_json(replay)},
+      {"replayOf", id},
+      {"freshIds", freshIds}
     });
   }
 
@@ -3739,6 +3800,7 @@ private:
   size_t triggerDroppedNoGovernance = 0;
   size_t triggerDroppedNoDispatch = 0;
   size_t triggerDroppedCatalogCold = 0;
+  size_t triggerReplaysCreated = 0;
   size_t triggerDispatchErrors = 0;
   // MQTT bridge — optional; null when MQTT_BROKER_HOST is unset.  Owned by
   // PerceptionService so its lifetime is bounded by the service's.
