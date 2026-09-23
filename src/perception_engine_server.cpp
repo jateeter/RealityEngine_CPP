@@ -978,6 +978,7 @@ private:
     int dispatchRecordsCreated = 0;
     int droppedNoGovernance = 0;
     int droppedNoDispatch = 0;
+    int droppedCatalogCold = 0;
     int errors = 0;
   };
   struct DispatchBinding {
@@ -1601,9 +1602,18 @@ private:
     };
   }
 
+  // Shape settled 3-of-3 in SURFACE_SPEC.md, "Dispatch surface shapes".
   Json trigger_status() const {
+    long long catalogRefreshedAt = 0;
+    size_t catalogSize = 0;
+    {
+      std::lock_guard<std::mutex> lock(machineCatalogMutex);
+      catalogRefreshedAt = machineCatalogRefreshedAt;
+      catalogSize = machineCatalog.is_object() ? machineCatalog.object().size() : 0;
+    }
     std::lock_guard<std::mutex> lock(dispatchMutex);
     return Json::Object{
+      {"participation", std::string(triggerDispatchEnabled ? "active" : "not-active")},
       {"enabled", triggerDispatchEnabled},
       {"mode", triggerDispatchMode},
       {"graphqlEndpoint", triggerGraphQLEndpoint},
@@ -1611,7 +1621,11 @@ private:
       {"envelopesCreated", static_cast<double>(triggerEnvelopesCreated)},
       {"droppedNoGovernance", static_cast<double>(triggerDroppedNoGovernance)},
       {"droppedNoDispatch", static_cast<double>(triggerDroppedNoDispatch)},
-      {"dispatchErrors", static_cast<double>(triggerDispatchErrors)}
+      {"droppedCatalogCold", static_cast<double>(triggerDroppedCatalogCold)},
+      {"dispatchErrors", static_cast<double>(triggerDispatchErrors)},
+      {"machineCatalogCold", catalogRefreshedAt == 0},
+      {"machineCatalogRefreshedAt", static_cast<double>(catalogRefreshedAt)},
+      {"machineCatalogSize", static_cast<double>(catalogSize)}
     };
   }
 
@@ -1631,9 +1645,11 @@ private:
       {"createdAt", static_cast<double>(r.createdAt)},
       {"updatedAt", static_cast<double>(r.updatedAt)},
       {"providerReceipt", r.providerReceipt.is_null() ? Json(nullptr) : r.providerReceipt},
-      {"envelope", r.envelope}
+      {"envelope", r.envelope},
+      // Always present, null when empty: the record's key set is part of the
+      // 3-of-3 contract, and an optional key makes it vary record to record.
+      {"error", r.error.empty() ? Json(nullptr) : Json(r.error)}
     };
-    if (!r.error.empty()) out["error"] = r.error;
     return out;
   }
 
@@ -3319,6 +3335,15 @@ private:
     }
     std::lock_guard<std::mutex> lock(machineCatalogMutex);
     machineCatalog = std::move(catalog);
+    machineCatalogRefreshedAt = now_ms();
+  }
+
+  // True until the first successful fetch. machineCatalogRefreshedAt starts at 0
+  // and only a successful load writes it, so 0 is an unambiguous never-loaded
+  // marker: distinct from "loaded, and this machine is not in it".
+  bool machine_catalog_cold() const {
+    std::lock_guard<std::mutex> lock(machineCatalogMutex);
+    return machineCatalogRefreshedAt == 0;
   }
 
   Json machine_catalog_snapshot() const {
@@ -3475,7 +3500,13 @@ private:
       std::string machineId = op.at("machineId").as_string();
       const Json& machine = machines.at(machineId);
       if (!machine.is_object()) {
-        ++summary.droppedNoDispatch;
+        // A catalog that has never loaded knows no machine, so the drop says
+        // nothing about this one. It used to count as droppedNoDispatch ("this
+        // machine declares no binding"), the opposite of the truth. Reported
+        // apart, as LSP has since RealityEngine_LSP#63 (SURFACE_SPEC.md,
+        // Dispatch surface shapes).
+        if (machine_catalog_cold()) ++summary.droppedCatalogCold;
+        else ++summary.droppedNoDispatch;
         continue;
       }
       const Json& md = machine.at("metadata");
@@ -3540,6 +3571,7 @@ private:
       std::lock_guard<std::mutex> lock(dispatchMutex);
       triggerDroppedNoGovernance += static_cast<size_t>(s.droppedNoGovernance);
       triggerDroppedNoDispatch += static_cast<size_t>(s.droppedNoDispatch);
+      triggerDroppedCatalogCold += static_cast<size_t>(s.droppedCatalogCold);
       triggerDispatchErrors += static_cast<size_t>(s.errors);
     }
     return Json::Object{
@@ -3561,6 +3593,7 @@ private:
   mutable std::mutex stateMutex;
   mutable std::mutex machineCatalogMutex;
   Json machineCatalog = Json::Object{};
+  long long machineCatalogRefreshedAt = 0;
   mutable std::mutex integrationMutex;
   bool integrationRegistryLoaded = false;
   std::string integrationConfigPath;
@@ -3656,6 +3689,7 @@ private:
   size_t triggerEnvelopesCreated = 0;
   size_t triggerDroppedNoGovernance = 0;
   size_t triggerDroppedNoDispatch = 0;
+  size_t triggerDroppedCatalogCold = 0;
   size_t triggerDispatchErrors = 0;
   // MQTT bridge — optional; null when MQTT_BROKER_HOST is unset.  Owned by
   // PerceptionService so its lifetime is bounded by the service's.
