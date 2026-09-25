@@ -15,7 +15,7 @@ info:
     Wire-compatible with the LSP (Common Lisp) and Scala runtimes.
 
     '
-  x-generated-from: /Users/johnt/workspace/GitHub/RealityEngine_CI/SURFACE_SPEC.md
+  x-generated-from: RealityEngine_CI/SURFACE_SPEC.md
 servers:
 - url: http://localhost:5300
   description: Local CPP Perception Engine (native, instance cpp-1)
@@ -752,6 +752,32 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
       operationId: patch_api_dispatch_records_id
+  /api/dispatch/records/{id}/replay:
+    post:
+      tags:
+      - Dispatch & Triggers
+      summary: Post /api/dispatch/records/{id}/replay
+      parameters:
+      - *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DispatchRecord'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: post_api_dispatch_records_id_replay
   /api/triggers/status:
     get:
       tags:
