@@ -17,7 +17,7 @@ info:
     Every metric line carries `runtime="cpp"`.
 
     '
-  x-generated-from: /Users/johnt/workspace/GitHub/RealityEngine_CI/SURFACE_SPEC.md
+  x-generated-from: RealityEngine_CI/SURFACE_SPEC.md
 servers:
 - url: http://localhost:5301
   description: Local CPP Reality Engine (native, instance cpp-1)
