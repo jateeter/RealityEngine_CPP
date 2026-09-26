@@ -1,0 +1,409 @@
+{
+  "version": "1.0.0",
+  "machine": {
+    "name": "RS Flip Flop (cesgen deprecation fixture)",
+    "description": "Test-owned fixture for tests/cesgen_deprecation.cpp: the reset sequence is deprecated (replaced by set), the set sequence is not. Not part of the corpus; it was RealityEngine_Machines RSFlipFlopDeprecatedDemo.json, retired by RealityEngine_Machines#180.",
+    "metadata": {
+      "category": "digital-logic",
+      "author": "Reality Engine",
+      "created": "2026-02-02T00:00:00Z",
+      "eventSpace": "2D binary vectors: [S, R] inputs (00, 01, 10, 11)",
+      "outputSpace": "2D binary: {[0,1]=RESET/LOW, [1,0]=SET/HIGH}",
+      "tags": [
+        "ces-sequences",
+        "ces-sequences-2",
+        "digital-logic",
+        "flip-flop",
+        "immediate-response",
+        "input-sequences",
+        "input-sequences-3",
+        "rs-flip-flop",
+        "rs-flip-flop-deprecated-demo",
+        "rsflip-flop",
+        "startup-loadable"
+      ],
+      "sequenceCount": 2,
+      "description": "Two always-active events: SET (10→[1,0]) and RESET (01→[0,1])",
+      "singleTransitionAssumption": {
+        "required": false,
+        "scope": "not applicable",
+        "compliant": true,
+        "notes": "STA is NOT required. Both event vectors are isInitial — they respond combinatorially on every cycle without any sequential dependency. Multi-bit transitions between valid inputs work correctly: [1,0]→[0,1] (HD=2) correctly produces RESET output; [0,1]→[1,0] (HD=2) correctly produces SET output. The defined sequences pass through [0,0] HOLD between SET and RESET by convention (physical realism), not by mechanical necessity. The [1,1] input (S=R=1, the classical RS forbidden state) is reachable via single-bit transitions but produces no output (undefined behavior preserved).",
+        "maxHammingDistanceInDefinedSequences": 1,
+        "forbiddenState": {
+          "input": "[1,1]",
+          "reachableViaSingleTransition": true,
+          "behavior": "No output — matches neither rs-event-10 nor rs-event-01. Classical undefined RS state preserved."
+        },
+        "multiTransitionBehavior": {
+          "[1,0]→[0,1]": "RESET output [0,1] — correct",
+          "[0,1]→[1,0]": "SET output [1,0] — correct",
+          "[0,0]→[1,1]": "No output — forbidden state"
+        }
+      },
+      "tagging": {
+        "schemaVersion": "1.0.0",
+        "managedBy": "scripts/manage_machine_tags.mjs",
+        "primaryDomain": "digital-logic",
+        "domainTags": [
+          "digital-logic"
+        ],
+        "family": "rs-flip-flop-deprecated-demo",
+        "machineCode": "rsflip-flop",
+        "capabilityTags": [],
+        "workflowTags": [
+          "flip-flop",
+          "immediate-response",
+          "rs-flip-flop",
+          "rs-flip-flop-deprecated-demo",
+          "rsflip-flop"
+        ],
+        "integrationTags": [
+          "digital-logic"
+        ],
+        "validationTags": [
+          "ces-sequences",
+          "ces-sequences-2",
+          "input-sequences",
+          "input-sequences-3",
+          "startup-loadable"
+        ],
+        "allTags": [
+          "ces-sequences",
+          "ces-sequences-2",
+          "digital-logic",
+          "flip-flop",
+          "immediate-response",
+          "input-sequences",
+          "input-sequences-3",
+          "rs-flip-flop",
+          "rs-flip-flop-deprecated-demo",
+          "rsflip-flop",
+          "startup-loadable"
+        ]
+      },
+      "governance": {
+        "schemaVersion": "1.0.0",
+        "ownerTeam": "reliability-engineering",
+        "runbook": "https://runbooks.example.org/digital-logic/rsflipflop",
+        "escalationPolicy": "slack:#reliability-test",
+        "contact": {
+          "primary": "reliability-engineering-primary@example.org",
+          "secondary": "reliability-engineering-secondary@example.org"
+        },
+        "sla": {
+          "ok": null,
+          "info": null,
+          "warning": null,
+          "error": null
+        },
+        "notes": "Auto-backfilled by scripts/backfill-governance.mjs from primaryDomain=\"digital-logic\".  Review and tune the routing as the team owning RSFlipFlop matures."
+      },
+      "triggerConfig": {
+        "processId": "RSFLIPFLOP",
+        "processName": "RS Flip Flop",
+        "rules": [
+          {
+            "sequenceId": "rs-set-sequence",
+            "outputMatches": [
+              1,
+              0
+            ],
+            "ragStatusCode": "GREEN",
+            "processStatus": "info",
+            "description": "Flip flop SET to HIGH (1)"
+          },
+          {
+            "sequenceId": "rs-reset-sequence",
+            "outputMatches": [
+              0,
+              1
+            ],
+            "ragStatusCode": "GREEN",
+            "processStatus": "info",
+            "description": "Flip flop RESET to LOW (0)"
+          }
+        ]
+      },
+      "machineClass": "signal-monitor",
+      "inputSemantics": [
+        "RS Flip Flop (deprecated demo) input 1",
+        "RS Flip Flop (deprecated demo) input 2"
+      ],
+      "interconnections": [
+        {
+          "id": "digital-logic.digital-logic-core.rs-flip-flop-deprecated-demo",
+          "type": "published-domain-bus-producer",
+          "role": "rs_flip_flop_deprecated_demo",
+          "sourceMachine": "RS Flip Flop (deprecated demo)",
+          "sourceOutputRegion": {
+            "offset": 4202,
+            "length": 2
+          },
+          "targetInputElements": [
+            11,
+            12
+          ],
+          "normalizedElements": [
+            "RS Flip Flop (deprecated demo) active output[0] bit",
+            "RS Flip Flop (deprecated demo) active output[1] bit"
+          ],
+          "purpose": "Publish RS Flip Flop (deprecated demo) active response lanes into digital-logic.digital-logic-core.",
+          "busId": "digital-logic.digital-logic-core",
+          "busTag": "published-bus-digital-logic-digital-logic-core",
+          "targetMachine": "Digital Logic Core Interconnect",
+          "targetMachineFile": "DigitalLogicCoreInterconnect.json",
+          "targetInputRegion": {
+            "offset": 14297,
+            "length": 15
+          },
+          "busInputRegion": {
+            "offset": 14297,
+            "length": 15
+          },
+          "publishedOutputRegion": {
+            "offset": 14312,
+            "length": 4
+          },
+          "busOutputRegion": {
+            "offset": 14312,
+            "length": 4
+          },
+          "peCompositionRequired": true,
+          "compositionOwner": "perception-engine",
+          "dispatchMode": "asynchronous-no-wait",
+          "privacyBoundary": "PE composes normalized domain status bits only; raw regulated records, operator notes, telemetry payloads, documents, and provider-specific source payloads remain outside the universal Reality Event."
+        }
+      ],
+      "openClawProjection": {
+        "projectionId": "openclaw-rs-flip-flop-deprecated-demo-native-input-projection",
+        "owner": "openclaw-input-analyst",
+        "dispatchMode": "accepted-no-wait",
+        "writeBackRegion": {
+          "offset": 4200,
+          "length": 2
+        },
+        "normalization": "machine-native-binary",
+        "semantics": [
+          "rs_flip_flop_deprecated_demo_input_1",
+          "rs_flip_flop_deprecated_demo_input_2"
+        ],
+        "peContract": "OpenClaw maps domain observations to this machine's native input lane; PE writes the vector source and does not wait inside a PE cycle."
+      }
+    },
+    "arbiterRule": "PASSTHROUGH",
+    "perceptualMapping": {
+      "input": {
+        "offset": 4200,
+        "length": 2
+      },
+      "output": {
+        "offset": 4202,
+        "length": 2
+      },
+      "bitsPerElement": 1
+    },
+    "sequences": [
+      {
+        "id": "rs-set-sequence",
+        "name": "Deprecated Demo SET Sequence: 10→[1,0]",
+        "metadata": {
+          "description": "Outputs HIGH when S=1, R=0",
+          "path": "10→[1,0]",
+          "output": "[1,0]"
+        },
+        "events": [
+          {
+            "id": "rs-event-10",
+            "elements": [
+              {
+                "value": 1,
+                "threshold": 0.5
+              },
+              {
+                "value": 0,
+                "threshold": 0.5
+              }
+            ],
+            "isInitial": true,
+            "metadata": {
+              "name": "10",
+              "description": "Set state (S=1, R=0) - outputs when input matches [1,0]",
+              "state": "SET"
+            },
+            "outputEvents": [
+              {
+                "id": "rs-output-set",
+                "vector": [
+                  1,
+                  0
+                ],
+                "metadata": {
+                  "description": "Flip flop SET to HIGH (1)",
+                  "state": "SET",
+                  "logicValue": "HIGH",
+                  "qOutput": 1,
+                  "qBarOutput": 0
+                }
+              }
+            ]
+          }
+        ],
+        "schemaVersion": "1.0.0"
+      },
+      {
+        "id": "rs-reset-sequence",
+        "name": "Deprecated Demo RESET Sequence: 01→[0,1]",
+        "metadata": {
+          "description": "Outputs LOW when S=0, R=1",
+          "path": "01→[0,1]",
+          "output": "[0,1]"
+        },
+        "events": [
+          {
+            "id": "rs-event-01",
+            "elements": [
+              {
+                "value": 0,
+                "threshold": 0.5
+              },
+              {
+                "value": 1,
+                "threshold": 0.5
+              }
+            ],
+            "isInitial": true,
+            "metadata": {
+              "name": "01",
+              "description": "Reset state (S=0, R=1) - outputs when input matches [0,1]",
+              "state": "RESET"
+            },
+            "outputEvents": [
+              {
+                "id": "rs-output-reset",
+                "vector": [
+                  0,
+                  1
+                ],
+                "metadata": {
+                  "description": "Flip flop RESET to LOW (0)",
+                  "state": "RESET",
+                  "logicValue": "LOW",
+                  "qOutput": 0,
+                  "qBarOutput": 1
+                }
+              }
+            ]
+          }
+        ],
+        "schemaVersion": "1.0.0",
+        "deprecatedAt": "2026-02-01",
+        "replacedBy": "rs-set-sequence"
+      }
+    ],
+    "inputSequences": [
+      {
+        "name": "SET Operation",
+        "pattern": "00→10",
+        "description": "Transition from hold to set state",
+        "events": [
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            0
+          ]
+        ]
+      },
+      {
+        "name": "RESET Operation",
+        "pattern": "00→01",
+        "description": "Transition from hold to reset state",
+        "events": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ]
+        ]
+      },
+      {
+        "name": "COMPREHENSIVE VALIDATION SEQUENCE",
+        "pattern": "13-step validation of all events and outputs",
+        "description": "Validates: (1) All event activations (2) All output generation (3) Repeated operations (4) State transitions (5) Visualization correctness. Tests 3x SET, 3x RESET with HOLD states between.",
+        "events": [
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "metadata": {
+          "validationType": "comprehensive",
+          "totalSteps": 13,
+          "expectedOutputs": 6,
+          "expectedOutputSequence": "[1,0], [1,0], [0,1], [0,1], [1,0], [0,1]",
+          "validatesEventActivation": true,
+          "validatesOutputGeneration": true,
+          "validatesVisualization": true,
+          "validatesRepeatedOperations": true,
+          "validatesStateTransitions": true
+        }
+      }
+    ],
+    "matchAlgorithm": "gte",
+    "id": "machine-rsflipflop-deprecated-demo"
+  }
+}
