@@ -534,6 +534,16 @@ if again != before:
     raise SystemExit(f"exporting consumed state: the same machine gave {before} "
                      f"inputSequences then {again}")
 
+# Leave the engine as found. The re-ingested copy took "<name> v2", and the
+# residency check below picks its probe the same way and asserts that a conflict
+# is versioned to exactly v2. While the first resident machine was one this
+# section happened not to pick, that held; once the arbitration machines sorted
+# first (RealityEngine_Machines 3ba35f7a) both sections chose the same machine
+# and residency saw v3 — correct engine behaviour, reported as a failure.
+req = urllib.request.Request(base + f"/api/machines/{reingested['id']}", method="DELETE")
+with urllib.request.urlopen(req, timeout=60):
+    pass
+
 print(f"  export: valid corpus document (arbiterRule={m['arbiterRule']!r}, "
       f"{before} inputSequences at machine level, round-trips, repeatable)")
 SCHEMA_PY
@@ -750,8 +760,7 @@ for route in ("process", "whatif"):
         raise SystemExit(
             f"{route}: {probe['name']!r} evaluated no sequences — totalInputs=0, "
             f"sequenceResults={{}}. This is what an inhibited machine registry "
-            f"copy 
-            f"returns for every input (RealityEngine_CI#254).")
+            f"copy returns for every input (RealityEngine_CI#254).")
     print(f"  {route}: {probe['name']!r} evaluated {len(results)} sequence(s), "
           f"totalInputs={meta['totalInputs']}")
 
