@@ -6,9 +6,14 @@
 //     deprecated sequence fires
 //   - ces_deprecated_fires_total renders with the right label set
 //
-// Fixture: examples/machines/RSFlipFlopDeprecatedDemo.json — same machine
-// the AI test exercises.  The reset sequence is marked deprecated; the
-// set sequence is not.
+// Fixture: tests/fixtures/cesgen_deprecation_rs_flipflop.json, owned by this
+// test. The reset sequence is marked deprecated; the set sequence is not.
+//
+// It used to borrow the corpus machine RSFlipFlopDeprecatedDemo.json, and
+// skipped with exit 0 when that file was absent. The demo sat in the
+// agent-completion-risk service lane and was retired
+// (RealityEngine_Machines#180); a borrowed fixture would have turned this
+// suite into a silent skip. A missing fixture is now a failure.
 
 #include "reality/reality.hpp"
 
@@ -39,8 +44,8 @@ std::vector<std::string> failureMsgs;
   else { ++passed; } \
 } while (0)
 
-void test_loader_propagates_lifecycle(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-loader");
+void test_loader_propagates_lifecycle(const std::filesystem::path& fixture) {
+  Machine m = load_machine_from_json_string(read_file(fixture), "dep-loader");
   bool sawReset = false, sawSet = false;
   for (const auto& seq : m.all_sequences()) {
     if (seq.id == "rs-reset-sequence") {
@@ -61,8 +66,8 @@ void test_loader_propagates_lifecycle(const std::filesystem::path& machinesDir) 
   EXPECT(sawSet,   "rs-set-sequence was scanned");
 }
 
-void test_engine_stamps_deprecation(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-stamp");
+void test_engine_stamps_deprecation(const std::filesystem::path& fixture) {
+  Machine m = load_machine_from_json_string(read_file(fixture), "dep-stamp");
   PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
@@ -85,8 +90,8 @@ void test_engine_stamps_deprecation(const std::filesystem::path& machinesDir) {
   }
 }
 
-void test_non_deprecated_has_no_stamp(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-set");
+void test_non_deprecated_has_no_stamp(const std::filesystem::path& fixture) {
+  Machine m = load_machine_from_json_string(read_file(fixture), "dep-set");
   PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
   int off = m.perceptualMapping->input.offset;
@@ -104,8 +109,8 @@ void test_non_deprecated_has_no_stamp(const std::filesystem::path& machinesDir) 
   }
 }
 
-void test_prom_emits_deprecated_fires(const std::filesystem::path& machinesDir) {
-  Machine m = load_machine_from_json_string(read_file(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json")), "dep-prom");
+void test_prom_emits_deprecated_fires(const std::filesystem::path& fixture) {
+  Machine m = load_machine_from_json_string(read_file(fixture), "dep-prom");
   std::map<std::string, Machine> machines{{m.id, m}};
   PerceptualSpaceRuntime sim(0);
   sim.add_machine(m);
@@ -128,17 +133,17 @@ void test_prom_emits_deprecated_fires(const std::filesystem::path& machinesDir) 
 } // namespace
 
 int main(int argc, char** argv) {
-  std::filesystem::path machinesDir = argc > 1 ? argv[1] : "../RealityEngine_Machines/machines";
+  std::filesystem::path fixture = argc > 1 ? argv[1] : "tests/fixtures/cesgen_deprecation_rs_flipflop.json";
 
-  if (!std::filesystem::exists(find_machine_file(machinesDir, "RSFlipFlopDeprecatedDemo.json"))) {
-    std::cerr << "Skipping cesgen_deprecation — RSFlipFlopDeprecatedDemo.json not found in " << machinesDir << "\n";
-    return 0;
+  if (!std::filesystem::exists(fixture)) {
+    std::cerr << "cesgen_deprecation FAILED — fixture not found: " << fixture << "\n";
+    return 1;
   }
 
-  test_loader_propagates_lifecycle(machinesDir);
-  test_engine_stamps_deprecation(machinesDir);
-  test_non_deprecated_has_no_stamp(machinesDir);
-  test_prom_emits_deprecated_fires(machinesDir);
+  test_loader_propagates_lifecycle(fixture);
+  test_engine_stamps_deprecation(fixture);
+  test_non_deprecated_has_no_stamp(fixture);
+  test_prom_emits_deprecated_fires(fixture);
 
   std::cout << "cesgen_deprecation summary\n"
             << "  passed: " << passed << "\n"

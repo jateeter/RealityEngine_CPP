@@ -103,7 +103,7 @@ e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BI
 	$(BIN_DIR)/cesgen_provenance ../RealityEngine_Machines/machines
 	$(BIN_DIR)/cesgen_composition ../RealityEngine_Machines/machines
 	$(BIN_DIR)/cesgen_governance ../RealityEngine_Machines/machines
-	$(BIN_DIR)/cesgen_deprecation ../RealityEngine_Machines/machines
+	$(BIN_DIR)/cesgen_deprecation tests/fixtures/cesgen_deprecation_rs_flipflop.json
 
 e2e-services: $(BIN_DIR)/reality_engine_server $(BIN_DIR)/perception_engine_server $(BIN_DIR)/reality_engine_cli
 	tests/e2e_services.sh
