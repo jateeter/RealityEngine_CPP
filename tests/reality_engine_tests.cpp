@@ -874,6 +874,23 @@ int main() {
     assert(r2.machineOutput.has_value());
   }
 
+  // Reset returns every event to its loaded state, wasJustMatched included
+  // (SURFACE_SPEC.md, "Already-settled instances", RealityEngine_CI#464). It
+  // kept the last match here and on Scala while LSP cleared it, so 20 of 21
+  // machines exported differently across runtimes immediately after a reset.
+  {
+    Machine m = make_rs_like_machine();
+    m.process_input({1.0, 0.0});
+    m.process_input({0.0, 1.0});
+    auto driven = m.all_sequences().front();
+    assert((*driven.get_vector("terminal"))->was_just_matched());
+    m.reset();
+    for (const auto& v : m.all_sequences().front().all_vectors()) {
+      assert(!v.was_just_matched());
+      assert(v.is_active() == v.isInitial);
+    }
+  }
+
   {
     Machine m = make_rs_like_machine();
     PerceptualSpaceRuntime sim(256);
