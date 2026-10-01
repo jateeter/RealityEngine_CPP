@@ -1252,7 +1252,7 @@ std::optional<SimulationStep> PerceptualSpaceRuntime::step() {
   steps.insert(steps.begin(), result);
   if (steps.size() > maxHistory) steps.resize(maxHistory);
   // A run ends on the step that finishes the walk, not on the call after it,
-  // so isRunning reads false as soon as the last vector has been applied — as
+  // so isRunning reads false as soon as the last Reality Event has been applied — as
   // Scala's runtime does (RealityEngine_CI#489).
   if (running && (currentStep >= static_cast<int>(configuredInputSequence.size()) ||
                   (configuredMaxSteps && currentStep >= *configuredMaxSteps))) {

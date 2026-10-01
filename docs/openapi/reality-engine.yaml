@@ -1191,7 +1191,7 @@ paths:
     post:
       tags:
       - Perceptual Simulation
-      summary: Append vectors and config to staging buffer
+      summary: Append Reality Events and config to staging buffer
       requestBody:
         required: true
         content:
@@ -1798,7 +1798,7 @@ components:
       properties:
         reset:
           type: boolean
-        vectors:
+        events:
           type: array
           items:
             $ref: '#/components/schemas/Vector'

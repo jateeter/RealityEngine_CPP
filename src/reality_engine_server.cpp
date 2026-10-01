@@ -1142,7 +1142,8 @@ public:
       auto body = parse_body(req);
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
       if (body.at("reset").as_bool(false)) buffer.clear();
-      for (const auto& v : body.at("vectors").is_array() ? body.at("vectors").array() : Json::Array{}) buffer.push_back(json::to_numbers(v));
+      // The input sequence's Reality Events, under `events` (RealityEngine_CI#489).
+      for (const auto& e : body.at("events").is_array() ? body.at("events").array() : Json::Array{}) buffer.push_back(json::to_numbers(e));
       const auto& cfg = body.at("config").is_object() ? body.at("config") : body;
       if (cfg.at("inputRegion").is_object()) {
         bufferedRegion = {static_cast<int>(cfg.at("inputRegion").at("offset").as_number()), static_cast<int>(cfg.at("inputRegion").at("length").as_number())};
@@ -1155,7 +1156,7 @@ public:
             ? std::optional<int>(static_cast<int>(cfg.at("maxSteps").as_number()))
             : std::nullopt;
       }
-      return ok(Json::Object{{"success", true}, {"bufferedVectors", static_cast<double>(buffer.size())}});
+      return ok(Json::Object{{"success", true}, {"bufferedEvents", static_cast<double>(buffer.size())}});
     });
     server.route("POST", "/api/perceptual-simulation/configure/commit", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
