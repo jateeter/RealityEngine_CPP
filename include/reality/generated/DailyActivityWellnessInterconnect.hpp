@@ -10,9 +10,9 @@ inline constexpr std::string_view machine_id    = "machine-dailyactivitywellness
 inline constexpr std::string_view machine_name  = "Daily Activity Wellness Interconnect";
 inline constexpr std::string_view machine_slug  = "DailyActivityWellnessInterconnect";
 
-inline constexpr int input_offset  = 4310;
+inline constexpr int input_offset  = 4960;
 inline constexpr int input_length  = 10;
-inline constexpr int output_offset = 4320;
+inline constexpr int output_offset = 4970;
 inline constexpr int output_length = 4;
 
 enum class StateId {
