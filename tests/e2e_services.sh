@@ -93,15 +93,59 @@ if count != expected:
 ' "$payload" "$expected"
 }
 
+# Delete every PE source whose region overlaps [offset, offset+length).
+# Asserts afterwards that none remains, so a failed delete cannot pass quietly.
+clear_region_sources() {
+  local pe_url="$1" offset="$2" length="$3" id
+  for id in $(curl -sf "${pe_url}/api/sources" | python3 -c '
+import json, sys
+lo, n = int(sys.argv[1]), int(sys.argv[2])
+data = json.load(sys.stdin)
+data = data.get("sources", data) if isinstance(data, dict) else data
+for s in data:
+    r = s.get("region") or {}
+    o, l = int(r.get("offset", -1)), int(r.get("length", 0))
+    if o < lo + n and lo < o + l:
+        print(s["id"])
+' "$offset" "$length"); do
+    curl -sf -X DELETE "${pe_url}/api/sources/${id}" >/dev/null
+  done
+  curl -sf "${pe_url}/api/sources" | python3 -c '
+import json, sys
+lo, n = int(sys.argv[1]), int(sys.argv[2])
+data = json.load(sys.stdin)
+data = data.get("sources", data) if isinstance(data, dict) else data
+left = [s["id"] for s in data if int((s.get("region") or {}).get("offset", -1)) < lo + n and lo < int((s.get("region") or {}).get("offset", -1)) + int((s.get("region") or {}).get("length", 0))]
+if left:
+    sys.exit(f"sources still writing [{lo}:{lo+n}] after clear: {left}")
+' "$offset" "$length"
+}
+
+# Shift a chain machine's regions from its authored [4600:4608] to start at $2.
+relocate_chain() {
+  printf '%s' "$1" | python3 -c '
+import json, sys
+base = int(sys.argv[1]); doc = json.load(sys.stdin)
+pm = doc["machine"]["perceptualMapping"]
+for k in ("input", "output"):
+    pm[k]["offset"] = base + (pm[k]["offset"] - 4600)
+print(json.dumps(doc, separators=(",", ":")))
+' "$2"
+}
+
 assert_merge_region() {
   local payload="$1"
   local offset="$2"
   local length="$3"
-  python3 -c '
+  # The step response travels on stdin, not argv: with the full corpus resident
+  # its mergeBatch exceeds ARG_MAX, and argv failed the run with "Argument list
+  # too long" (exit 126) at the first chain assertion. That was masked while the
+  # completion assertion before it failed (RealityEngine_CPP#144).
+  printf '%s' "$payload" | python3 -c '
 import json, sys
-data = json.loads(sys.argv[1])
-offset = int(sys.argv[2])
-length = int(sys.argv[3])
+data = json.load(sys.stdin)
+offset = int(sys.argv[1])
+length = int(sys.argv[2])
 step = data.get("step", {})
 for merge in step.get("mergeBatch", []):
     region = merge.get("region", {})
@@ -112,7 +156,7 @@ else:
 space = step.get("perceptualSpace", [])
 if len(space) < offset + length or space[offset:offset + length] != [1, 0]:
     raise SystemExit(f"expected perceptualSpace[{offset}:{offset + length}] == [1, 0]: {space[offset:offset + length]!r}")
-' "$payload" "$offset" "$length"
+' "$offset" "$length"
 }
 
 expected_machine_test_source_count() {
@@ -838,6 +882,15 @@ assert_openai_dispatch_success "$openai_success"
 completion_downstream='{"version":"1.0.0","machine":{"name":"E2E Async Completion Consumer","description":"Consumes async agent completion source after dispatch record delivery","arbiterRule":"PASSTHROUGH","perceptualMapping":{"input":{"offset":4200,"length":4},"output":{"offset":4710,"length":2}},"sequences":[{"id":"e2e-async-completion-seq","name":"completion source drives downstream transition","events":[{"id":"e2e-async-completion-ready","elements":[{"value":1,"comparatorType":"equals"},{"value":0,"comparatorType":"equals"},{"value":0.75,"comparatorType":"equals"},{"value":0,"comparatorType":"equals"}],"isInitial":true,"outputEvents":[{"id":"e2e-async-completion-out","vector":[1,0],"metadata":{"boundary":"agent completion consumed"}}]}]}]}}'
 post_machine "$completion_downstream"
 
+# The OpenAI dispatch above already committed a completion through this same
+# mapping, as sensor agent.<agent>.completion, so [4200:4204] already holds
+# [1,0,0.83,0]. Overlapping sources compose last-writer-wins in canonical
+# (name, id) order, which is the cross-runtime rule (assemble_vector), and
+# "agent:openai/..." sorts after "agent:e2e/...", so that stale completion
+# would win and the consumer below, which matches 0.75 exactly, could never
+# fire (RealityEngine_CPP#144). Retire every prior writer of the lane, so this
+# step measures the completion it commits and nothing left over from earlier.
+clear_region_sources "$PE_URL" 4200 4
 completion_payload="$(bin/reality_engine_cli pe completion --pe-url "$PE_URL" --provider e2e --agent e2e --source-mapping-id agent-completion-risk --correlation-id e2e-correlation --values 1,0,0.75,0)"
 assert_completion_success "$completion_payload"
 completion_step="$(curl -sf -X POST "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/push" -H "Content-Type: application/json" -d '{"compact":true}')"
@@ -848,23 +901,34 @@ chain_a='{"version":"1.0.0","machine":{"name":"E2E Chain A","description":"First
 chain_b='{"version":"1.0.0","machine":{"name":"E2E Chain B","description":"Second machine in PE-to-RE stream propagation test","arbiterRule":"PASSTHROUGH","perceptualMapping":{"input":{"offset":4602,"length":2},"output":{"offset":4604,"length":2}},"sequences":[{"id":"e2e-chain-b-seq","name":"B consumes A output and emits C input","events":[{"id":"e2e-chain-b-output","elements":[{"value":1,"threshold":0.5},{"value":0,"threshold":0.5}],"isInitial":true,"outputEvents":[{"id":"e2e-chain-b-out","vector":[1,0],"metadata":{"boundary":"B->C"}}]}]}]}}'
 chain_c='{"version":"1.0.0","machine":{"name":"E2E Chain C","description":"Third machine in PE-to-RE stream propagation test","arbiterRule":"PASSTHROUGH","perceptualMapping":{"input":{"offset":4604,"length":2},"output":{"offset":4606,"length":2}},"sequences":[{"id":"e2e-chain-c-seq","name":"C consumes B output and emits terminal output","events":[{"id":"e2e-chain-c-output","elements":[{"value":1,"threshold":0.5},{"value":0,"threshold":0.5}],"isInitial":true,"outputEvents":[{"id":"e2e-chain-c-out","vector":[1,0],"metadata":{"boundary":"C terminal"}}]}]}]}}'
 
+# The chain used to sit at a fixed [4600:4608]. The corpus has grown into it:
+# SocialIsolationAccessInterconnect reads [4602:4616], and with
+# PE_SOURCE_BOOTSTRAP=auto its interned test source rewrites B's input on every
+# step, so B never saw A's output (RealityEngine_CPP#144, masked until the
+# completion assertion above passed). Place the chain past the furthest region
+# any resident machine declares, where no corpus source can write.
+chain_base="$(curl -sf "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/config" | python3 -c 'import json,sys; d=int(json.load(sys.stdin)["eventDimension"]); print(((d + 15) // 16) * 16 + 16)')"
+chain_a="$(relocate_chain "$chain_a" "$chain_base")"
+chain_b="$(relocate_chain "$chain_b" "$chain_base")"
+chain_c="$(relocate_chain "$chain_c" "$chain_base")"
+
 post_machine "$chain_a"
 post_machine "$chain_b"
 post_machine "$chain_c"
 
 curl -sf -X POST "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/sources" \
   -H "Content-Type: application/json" \
-  -d '{"id":"e2e-chain-source","type":"test","name":"E2E Chain Source","active":true,"region":{"offset":4600,"length":2},"inputs":[[1,0],[0,1]],"loop":false}' >/dev/null
+  -d '{"id":"e2e-chain-source","type":"test","name":"E2E Chain Source","active":true,"region":{"offset":'"$chain_base"',"length":2},"inputs":[[1,0],[0,1]],"loop":false}' >/dev/null
 
 curl -sf -X POST "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/push" -H "Content-Type: application/json" -d '{"compact":true}' >/dev/null
 chain_step_2="$(curl -sf -X POST "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/push" -H "Content-Type: application/json" -d '{"compact":true}')"
-assert_merge_region "$chain_step_2" 4602 2
+assert_merge_region "$chain_step_2" "$((chain_base + 2))" 2
 
 chain_step_3="$(curl -sf -X POST "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/push" -H "Content-Type: application/json" -d '{"compact":true}')"
-assert_merge_region "$chain_step_3" 4604 2
+assert_merge_region "$chain_step_3" "$((chain_base + 4))" 2
 
 chain_step_4="$(curl -sf -X POST "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/push" -H "Content-Type: application/json" -d '{"compact":true}')"
-assert_merge_region "$chain_step_4" 4606 2
+assert_merge_region "$chain_step_4" "$((chain_base + 6))" 2
 
 echo "RealityEngine_CPP chained stream e2e tests passed"
 
