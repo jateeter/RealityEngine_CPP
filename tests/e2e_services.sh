@@ -1022,4 +1022,55 @@ curl -sf -X PATCH "${DECL_PE_URL}/api/sources/e2e-pausable-test" \
 assert_source_active "$(curl -sf "${DECL_PE_URL}/api/sources")" "e2e-pausable-test" false "paused with its sequence intact"
 echo "RealityEngine_CPP continuous expiry e2e tests passed"
 
+# The export reports the machine as it is running (RealityEngine_CI#464). It
+# carries isActive, state and wasJustMatched, and those only move on the
+# spaceRuntime's copy; exporting the machine registry's reported every machine
+# as freshly loaded, so cpp-1 disagreed with LSP and Scala on every machine the
+# hosted lane's live MQTT traffic had advanced. Last, because it drives a
+# machine and leaves it advanced.
+python3 - "http://localhost:${REALITY_ENGINE_E2E_PORT}" <<'EXPORT_LIVE_PY'
+import json, sys, urllib.request
+
+base = sys.argv[1]
+
+
+def call(path, body=None):
+    req = urllib.request.Request(base + path, method="POST" if body is not None else "GET",
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+
+def first_event(machine):
+    return machine["sequences"][0]["events"][0]
+
+
+machines = call("/api/machines")
+machines = machines.get("machines", machines)
+probe = None
+for m in machines:
+    detail = call(f"/api/machines/{m['id']}")["machine"]
+    if detail.get("perceptualMapping") and detail.get("sequences") and first_event(detail).get("elements"):
+        probe = detail
+        break
+if probe is None:
+    raise SystemExit("no running machine with a first event to drive")
+
+inputs = [e.get("value", e) if isinstance(e, dict) else e for e in first_event(probe)["elements"]]
+call(f"/api/machines/{probe['id']}/process", {"inputEvent": inputs})
+
+running = first_event(call(f"/api/machines/{probe['id']}")["machine"])
+exported = first_event(call(f"/api/machines/{probe['id']}/export")["machine"])
+if not running.get("wasJustMatched"):
+    raise SystemExit(f"{probe['name']}: driving its first event did not match it; the probe proves nothing")
+fields = ("isActive", "state", "wasJustMatched")
+diff = {f: (running.get(f), exported.get(f)) for f in fields if running.get(f) != exported.get(f)}
+if diff:
+    raise SystemExit(f"{probe['name']}: export disagrees with the running machine "
+                     f"(running, exported): {diff}")
+print(f"  export of {probe['name']!r} reports its running state")
+EXPORT_LIVE_PY
+echo "RealityEngine_CPP export live-state e2e test passed"
+
 echo "RealityEngine_CPP service e2e tests passed"
