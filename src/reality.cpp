@@ -698,8 +698,15 @@ SequenceResult CriticalEventSequence::transition(const Vector& input, std::optio
   }
   return result;
 }
+// Every event back to its loaded state, wasJustMatched included (SURFACE_SPEC.md,
+// "Already-settled instances", RealityEngine_CI#464). Keeping it left a reset
+// engine reporting a match from a step its own histories no longer held, so the
+// same machine exported differently here than on LSP immediately after a reset.
 void CriticalEventSequence::reset() {
-  for (auto& [_, v] : vectors) v.isInitial ? v.set_active() : v.clear_active();
+  for (auto& [_, v] : vectors) {
+    v.isInitial ? v.set_active() : v.clear_active();
+    v.clear_was_just_matched();
+  }
 }
 // `vectors` is a std::map keyed by event id, so this is already id-sorted and
 // agrees with Scala's `getInitialVectorIds.sorted` without a second sort.
