@@ -1400,8 +1400,8 @@ int main() {
       "perceptualMapping": {"input": {"offset": 0, "length": 2},
                             "output": {"offset": 8, "length": 2}},
       "sequences": [{"id": "seq-shape", "name": "Shape Seq",
-                     "vectors": [{"id": "v1", "name": "A", "isInitial": true,
-                                  "values": [1, 0]}]}]
+                     "events": [{"id": "v1", "name": "A", "isInitial": true,
+                                 "elements": [{"value": 1}, {"value": 0}]}]}]
     })";
 
     // The bare object — the declared schema. Every field must survive, which is
@@ -1410,6 +1410,10 @@ int main() {
     Machine bare = load_machine_from_json_string(machineBody, "machine-bare");
     assert(bare.name == "Shape Fixture");
     assert(bare.sequence_count() == 1);
+    // The Reality Event itself, not just its sequence. The fixture spelled the
+    // list `vectors` after the #220 rename moved it to `events`, so the sequence
+    // loaded empty and every assertion above still passed.
+    assert(bare.all_sequences().front().all_vectors().size() == 1);
     assert(bare.perceptualMapping.has_value());
     assert(bare.perceptualMapping->input.offset == 0);
 
