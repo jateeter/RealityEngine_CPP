@@ -869,6 +869,7 @@ public:
   PerceptualSpace& perceptual_space();
   int current_step() const;
   bool is_running() const;
+  bool is_configured() const;
   long step_delay_ms() const;
 
 private:

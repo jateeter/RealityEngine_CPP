@@ -8,9 +8,12 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <shared_mutex>
 #include <sstream>
+#include <thread>
 
 using namespace reality;
 
@@ -1053,6 +1056,9 @@ public:
     });
     server.route("POST", "/api/perceptual-simulation/step", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      // A caller precondition, so 400 (SURFACE_SPEC.md, "Already-settled
+      // instances", RealityEngine_CI#489). It surfaced as an uncaught throw: 500.
+      if (!spaceRuntime.is_configured()) return http::error_response("Simulation not configured", 400);
       auto s = spaceRuntime.step();
       if (!s) return ok(Json::Object{{"done", true}, {"success", true}});
       return ok(Json::Object{{"success", true}, {"step", to_json(*s)}});
@@ -1064,7 +1070,9 @@ public:
     });
     server.route("POST", "/api/perceptual-simulation/start", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      if (!spaceRuntime.is_configured()) return http::error_response("Simulation not configured", 400);
       spaceRuntime.start();
+      start_autoplay();
       return ok(Json::Object{{"success", true}});
     });
     server.route("POST", "/api/perceptual-simulation/stop", [this](const http::Request&) {
@@ -1139,13 +1147,25 @@ public:
       if (cfg.at("inputRegion").is_object()) {
         bufferedRegion = {static_cast<int>(cfg.at("inputRegion").at("offset").as_number()), static_cast<int>(cfg.at("inputRegion").at("length").as_number())};
         bufferedDelay = static_cast<long>(cfg.at("stepDelayMs").as_number(100));
+        bufferedRegionSet = true;
+        // maxSteps bounds the walk (RealityEngine_CI#489). This runtime read it
+        // nowhere, so a bounded simulation ran to the end of its sequence here
+        // and stopped early on LSP and Scala.
+        bufferedMaxSteps = cfg.at("maxSteps").is_number()
+            ? std::optional<int>(static_cast<int>(cfg.at("maxSteps").as_number()))
+            : std::nullopt;
       }
       return ok(Json::Object{{"success", true}, {"bufferedVectors", static_cast<double>(buffer.size())}});
     });
     server.route("POST", "/api/perceptual-simulation/configure/commit", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
-      spaceRuntime.configure(buffer, bufferedRegion, bufferedDelay);
+      // Without a region there is nowhere to write the sequence; configuring
+      // anyway put it on cell 0 (RealityEngine_CI#489, as Scala already refused).
+      if (!bufferedRegionSet) return http::error_response("No config buffered. Send a chunk with config first.", 400);
+      spaceRuntime.configure(buffer, bufferedRegion, bufferedDelay, bufferedMaxSteps);
       buffer.clear();
+      bufferedRegionSet = false;
+      bufferedMaxSteps.reset();
       return ok(Json::Object{{"success", true}});
     });
     server.route("POST", "/api/perception/diagnostic", [this](const http::Request& req) {
@@ -1905,6 +1925,40 @@ private:
   std::vector<Vector> buffer;
   RegionMapping bufferedRegion{0, 1};
   long bufferedDelay = 100;
+  bool bufferedRegionSet = false;
+  std::optional<int> bufferedMaxSteps;
+  // Auto-play (RealityEngine_CI#489): `start` steps the committed sequence every
+  // stepDelayMs while the run is live. Each start takes a new generation, so a
+  // loop left from an earlier start exits instead of stepping alongside it; a
+  // stop, reset or commit clears `running`, which every loop checks under the
+  // lock before stepping.
+  std::atomic<unsigned long> autoplayGeneration{0};
+
+  // Caller holds spaceRuntimeMutex. The loop takes it per step and sleeps
+  // outside it, so the routes stay responsive between steps. Detached: the
+  // server lives for the life of the process.
+  void start_autoplay() {
+    const unsigned long generation = ++autoplayGeneration;
+    std::thread([this, generation] {
+      for (;;) {
+        long delay = 0;
+        {
+          std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+          if (generation != autoplayGeneration.load() || !spaceRuntime.is_running()) return;
+          try {
+            if (!spaceRuntime.step()) return;  // done: step() has stopped the run
+          } catch (const std::exception& e) {
+            std::cerr << "perceptual-simulation auto-play stopped: " << e.what() << std::endl;
+            spaceRuntime.stop();
+            return;
+          }
+          if (!spaceRuntime.is_running()) return;
+          delay = spaceRuntime.step_delay_ms();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay > 0 ? delay : 1));
+      }
+    }).detach();
+  }
   bool includeMachineResultsDefault = true;
   bool includePerceptualSpaceDefault = true;
   // Defaults stay full so no existing caller changes shape and the parity

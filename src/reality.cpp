@@ -1251,6 +1251,13 @@ std::optional<SimulationStep> PerceptualSpaceRuntime::step() {
   ++currentStep;
   steps.insert(steps.begin(), result);
   if (steps.size() > maxHistory) steps.resize(maxHistory);
+  // A run ends on the step that finishes the walk, not on the call after it,
+  // so isRunning reads false as soon as the last vector has been applied — as
+  // Scala's runtime does (RealityEngine_CI#489).
+  if (running && (currentStep >= static_cast<int>(configuredInputSequence.size()) ||
+                  (configuredMaxSteps && currentStep >= *configuredMaxSteps))) {
+    stop();
+  }
   return result;
 }
 SimulationStep PerceptualSpaceRuntime::process_immediate(const Vector& vector, std::optional<ComparatorType> overrideType) {
@@ -1901,6 +1908,7 @@ size_t PerceptualSpaceRuntime::trajectory_limit() const { return maxTrajectory; 
 PerceptualSpace& PerceptualSpaceRuntime::perceptual_space() { return space; }
 int PerceptualSpaceRuntime::current_step() const { return currentStep; }
 bool PerceptualSpaceRuntime::is_running() const { return running; }
+bool PerceptualSpaceRuntime::is_configured() const { return configured; }
 long PerceptualSpaceRuntime::step_delay_ms() const { return configuredStepDelayMs; }
 
 PerceptionEngine::PerceptionEngine(int vectorDimension)

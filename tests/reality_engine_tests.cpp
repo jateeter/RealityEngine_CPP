@@ -874,6 +874,25 @@ int main() {
     assert(r2.machineOutput.has_value());
   }
 
+  // The configured simulation (SURFACE_SPEC.md, "Already-settled instances",
+  // RealityEngine_CI#489): maxSteps bounds the walk, and a live run ends on the
+  // step that finishes it rather than on the call after.
+  {
+    PerceptualSpaceRuntime sim(16);
+    assert(!sim.is_configured());
+    sim.configure({{1.0, 0.0}, {0.0, 1.0}, {1.0, 1.0}}, RegionMapping{3, 2}, 100, 2);
+    assert(sim.is_configured());
+    sim.start();
+    assert(sim.is_running());
+    assert(sim.step().has_value());
+    assert(sim.is_running());
+    assert(sim.step().has_value());
+    assert(!sim.is_running());           // maxSteps reached on this step
+    assert(!sim.step().has_value());     // and the walk is done
+    assert(sim.current_step() == 2);
+    assert(sim.is_configured());         // reset/stop keep the configuration
+  }
+
   // Reset returns every event to its loaded state, wasJustMatched included
   // (SURFACE_SPEC.md, "Already-settled instances", RealityEngine_CI#464). It
   // kept the last match here and on Scala while LSP cleared it, so 20 of 21
