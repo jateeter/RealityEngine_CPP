@@ -916,12 +916,21 @@ public:
     // Scoped to the export rather than to Machine::to_json, which also serves
     // GET /api/machines. That listing is a runtime view, makes no claim to be a
     // corpus document, and consumers read its lower-case `arbiterRule` today.
+    //
+    // Exported as it is *running* (#37, and active_vectors_json): the runtime
+    // state corpus_document carries through — isActive, state, wasJustMatched —
+    // only moves on the spaceRuntime's copy. Reading the machine registry's
+    // exported every machine as freshly loaded however far it had advanced,
+    // which LSP and Scala do not (RealityEngine_CI#464). The registered copy
+    // stays the answer for a machine the spaceRuntime does not hold.
     server.route("GET", "/api/machines/:id/export", [this](const http::Request& req) {
       std::shared_lock<std::shared_mutex> lock(registryMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      const Machine* live = spaceRuntime.running_machine(it->first);
       return ok(Json::Object{{"version", "1.0.0"},
-                             {"machine", corpus_document(it->second)}});
+                             {"machine", corpus_document(live ? *live : it->second)}});
     });
     server.route("GET", "/api/machines/:id/checkpoints", [this](const http::Request& req) {
       Json::Array arr;
