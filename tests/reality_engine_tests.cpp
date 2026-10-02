@@ -694,6 +694,118 @@ static void verify_sensor_value_earns_activity() {
   assert(assembled[41] == 0.25);
 }
 
+// ── two sources on one cell: the incumbent writer keeps it ───────────────────
+//
+// ARBITER_CONTRACT.md §4.4b (owner decision, 2026-10-02). Two sources writing a
+// cell in one transition violates the single transition time constraint. Within
+// a tier the source activated earliest keeps the cell; equal activation
+// instants — every seed interned at boot — fall back to canonical (name, id),
+// first in order winning. Before this the *last* name won.
+static SourceConfig make_seed(const std::string& id, const std::string& name,
+                              RegionMapping region, Vector values) {
+  SourceConfig s;
+  s.kind = "test";
+  s.id = id;
+  s.name = name;
+  s.region = region;
+  s.inputs = {std::move(values)};
+  s.loop = true;
+  return s;
+}
+
+static const ContendedCell* contended_cell(const std::vector<ContendedCell>& cells, int cell) {
+  for (const auto& c : cells) if (c.cell == cell) return &c;
+  return nullptr;
+}
+
+static void verify_stt_incumbent_source() {
+  // Same instant (boot): canonical (name, id), first wins — not last.
+  {
+    PerceptionEngine pe;
+    pe.add_source(make_seed("seed-b", "Beta seed", {10, 2}, {0.25, 0.25}));
+    pe.add_source(make_seed("seed-a", "Alpha seed", {10, 2}, {0.75, 0.75}));
+    assert(pe.assemble_vector()[10] == 0.75);
+    auto cells = pe.source_contention();
+    assert(cells.size() == 2);
+    const ContendedCell* c = contended_cell(cells, 10);
+    assert(c && c->resolution == "incumbent" && c->winner.id == "seed-a");
+    assert(c->suppressed.size() == 1 && c->suppressed[0].id == "seed-b");
+  }
+  // A newcomer loses, however its name sorts.
+  {
+    PerceptionEngine pe;
+    pe.add_source(make_seed("seed-m", "Middle seed", {20, 1}, {0.5}));
+    pe.advance();  // transition 1
+    pe.add_source(make_seed("seed-z", "Aardvark seed", {20, 1}, {1.0}));
+    assert(pe.get_source("seed-m")->activatedAt == 0);
+    assert(pe.get_source("seed-z")->activatedAt == 1);
+    assert(pe.assemble_vector()[20] == 0.5);
+    // Giving up the cell and coming back makes the old incumbent the newcomer.
+    assert(pe.deactivate_source("seed-m"));
+    pe.advance();  // transition 2
+    auto patched = *pe.get_source("seed-m");
+    patched.active = true;
+    pe.add_source(patched);
+    assert(pe.get_source("seed-m")->activatedAt == 2);
+    assert(pe.assemble_vector()[20] == 1.0);
+    // A patch of a source that stays active keeps its claim.
+    auto kept = *pe.get_source("seed-z");
+    kept.name = "Renamed aardvark";
+    pe.add_source(kept);
+    assert(pe.get_source("seed-z")->activatedAt == 1);
+  }
+  // Live over seed is the tier, recorded as such; live vs live is incumbency.
+  {
+    PerceptionEngine pe;
+    pe.add_source(make_seed("seed-hk", "Zz HealthKit seed", {30, 1}, {1.0}));
+    pe.advance();  // transition 1
+    pe.add_source(make_sensor("live-early", "hk.early", {30, 1}, /*ttlMs=*/60000));
+    assert(pe.update_sensor_value("hk.early", {0.25}));
+    pe.advance();  // transition 2
+    pe.add_source(make_sensor("live-late", "hk.late", {30, 1}, /*ttlMs=*/60000));
+    assert(pe.update_sensor_value("hk.late", {0.75}));
+    assert(pe.get_source("live-early")->activatedAt == 1);
+    assert(pe.get_source("live-late")->activatedAt == 2);
+    assert(pe.assemble_vector()[30] == 0.25);
+    const auto cells = pe.source_contention();
+    const ContendedCell* c = contended_cell(cells, 30);
+    assert(c && c->resolution == "incumbent" && c->winner.id == "live-early");
+    assert(c->suppressed.size() == 2);
+    // Only the seed contending is the tier deciding.
+    assert(pe.deactivate_source("live-late"));
+    const auto tier = pe.source_contention();
+    const ContendedCell* t = contended_cell(tier, 30);
+    assert(t && t->resolution == "live-over-seed" && t->winner.id == "live-early");
+  }
+  // Counting is the push's job: source_contention is pure; record_contention
+  // counts; reset clears and re-stamps every source to instant 0.
+  {
+    PerceptionEngine pe;
+    pe.add_source(make_seed("seed-a", "Alpha seed", {40, 1}, {1.0}));
+    pe.advance();
+    pe.add_source(make_seed("seed-b", "Beta seed", {40, 1}, {0.5}));
+    (void)pe.source_contention();
+    assert(pe.contention_json().at("counters").array().empty());
+    pe.record_contention();
+    pe.record_contention();
+    const Json j = pe.contention_json();
+    assert(j.at("cells").array().size() == 1);
+    const auto& counters = j.at("counters").array();
+    assert(counters.size() == 2);
+    assert(counters[0].at("id").as_string() == "seed-a" && counters[0].at("contended").as_number() == 2 &&
+           counters[0].at("suppressed").as_number() == 0);
+    assert(counters[1].at("id").as_string() == "seed-b" && counters[1].at("suppressed").as_number() == 2);
+    pe.reset();
+    assert(pe.get_source("seed-b")->activatedAt == 0);
+    assert(pe.contention_json().at("counters").array().empty());
+    assert(pe.contention_json().at("cells").array().empty());
+    // Removing a source drops its counters.
+    pe.record_contention();
+    assert(pe.remove_source("seed-b"));
+    assert(pe.contention_json().at("counters").array().size() == 1);
+  }
+}
+
 // ── activity expires continuously, not at reset ──────────────────────────────
 //
 // RealityEngine_CI#175. #41 made reset() validate the stored flag; this makes
@@ -1124,6 +1236,7 @@ int main() {
   verify_only_ingress_originates_sensor_activity();
   verify_sensor_can_be_paused();
   verify_sensor_value_earns_activity();
+  verify_stt_incumbent_source();
 
   // ── activity expires continuously, not only at reset ───────────────────────
   //

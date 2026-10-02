@@ -2029,6 +2029,14 @@ SourceConfig PerceptionEngine::add_source(SourceConfig source) {
   } else {
     source.active = true;
   }
+  // Activation instant (ARBITER_CONTRACT.md §4.4b). A source that was already
+  // active and stays active — a PATCH, a re-registration — keeps its claim; any
+  // other registration is a new activation, stamped with the current transition.
+  {
+    auto prev = sources.find(source.id);
+    const bool continuing = prev != sources.end() && prev->second.active && source.active;
+    source.activatedAt = continuing ? prev->second.activatedAt : globalStep;
+  }
   // Grow to cover the source's region.  Without this the source is stored,
   // counted and returned by /api/pe/sources, then silently dropped by
   // assemble_vector — machines whose perceptualMapping.input starts past the
@@ -2042,7 +2050,7 @@ SourceConfig PerceptionEngine::add_source(SourceConfig source) {
   if (source.pattern == SimPattern::RandomWalk) walkState[source.id] = Vector(static_cast<size_t>(source.region.length), source.dcOffset);
   return source;
 }
-bool PerceptionEngine::remove_source(const std::string& id) { testStep.erase(id); walkState.erase(id); return sources.erase(id) > 0; }
+bool PerceptionEngine::remove_source(const std::string& id) { testStep.erase(id); walkState.erase(id); contentionCounters.erase(id); return sources.erase(id) > 0; }
 std::optional<SourceConfig> PerceptionEngine::get_source(const std::string& id) const {
   auto it = sources.find(id);
   if (it == sources.end()) return std::nullopt;
@@ -2073,6 +2081,7 @@ bool PerceptionEngine::update_sensor_value(const std::string& sensorId, const Ve
     // would stay outside active_sources_canonical() even after a fresh reading,
     // and assemble_vector() would keep writing zeros for a sensor that is
     // currently reporting.
+    if (!s.active) s.activatedAt = globalStep;  // earning activity is an activation (§4.4b)
     s.active = true;
     return true;
   }
@@ -2097,8 +2106,16 @@ std::vector<const SourceConfig*> PerceptionEngine::active_sources_canonical() co
   // RealityEngine_CPP#146). Without the tier the winner was decided by name:
   // "HealthKit Vitals Monitor / 2 sequences" sorted after "HealthKit Blood
   // Pressure" and replayed [0,0,0,0] over a live reading on [4320:4324].
-  // Within each tier the canonical (name, id) order is unchanged, so the three
-  // runtimes still compose identically.
+  //
+  // Within a tier the incumbent writer keeps the cell (ARBITER_CONTRACT.md
+  // §4.4b, owner decision 2026-10-02): two sources on one cell in one
+  // transition violates the single transition time constraint, and the source
+  // that has held the cell longest — earliest activation instant — wins. Equal
+  // instants, every seed interned at boot among them, fall back to canonical
+  // (name, id), first in that order winning. Composition is last-writer-wins,
+  // so the tier is written newest first and in descending (name, id): the
+  // incumbent lands last. Before this, ascending (name, id) made the *last*
+  // name win, which let a newcomer displace a writer silently.
   std::vector<const SourceConfig*> active;
   active.reserve(sources.size());
   for (const auto& [_, s] : sources) if (s.active) active.push_back(&s);
@@ -2106,10 +2123,87 @@ std::vector<const SourceConfig*> PerceptionEngine::active_sources_canonical() co
             [](const SourceConfig* a, const SourceConfig* b) {
               const bool aLive = a->kind != "test", bLive = b->kind != "test";
               if (aLive != bLive) return !aLive;  // seed tier sorts first
-              if (a->name != b->name) return a->name < b->name;
-              return a->id < b->id;
+              if (a->activatedAt != b->activatedAt) return a->activatedAt > b->activatedAt;  // newest first
+              if (a->name != b->name) return a->name > b->name;
+              return a->id > b->id;
             });
   return active;
+}
+static SourceRef source_ref(const SourceConfig& s) {
+  return SourceRef{s.id, s.name, s.kind, s.activatedAt};
+}
+std::vector<ContendedCell> PerceptionEngine::source_contention() const {
+  // The writers of each cell, in composition order, exactly as assemble_vector
+  // writes them — so the last writer recorded is the value that lands.
+  std::map<int, std::vector<const SourceConfig*>> writers;
+  const int size = static_cast<int>(persistentVector.size());
+  for (const SourceConfig* sp : active_sources_canonical()) {
+    const auto vals = source_values(*sp);
+    for (int i = 0; i < sp->region.length && i < static_cast<int>(vals.size()); ++i) {
+      const int cell = sp->region.offset + i;
+      if (cell < 0 || cell >= size) continue;
+      writers[cell].push_back(sp);
+    }
+  }
+  std::vector<ContendedCell> out;
+  for (const auto& [cell, ws] : writers) {
+    if (ws.size() < 2) continue;
+    const SourceConfig* winner = ws.back();
+    const bool winnerLive = winner->kind != "test";
+    std::vector<const SourceConfig*> lost(ws.begin(), ws.end() - 1);
+    std::sort(lost.begin(), lost.end(), [](const SourceConfig* a, const SourceConfig* b) {
+      if (a->name != b->name) return a->name < b->name;
+      return a->id < b->id;
+    });
+    ContendedCell c;
+    c.cell = cell;
+    c.winner = source_ref(*winner);
+    bool sameTier = false;
+    for (const SourceConfig* l : lost) {
+      c.suppressed.push_back(source_ref(*l));
+      if ((l->kind != "test") == winnerLive) sameTier = true;
+    }
+    c.resolution = sameTier ? "incumbent" : "live-over-seed";
+    out.push_back(std::move(c));
+  }
+  return out;
+}
+void PerceptionEngine::record_contention() {
+  lastContention = source_contention();
+  lastContentionTransition = globalStep;
+  std::set<std::string> contended, lost;
+  for (const auto& c : lastContention) {
+    contended.insert(c.winner.id);
+    for (const auto& l : c.suppressed) { contended.insert(l.id); lost.insert(l.id); }
+  }
+  for (const auto& id : contended) {
+    auto& counter = contentionCounters[id];
+    ++counter.contended;
+    if (lost.count(id)) ++counter.suppressed;
+  }
+}
+static Json source_ref_json(const SourceRef& r) {
+  return Json::Object{{"id", r.id}, {"name", r.name}, {"kind", r.kind},
+                      {"activatedAt", static_cast<double>(r.activatedAt)}};
+}
+Json PerceptionEngine::contention_json() const {
+  Json::Array cells;
+  for (const auto& c : lastContention) {
+    Json::Array suppressed;
+    for (const auto& l : c.suppressed) suppressed.push_back(source_ref_json(l));
+    cells.push_back(Json::Object{{"cell", static_cast<double>(c.cell)}, {"resolution", c.resolution},
+                                 {"winner", source_ref_json(c.winner)}, {"suppressed", suppressed}});
+  }
+  Json::Array counters;
+  for (const auto& s : get_sources()) {  // canonical (name, id)
+    auto it = contentionCounters.find(s.id);
+    if (it == contentionCounters.end()) continue;
+    counters.push_back(Json::Object{{"id", s.id}, {"name", s.name},
+                                    {"contended", static_cast<double>(it->second.contended)},
+                                    {"suppressed", static_cast<double>(it->second.suppressed)}});
+  }
+  return Json::Object{{"transition", static_cast<double>(lastContentionTransition)},
+                      {"cells", cells}, {"counters", counters}};
 }
 Vector PerceptionEngine::assemble_vector() const {
   Vector out = persistentVector;
@@ -2198,7 +2292,13 @@ void PerceptionEngine::reset() {
       // value to contribute.
       s.active = true;
     }
+    // A reset is a boot for the run: every source starts at instant 0, and the
+    // canonical (name, id) tie-break decides contended cells (§4.4b).
+    s.activatedAt = 0;
   }
+  lastContention.clear();
+  lastContentionTransition = 0;
+  contentionCounters.clear();
 }
 Vector PerceptionEngine::source_values(const SourceConfig& s) const {
   if (s.kind == "test") {

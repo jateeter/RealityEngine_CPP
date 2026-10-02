@@ -951,6 +951,29 @@ struct SourceConfig {
   // "ollama", "healthkit", "carekit", "localai", "signal").  Empty for
   // manually created sources; omitted from JSON when unset.
   std::string origin;
+  // Activation instant: the globalStep at which this source last became
+  // active (ARBITER_CONTRACT.md §4.4b). Within a composition tier the source
+  // activated earliest keeps a contended cell. Not serialised on the source
+  // listing; reported by GET /api/sources/contention.
+  long long activatedAt = 0;
+};
+
+// One contended cell from the most recent push assembly (§4.4b).
+struct SourceRef {
+  std::string id;
+  std::string name;
+  std::string kind;
+  long long activatedAt = 0;
+};
+struct ContendedCell {
+  int cell = 0;
+  std::string resolution;  // "incumbent" | "live-over-seed"
+  SourceRef winner;
+  std::vector<SourceRef> suppressed;  // canonical (name, id) order
+};
+struct ContentionCounter {
+  long long contended = 0;   // transitions in which the source shared a cell
+  long long suppressed = 0;  // transitions in which it lost at least one cell
 };
 
 class PerceptionEngine {
@@ -966,9 +989,18 @@ public:
   bool remove_source(const std::string& id);
   std::optional<SourceConfig> get_source(const std::string& id) const;
   std::vector<SourceConfig> get_sources() const;
-  // Active sources in composition order: seed (test) tier, then live, each by
-  // canonical (name, id) — see assemble_vector.
+  // Active sources in composition order: seed (test) tier, then live; within a
+  // tier newest activation first, then descending (name, id), so the incumbent
+  // writes last — see assemble_vector and ARBITER_CONTRACT.md §4.4b.
   std::vector<const SourceConfig*> active_sources_canonical() const;
+  // Cells written by more than one active source, resolved as assemble_vector
+  // resolves them. Pure: computing it neither records nor counts.
+  std::vector<ContendedCell> source_contention() const;
+  // Record the contention of the assembly a push is about to send, and add it
+  // to the per-source counters. Called from the push path only.
+  void record_contention();
+  // GET /api/sources/contention payload.
+  Json contention_json() const;
   bool update_sensor_value(const std::string& sensorId, const Vector& values);
   Vector assemble_vector() const;
   void update_from_perceptual_space(const Vector& values);
@@ -992,6 +1024,9 @@ private:
   // line is diagnosable.
   void ensure_capacity(int requiredEnd, const std::string& context);
   std::map<std::string, SourceConfig> sources;
+  std::vector<ContendedCell> lastContention;
+  long long lastContentionTransition = 0;
+  std::map<std::string, ContentionCounter> contentionCounters;
   std::map<std::string, int> testStep;
   std::map<std::string, Vector> walkState;
   int dimension = 256;
