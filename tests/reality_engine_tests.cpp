@@ -806,6 +806,48 @@ static void verify_stt_incumbent_source() {
   }
 }
 
+// ── a source on an OSRE cell is folded with the OSRE value ───────────────────
+//
+// ARBITER_CONTRACT.md §4.4b: the writing machine's declared
+// outputMergeTransformation, over [0..1], resolves a source against the OSRE
+// term. Before, the source simply replaced it.
+static bool near(double a, double b) { return std::abs(a - b) < 1e-12; }
+
+static void verify_osre_fold_operator() {
+  assert(near(fold_unit_interval("or", 0.3, 0.6), 0.6));
+  assert(near(fold_unit_interval("join", 0.3, 0.6), 0.6));
+  assert(near(fold_unit_interval("and", 0.3, 0.6), 0.3));
+  assert(near(fold_unit_interval("meet", 0.3, 0.6), 0.3));
+  assert(near(fold_unit_interval("discrete-median", 0.3, 0.6), 0.3));
+  assert(near(fold_unit_interval("strong-disjunction", 0.7, 0.6), 1.0));
+  assert(near(fold_unit_interval("strong-conjunction", 0.7, 0.6), 0.3));
+  assert(near(fold_unit_interval("strong-conjunction", 0.2, 0.3), 0.0));
+  assert(near(fold_unit_interval("xor", 0.25, 1.0), 0.75));
+  assert(near(fold_unit_interval("nor", 0.25, 0.5), 0.5));
+  assert(near(fold_unit_interval("nand", 0.25, 0.5), 0.75));
+  assert(near(fold_unit_interval("not-a-name", 0.25, 0.5), 0.5));
+
+  PerceptionEngine pe(64);
+  Vector ps(64, 0.0);
+  ps[50] = 0.6;
+  ps[51] = 0.6;
+  ps[52] = 0.6;  // OSRE-only: no source writes it
+  pe.update_from_perceptual_space(ps);
+  pe.add_source(make_seed("seed-osre", "OSRE lane seed", {50, 2}, {0.3, 0.3}));
+  // Without an OSRE term the source's value stands, as before.
+  assert(near(pe.assemble_vector()[50], 0.3));
+  pe.set_osre_fold({{50, "or"}, {51, "and"}, {52, "or"}});
+  Vector v = pe.assemble_vector();
+  assert(near(v[50], 0.6));  // max(0.3, 0.6)
+  assert(near(v[51], 0.3));  // min(0.3, 0.6)
+  assert(near(v[52], 0.6));  // OSRE only — unchanged
+  pe.set_osre_fold({{50, "strong-disjunction"}});
+  assert(near(pe.assemble_vector()[50], 0.9));
+  pe.reset();
+  // Reset clears the fold along with the OSRE term it folded with.
+  assert(near(pe.assemble_vector()[50], 0.3));
+}
+
 // ── activity expires continuously, not at reset ──────────────────────────────
 //
 // RealityEngine_CI#175. #41 made reset() validate the stored flag; this makes
@@ -1237,6 +1279,7 @@ int main() {
   verify_sensor_can_be_paused();
   verify_sensor_value_earns_activity();
   verify_stt_incumbent_source();
+  verify_osre_fold_operator();
 
   // ── activity expires continuously, not only at reset ───────────────────────
   //
