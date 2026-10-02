@@ -2089,11 +2089,23 @@ std::vector<const SourceConfig*> PerceptionEngine::active_sources_canonical() co
   //
   // Sorted by (name, id) — the order already used for the listing endpoints,
   // and derived from corpus-declared names rather than minted ids.
+  //
+  // Preceded by a tier: the seed first, live inputs last. Interned test sources
+  // are ISRESeed(n), the base every live input folds over — the same direction
+  // as the OSRE->ISRE fold — so where a machine's seed and a live source share a
+  // lane, the live source wins, always (owner decision, 2026-10-02,
+  // RealityEngine_CPP#146). Without the tier the winner was decided by name:
+  // "HealthKit Vitals Monitor / 2 sequences" sorted after "HealthKit Blood
+  // Pressure" and replayed [0,0,0,0] over a live reading on [4320:4324].
+  // Within each tier the canonical (name, id) order is unchanged, so the three
+  // runtimes still compose identically.
   std::vector<const SourceConfig*> active;
   active.reserve(sources.size());
   for (const auto& [_, s] : sources) if (s.active) active.push_back(&s);
   std::sort(active.begin(), active.end(),
             [](const SourceConfig* a, const SourceConfig* b) {
+              const bool aLive = a->kind != "test", bLive = b->kind != "test";
+              if (aLive != bLive) return !aLive;  // seed tier sorts first
               if (a->name != b->name) return a->name < b->name;
               return a->id < b->id;
             });
