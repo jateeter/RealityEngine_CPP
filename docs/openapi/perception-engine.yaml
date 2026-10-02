@@ -314,6 +314,21 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: post_api_sources_bootstrap_from_machines
+  /api/sources/contention:
+    get:
+      tags:
+      - Sources & Sensors
+      summary: Get /api/sources/contention
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_sources_contention
   /api/sensors/{sensorId}:
     post:
       tags:
