@@ -132,8 +132,22 @@ bin/reality_engine_server "$REALITY_ENGINE_E2E_PORT" "$MACHINES_DIR" "$VECTOR_DI
 REALITY_PID="$!"
 wait_for_http "http://localhost:${REALITY_ENGINE_E2E_PORT}/api/health" "Reality Engine"
 
+# PE_SOURCE_BOOTSTRAP=off: this suite measures HealthKit ingest driving its own
+# consumers, so the only writers of the HealthKit lanes must be the HealthKit
+# sensors. With the default (intern at boot, SURFACE_SPEC "PE_SOURCE_BOOTSTRAP")
+# every corpus machine's inputSequences became an active test source, and two of
+# them sit on these lanes because their machines read them: "HealthKit Vitals
+# Monitor / 2 sequences" on [4320:4324] and "Hydration Risk Response Interconnect"
+# on [4336:4346]. Overlapping sources compose last-writer-wins in canonical
+# (name, id) order, and both names sort after the sensors', so the step saw
+# [0,0,0,0] for blood pressure and [1,1,1,0] for sleep and no consumer fired
+# (RealityEngine_CPP#146). LSP's suite boots an empty corpus and Scala's the
+# deployment's narrower one, which is why only this runtime failed; the
+# engines agree. `off` is the spec's switch for a harness that does not want
+# the boot set pre-empting it.
 INTEGRATIONS_CONFIG="config/integrations.healthkit-spezi.example.json" \
   HEALTHKIT_BRIDGE_TOKEN="$HEALTHKIT_BRIDGE_TOKEN" \
+  PE_SOURCE_BOOTSTRAP=off \
   bin/perception_engine_server "$PERCEPTION_ENGINE_E2E_PORT" "http://localhost:${REALITY_ENGINE_E2E_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" >/tmp/perception_engine_healthkit_spezi_e2e.log 2>&1 &
 PERCEPTION_PID="$!"
 wait_for_http "http://localhost:${PERCEPTION_ENGINE_E2E_PORT}/api/health" "Perception Engine"
