@@ -869,7 +869,10 @@ public:
         auto existing = engine.get_source(req.pathParams.at("id"));
         if (!existing) return http::error_response("Source not found", 404);
         const Json body = parse_body(req);
-        engine.remove_source(req.pathParams.at("id"));
+        // Replaced in place, not removed and re-added: add_source keeps an
+        // active source's activation instant across the patch, and removing it
+        // first would make every PATCH a new activation and drop its
+        // contention counters (ARBITER_CONTRACT.md §4.4b).
         auto updated = merge_source_patch(*existing, body);
         updated.id = req.pathParams.at("id");
         added = engine.add_source(updated);
@@ -881,6 +884,12 @@ public:
       }
       broadcast_state();
       return ok(Json::Object{{"source", to_json(added)}});
+    });
+    // STT contention (ARBITER_CONTRACT.md §4.4b): the contended cells of the
+    // most recent push assembly and cumulative per-source counters.
+    server.route("GET", "/api/sources/contention", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      return ok(engine.contention_json());
     });
     server.route("DELETE", "/api/sources/:id", [this](const http::Request& req) {
       {
@@ -3188,6 +3197,9 @@ private:
     {
       std::lock_guard<std::mutex> lock(stateMutex);
       vector = engine.assemble_vector();
+      // The push is the transition: record what this assembly resolved. A read
+      // of /api/state assembles too, and must not count (§4.4b).
+      engine.record_contention();
       matchAlgorithm = engine.matchAlgorithm;
     }
     Json payload = Json::Object{
