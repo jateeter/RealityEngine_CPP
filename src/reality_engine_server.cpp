@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <filesystem>
+#include <condition_variable>
 #include <functional>
 #include <fstream>
 #include <iomanip>
@@ -18,6 +19,10 @@
 using namespace reality;
 
 namespace {
+// GET /api/engine/steps/:n/pair window (RealityEngine_CI#375): the default and
+// the largest a caller may ask for. SURFACE_SPEC.md states both.
+constexpr long kStepPairDefaultTimeoutMs = 5000;
+constexpr long kStepPairMaxTimeoutMs = 60000;
 
 class RealityService {
 public:
@@ -48,6 +53,12 @@ public:
 
   void mount(http::Server& server) {
     if (phaseDetailEnv) spaceRuntime.set_phase_detail(true);
+    // Every step and every reset runs with spaceRuntimeMutex held, so this
+    // runs under it too: the completion and the pair become visible together.
+    spaceRuntime.onStepCommitted = [this](long step) {
+      completedStep = step;
+      stepCommitted.notify_all();
+    };
     server.sse("/api/engine/stream", sseHub);
     server.route("GET", "/", [](const http::Request&) {
       return ok(Json::Object{{"name", "Reality Engine"}, {"version", "1.0.0-cpp"}, {"status", "running"}});
@@ -486,7 +497,14 @@ public:
         if (limitIt != req.queryParams.end() && !limitIt->second.empty())
           limit = static_cast<size_t>(std::max(0L, std::stol(limitIt->second)));
         Json::Array arr;
-        for (const auto& entry : (spaceRuntime.*source)()) {
+        // Under the step lock: the histories are appended by the step, and a
+        // copy taken without it raced the append (RealityEngine_CI#375).
+        std::vector<TrajectoryEntry> entries;
+        {
+          std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+          entries = (spaceRuntime.*source)();
+        }
+        for (const auto& entry : entries) {
           if (entry.stepNumber < from) continue;
           if (limit > 0 && arr.size() >= limit) break;
           arr.push_back(to_json(entry));
@@ -496,6 +514,50 @@ public:
     };
     server.route("GET", "/api/engine/osre-history", trajectory_route(&PerceptualSpaceRuntime::osre_history));
     server.route("GET", "/api/engine/isre-history", trajectory_route(&PerceptualSpaceRuntime::isre_history));
+    // The step completion point (RealityEngine_CI#375, SURFACE_SPEC.md "Step
+    // completion"): the (ISRE, OSRE) pair for step n, waiting up to timeoutMs.
+    // wait_for releases spaceRuntimeMutex while it waits, so the step being
+    // waited for can run, and re-acquires it to read the pair it committed.
+    server.route("GET", "/api/engine/steps/:n/pair", [this](const http::Request& req) {
+      long n = -1;
+      long timeoutMs = kStepPairDefaultTimeoutMs;
+      try {
+        size_t used = 0;
+        const std::string& raw = req.pathParams.at("n");
+        n = std::stol(raw, &used);
+        if (used != raw.size()) n = -1;
+      } catch (...) {
+        n = -1;
+      }
+      if (n < 0) return http::error_response("step must be a non-negative integer", 400);
+      auto timeoutIt = req.queryParams.find("timeoutMs");
+      if (timeoutIt != req.queryParams.end()) {
+        try {
+          size_t used = 0;
+          timeoutMs = std::stol(timeoutIt->second, &used);
+          if (used != timeoutIt->second.size()) timeoutMs = -1;
+        } catch (...) {
+          timeoutMs = -1;
+        }
+      }
+      if (timeoutMs < 0 || timeoutMs > kStepPairMaxTimeoutMs)
+        return http::error_response("timeoutMs must be an integer in [0, " + std::to_string(kStepPairMaxTimeoutMs) + "]", 400);
+      std::unique_lock<std::mutex> lock(spaceRuntimeMutex);
+      if (!stepCommitted.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&] { return completedStep >= n; }))
+        return http::error_response("step " + std::to_string(n) + " not resolved within " + std::to_string(timeoutMs) + " ms", 408);
+      auto find = [n](const std::vector<TrajectoryEntry>& history) -> const TrajectoryEntry* {
+        for (const auto& entry : history)
+          if (entry.stepNumber == n) return &entry;
+        return nullptr;
+      };
+      const auto isreHistory = spaceRuntime.isre_history();
+      const auto osreHistory = spaceRuntime.osre_history();
+      const TrajectoryEntry* isre = find(isreHistory);
+      const TrajectoryEntry* osre = find(osreHistory);
+      if (!isre || !osre)
+        return http::error_response("step " + std::to_string(n) + " is no longer retained", 410);
+      return ok(Json::Object{{"stepNumber", static_cast<double>(n)}, {"isre", to_json(*isre)}, {"osre", to_json(*osre)}});
+    });
     server.route("POST", "/api/engine/process", [this](const http::Request& req) {
       auto body = parse_body(req);
       auto vec = json::to_numbers(body.at("vector"));
@@ -1900,6 +1962,13 @@ private:
   std::map<std::string, std::map<std::string, Checkpoint>> checkpoints;
   mutable std::shared_mutex registryMutex;
   mutable std::mutex spaceRuntimeMutex;
+  // The step completion point (RealityEngine_CI#375): the newest step whose
+  // (ISRE, OSRE) pair is committed, published on stepCommitted. Both are guarded
+  // by spaceRuntimeMutex -- the lock every step runs under -- so a waiter that
+  // sees completedStep >= n sees step n's pair in the histories too. Steps are
+  // numbered from 0; -1 means none has completed.
+  std::condition_variable stepCommitted;
+  long completedStep = -1;
   mutable std::mutex vectorMutex;
   mutable std::mutex sequenceMutex;
   mutable std::mutex checkpointMutex;

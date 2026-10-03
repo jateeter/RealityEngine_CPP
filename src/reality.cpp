@@ -1271,6 +1271,8 @@ void PerceptualSpaceRuntime::reset() {
   steps.clear();
   osreHistory.clear();
   isreHistory.clear();
+  // Step numbers restart, so the completion point does too (#375).
+  if (onStepCommitted) onStepCommitted(-1);
   currentStep = 0;
   // Reset cleared the histories and left this counting, so the first step of a
   // reset engine was stepNumber 19 while its history held one entry. LSP zeroed
@@ -1869,6 +1871,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   return step;
 }
 void PerceptualSpaceRuntime::record_trajectory(TrajectoryEntry isre, TrajectoryEntry osre) {
+  const long committed = isre.stepNumber;
   isreHistory.push_back(std::move(isre));
   osreHistory.push_back(std::move(osre));
   // Trim the oldest, keeping ascending order intact.
@@ -1876,6 +1879,8 @@ void PerceptualSpaceRuntime::record_trajectory(TrajectoryEntry isre, TrajectoryE
     isreHistory.erase(isreHistory.begin(), isreHistory.begin() + static_cast<long>(isreHistory.size() - maxTrajectory));
   if (osreHistory.size() > maxTrajectory)
     osreHistory.erase(osreHistory.begin(), osreHistory.begin() + static_cast<long>(osreHistory.size() - maxTrajectory));
+  // The pair is committed: the step's completion point (RealityEngine_CI#375).
+  if (onStepCommitted) onStepCommitted(committed);
 }
 void PerceptualSpaceRuntime::rebuild_edge_cache() const {
   // Canonical order — by machine name, then id — the same order
