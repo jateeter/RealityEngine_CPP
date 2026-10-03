@@ -87,6 +87,18 @@ Use `clangd` for C++20. The Makefile is the build source of truth. Generate `com
 - Run `make test` for local logic changes and `make e2e` for corpus/API changes.
 - Do not commit binaries, logs, generated reports, or runtime state.
 
+## Step completion point (RealityEngine_CI#375)
+
+A step composes in parallel and resolves atomically: every machine's composition
+runs as a `std::future` on the domain worker pool, `run_phases` joins every one
+(`futures[i].get()`) before resolution, and OSRE(n) is committed once. The
+committed (ISRE, OSRE) pair is published through `PerceptualSpaceRuntime::onStepCommitted`
+to the server, which records `completedStep` and `notify_all`s a
+`std::condition_variable` under `spaceRuntimeMutex` (the lock every step runs
+under). `GET /api/engine/steps/:n/pair?timeoutMs=` waits on it with `wait_for`,
+which releases the lock while waiting. The two history routes read under the same
+lock. Steps are numbered from 0.
+
 ## Standing rules — authoritative in `../RealityEngine_CI/docs/ENGINEERING_CONTRACT.md`
 
 These apply here and are **not** restated in this file. The table is an index

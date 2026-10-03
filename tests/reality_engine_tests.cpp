@@ -1065,6 +1065,27 @@ int main() {
     assert(sim.is_configured());         // reset/stop keep the configuration
   }
 
+  // The step completion point (RealityEngine_CI#375): onStepCommitted fires
+  // with each step's number once its (ISRE, OSRE) pair is in the histories,
+  // numbered from 0, and with -1 when reset clears them.
+  {
+    PerceptualSpaceRuntime sim(16);
+    std::vector<long> committed;
+    sim.onStepCommitted = [&](long step) {
+      committed.push_back(step);
+      if (step >= 0) {
+        // The pair the completion announces is already there, both halves.
+        assert(!sim.isre_history().empty() && sim.isre_history().back().stepNumber == step);
+        assert(!sim.osre_history().empty() && sim.osre_history().back().stepNumber == step);
+      }
+    };
+    sim.process_immediate(Vector(16, 0.0));
+    sim.process_immediate(Vector(16, 0.0));
+    sim.reset();
+    sim.process_immediate(Vector(16, 0.0));
+    assert((committed == std::vector<long>{0, 1, -1, 0}));
+  }
+
   // Reset returns every event to its loaded state, wasJustMatched included
   // (SURFACE_SPEC.md, "Already-settled instances", RealityEngine_CI#464). It
   // kept the last match here and on Scala while LSP cleared it, so 20 of 21

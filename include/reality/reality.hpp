@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <deque>
+#include <functional>
 #include <filesystem>
 #include <map>
 #include <mutex>
@@ -868,6 +869,13 @@ public:
   // disagreement is the answer they exist to give.
   std::vector<TrajectoryEntry> osre_history() const;
   std::vector<TrajectoryEntry> isre_history() const;
+  // The step completion point (RealityEngine_CI#375). Called with a step's
+  // number at the instant its (ISRE, OSRE) pair is committed -- after every
+  // composer has joined and OSRE has resolved -- and with -1 when reset
+  // clears the histories. Runs on the stepping thread, under whatever lock the
+  // caller holds for the step, so the observer it notifies sees the pair and
+  // the completion together.
+  std::function<void(long)> onStepCommitted;
   void set_trajectory_limit(size_t limit);
   size_t trajectory_limit() const;
   PerceptualSpace& perceptual_space();
