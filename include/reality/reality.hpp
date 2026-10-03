@@ -869,6 +869,10 @@ public:
   // disagreement is the answer they exist to give.
   std::vector<TrajectoryEntry> osre_history() const;
   std::vector<TrajectoryEntry> isre_history() const;
+  // The arbitration records of the most recent committed step -- what
+  // GET /api/arbitration serves with retention off. Empty before the first
+  // step and after a reset (RealityEngine_CI#296).
+  const std::vector<ArbitrationRecord>& last_arbitration() const;
   // The step completion point (RealityEngine_CI#375). Called with a step's
   // number at the instant its (ISRE, OSRE) pair is committed -- after every
   // composer has joined and OSRE has resolved -- and with -1 when reset
@@ -894,6 +898,11 @@ private:
   std::vector<SimulationStep> steps;
   std::vector<TrajectoryEntry> osreHistory;
   std::vector<TrajectoryEntry> isreHistory;
+  // Held apart from `steps` so it neither depends on historyLimit nor is found
+  // by position in a newest-first list: the route read `steps.back()`, which
+  // is the OLDEST retained step, so after any second step it served the wrong
+  // one (RealityEngine_CI#296 baseline finding A, and the C++ half of #283).
+  std::vector<ArbitrationRecord> lastArbitration;
   size_t maxTrajectory = 1024;
   // Appends ISRE(n) and OSRE(n) together.  They are captured at their own
   // observation points inside the step and recorded in one action, so no

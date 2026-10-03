@@ -1271,6 +1271,7 @@ void PerceptualSpaceRuntime::reset() {
   steps.clear();
   osreHistory.clear();
   isreHistory.clear();
+  lastArbitration.clear();
   // Step numbers restart, so the completion point does too (#375).
   if (onStepCommitted) onStepCommitted(-1);
   currentStep = 0;
@@ -1867,6 +1868,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   phaseTimings.activeRegionsNs += tick();
   phaseTimings.steps += 1;
 
+  lastArbitration = step.arbitration;
   record_trajectory(std::move(isre), std::move(osre));
   return step;
 }
@@ -1941,6 +1943,7 @@ void PerceptualSpaceRuntime::set_history_limit(size_t limit) {
 size_t PerceptualSpaceRuntime::history_limit() const { return maxHistory; }
 std::vector<TrajectoryEntry> PerceptualSpaceRuntime::osre_history() const { return osreHistory; }
 std::vector<TrajectoryEntry> PerceptualSpaceRuntime::isre_history() const { return isreHistory; }
+const std::vector<ArbitrationRecord>& PerceptualSpaceRuntime::last_arbitration() const { return lastArbitration; }
 void PerceptualSpaceRuntime::set_trajectory_limit(size_t limit) {
   maxTrajectory = limit;
   if (isreHistory.size() > maxTrajectory)

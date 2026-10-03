@@ -1160,9 +1160,8 @@ public:
     // divergent shape here would defeat the endpoint's own purpose.
     server.route("GET", "/api/arbitration", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
-      const auto hist = spaceRuntime.history();
       Json::Array records;
-      if (!hist.empty()) {
+      {
         auto emit = [](const Contribution& c) {
           return Json::Object{
               {"provider", c.provider},
@@ -1173,7 +1172,7 @@ public:
               {"ragStatusCode", c.ragStatusCode.empty() ? Json{} : Json{c.ragStatusCode}},
               {"value", c.value}};
         };
-        for (const auto& r : hist.back().arbitration) {
+        for (const auto& r : spaceRuntime.last_arbitration()) {
           Json::Array contributors, suppressed;
           for (const auto& c : r.contributors) contributors.push_back(emit(c));
           for (const auto& c : r.suppressed) suppressed.push_back(emit(c));
