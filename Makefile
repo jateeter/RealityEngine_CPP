@@ -35,7 +35,7 @@ DEPFLAGS := -MMD -MP
 
 BIN_DIR := bin
 OBJ_DIR := build
-SRC := src/reality.cpp src/arbiter.cpp src/http.cpp src/sta_checker.cpp src/mqtt_client.cpp src/mqtt_mapping.cpp src/mqtt_bridge.cpp
+SRC := src/reality.cpp src/instance_clock.cpp src/arbiter.cpp src/http.cpp src/sta_checker.cpp src/mqtt_client.cpp src/mqtt_mapping.cpp src/mqtt_bridge.cpp
 
 # Every binary used to compile all of SRC from source, so `make all` compiled
 # the same seven engine files once per binary — about 140 compilations at -O2

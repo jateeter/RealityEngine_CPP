@@ -1,9 +1,17 @@
 #include "reality/reality.hpp"
+#include "reality/instance_clock.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <csignal>
+#include <filesystem>
+#include <fstream>
+#include <random>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -1012,7 +1020,96 @@ static void verify_exhausted_test_source_serializes_inactive() {
            .at("active").as_bool());
 }
 
+// The instance's Lamport clock (RealityEngine_CI#296). A UUID belongs to an
+// instance, never an engine type; `lamport` never resets, and for an allocated
+// instance it survives restarts through a reserved high-water mark. Two live
+// processes may not present the same UUID.
+static void verify_instance_clock() {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() /
+                       ("re-cpp-lamport-" + std::to_string(std::random_device{}()));
+  const std::string uuid = "0192f3a0-0000-7000-8000-0000000002d9";
+  const fs::path file = dir / (uuid + ".lamport");
+
+  {
+    auto minted = InstanceClock::minted();
+    assert(InstanceClock::canonical_uuid(minted.instance()));
+    assert(minted.instance()[14] == '7');                       // version 7
+    assert(minted.lamport() == 0 && minted.tick() == 1);
+    assert(InstanceClock::minted().instance() != minted.instance());  // one per instance
+    assert(!InstanceClock::canonical_uuid("cpp-1"));             // an instance id is not a UUID
+  }
+  long long last = 0;
+  {
+    auto first = InstanceClock::persisted(uuid, file);
+    assert(first.tick() == 1 && first.tick() == 2 && first.tick() == 3);  // a new instance ticks from 1
+    assert(InstanceClock::read_reservation(file) == InstanceClock::kLamportReservation);
+  }  // the lock is released with the clock
+  {
+    auto second = InstanceClock::persisted(uuid, file);
+    assert(second.tick() == InstanceClock::kLamportReservation + 1);  // a restart never reissues a tick
+    for (int i = 0; i < 1100; ++i) last = second.tick();
+    assert(InstanceClock::read_reservation(file) >= last);  // persisted before it was issued
+  }
+  {
+    auto third = InstanceClock::persisted(uuid, file);
+    assert(third.tick() > last);                             // and the next boot starts beyond it
+  }
+  // A second live process with the same UUID refuses to boot. lockf locks are
+  // per process, so the holder has to be another one.
+  {
+    int ready[2];
+    assert(::pipe(ready) == 0);
+    const pid_t child = ::fork();
+    if (child == 0) {
+      ::close(ready[0]);
+      try {
+        auto held = InstanceClock::persisted(uuid, file);
+        char ok = 'y';
+        (void)!::write(ready[1], &ok, 1);
+        ::pause();
+      } catch (...) {
+      }
+      ::_exit(0);
+    }
+    ::close(ready[1]);
+    char signal = 0;
+    assert(::read(ready[0], &signal, 1) == 1 && signal == 'y');
+    bool refused = false;
+    try {
+      auto duplicate = InstanceClock::persisted(uuid, file);
+    } catch (const std::runtime_error& e) {
+      refused = std::string(e.what()).find("already live") != std::string::npos;
+    }
+    ::kill(child, SIGTERM);
+    ::waitpid(child, nullptr, 0);
+    ::close(ready[0]);
+    assert(refused);
+    auto afterExit = InstanceClock::persisted(uuid, file);  // released when the holder exits
+    assert(afterExit.tick() > last);
+  }
+  {
+    std::ofstream(dir / "bad.lamport") << "not-a-number";
+    bool refused = false;
+    try {
+      auto bad = InstanceClock::persisted(uuid, dir / "bad.lamport");
+    } catch (const std::runtime_error&) {
+      refused = true;
+    }
+    assert(refused);                                         // a corrupt clock refuses the boot
+    refused = false;
+    try {
+      auto unwritable = InstanceClock::persisted(uuid, "/dev/null/cannot/x.lamport");
+    } catch (const std::exception&) {
+      refused = true;
+    }
+    assert(refused);                                         // so does an unwritable one
+  }
+  fs::remove_all(dir);
+}
+
 int main() {
+  verify_instance_clock();
   // Minted ids are time-ordered UUIDs (RealityEngine_CI#518, #281): canonical
   // form, version 7, distinct, and strictly increasing in creation order, so two
   // machines on one region sort the same way on every engine.

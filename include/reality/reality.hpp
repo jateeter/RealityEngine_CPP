@@ -22,6 +22,8 @@ using Vector = std::vector<double>;
 using Json = json::Value;
 
 long long now_ms();
+// A bare time-ordered (version 7) UUID; make_id prefixes one with its kind.
+std::string make_uuid();
 std::string make_id(const std::string& prefix);
 
 enum class ComparatorType { Equals, Threshold, Pattern, Custom, Gte };

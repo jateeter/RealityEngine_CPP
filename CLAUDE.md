@@ -99,6 +99,28 @@ under). `GET /api/engine/steps/:n/pair?timeoutMs=` waits on it with `wait_for`,
 which releases the lock while waiting. The two history routes read under the same
 lock. Steps are numbered from 0.
 
+## Arbitration retention and the instance clock (RealityEngine_CI#296)
+
+`onStepCommitted` also ticks the instance's Lamport clock and, with
+`arbitrationRetention` on, keeps the step's records (`last_arbitration()`) in
+`arbitrationSteps` under its step number and Lamport value, before the
+completion is published. A reset (-1) drops them; the clock keeps its value.
+`GET /api/arbitration` answers the legacy object while retention is off (its
+bytes unchanged) and the window's steps as a list while it is on (`?step=N`
+reads one; 404/410/409/400), records by cell and contributions by
+`(provider, originId, cesId, outputVectorId)`. Controls `arbitrationRetention`
+(default `false`) and `arbitrationWindow` (default 1, max 1024).
+
+The clock is `{instance, lamport, step}` (`GET /api/engine/clock`,
+`InstanceClock` in `src/instance_clock.cpp`). A UUID belongs to an **instance**,
+never an engine type or image: CI allocates it (`INSTANCE_UUID`); without one
+the server mints a v7 UUID at boot. `lamport` ticks once per committed step and
+never resets. An allocated instance keeps `<uuid>.lamport` in
+`INSTANCE_CLOCK_DIR` (default `~/.reality-engine/clock/`) — a high-water mark
+reserved 1024 ahead, written (temp + rename) before any tick past it — and holds
+`lockf` on `<uuid>.lock` for its life, so a second live process with the same
+UUID refuses to start. An unreadable or unwritable clock refuses the start too.
+
 ## Standing rules — authoritative in `../RealityEngine_CI/docs/ENGINEERING_CONTRACT.md`
 
 These apply here and are **not** restated in this file. The table is an index

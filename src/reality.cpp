@@ -47,7 +47,7 @@ long long now_ms() {
 // (v4) ids ordered them differently on every engine and split universal
 // vectors on every event. Engines that load the same machines in the same order
 // mint ids that sort the same way, as the earlier `<prefix>-<millis>-<n>` did.
-std::string make_id(const std::string& prefix) {
+std::string make_uuid() {
   static std::mt19937_64 rng{std::random_device{}()};
   static std::mutex rngMutex;
   static uint64_t lastMs = 0;
@@ -78,8 +78,9 @@ std::string make_id(const std::string& prefix) {
                 static_cast<unsigned long long>(hi & 0xFFFFULL),
                 static_cast<unsigned long long>(lo >> 48),
                 static_cast<unsigned long long>(lo & 0xFFFFFFFFFFFFULL));
-  return prefix + "-" + buf;
+  return buf;
 }
+std::string make_id(const std::string& prefix) { return prefix + "-" + make_uuid(); }
 
 static std::string lower(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
