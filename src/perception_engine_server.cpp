@@ -2607,6 +2607,11 @@ private:
         if (updated) source = sensor_source_by_id(sensorId).value_or(source);
         if (!updated && body.at("region").is_object()) {
           source.kind = "sensor";
+          // A declared sensorId is the source's identity on every runtime
+          // (RealityEngine_CI#518): `healthkit.sleep` from integrations.json is
+          // the same id here as on LSP and Scala, so a later K-line can
+          // re-attach to it. Only undeclared identity is minted.
+          source.id = sensorId;
           source.name = body.at("name").as_string(sensorId);
           source.sensorId = sensorId;
           source.region = {
