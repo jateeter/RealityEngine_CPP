@@ -1086,6 +1086,36 @@ int main() {
     assert((committed == std::vector<long>{0, 1, -1, 0}));
   }
 
+  // GET /api/arbitration with retention off serves the LATEST step's records
+  // (RealityEngine_CI#296, baseline finding A). It read the newest-first step
+  // history from the back -- the oldest retained step -- so a contended step
+  // followed by a quiet one still reported the contended step, and a quiet step
+  // followed by a contended one reported nothing (the C++ half of #283).
+  {
+    PerceptualSpaceRuntime sim(32);
+    sim.add_machine(make_output_machine("machine-arb-a", 1.0));
+    sim.add_machine(make_output_machine("machine-arb-b", 1.0));
+    Vector fire(32, 0.0);
+    fire[0] = 1.0;
+    const Vector quiet(32, 0.0);
+    auto contends_20 = [&] {
+      const auto& recs = sim.last_arbitration();
+      return recs.size() == 1 && recs.front().cell == 20 && recs.front().contributors.size() == 2;
+    };
+
+    assert(sim.last_arbitration().empty());
+    sim.process_immediate(quiet);
+    sim.process_immediate(fire);
+    assert(contends_20());                      // the latest step, not step 0
+    sim.process_immediate(quiet);
+    assert(sim.last_arbitration().empty());     // a quiet step replaces it
+    sim.set_history_limit(0);
+    sim.process_immediate(fire);
+    assert(contends_20());                      // independent of historyLimit
+    sim.reset();
+    assert(sim.last_arbitration().empty());     // a reset ends every step
+  }
+
   // Reset returns every event to its loaded state, wasJustMatched included
   // (SURFACE_SPEC.md, "Already-settled instances", RealityEngine_CI#464). It
   // kept the last match here and on Scala while LSP cleared it, so 20 of 21
