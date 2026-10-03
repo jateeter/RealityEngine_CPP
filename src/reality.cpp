@@ -7,6 +7,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <deque>
@@ -35,11 +36,32 @@ long long now_ms() {
   return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
+// Minted identity is `<prefix>-<uuid>`: a random (version 4) UUID in canonical
+// lowercase form, on every runtime (RealityEngine_CI#518). Ids are unique across
+// the universe, not just within one engine, and a minted id is recognisable by
+// shape -- corpus ids are never UUIDs -- so a cross-engine comparison can tell
+// identity an engine minted from identity the corpus declared without a name
+// list. This replaced `<prefix>-<millis>-<n>`, whose length differed from the
+// other runtimes' formats and made byte comparisons fail on identity alone.
 std::string make_id(const std::string& prefix) {
   static std::mt19937_64 rng{std::random_device{}()};
   static std::mutex rngMutex;
-  std::lock_guard<std::mutex> lock(rngMutex);
-  return prefix + "-" + std::to_string(now_ms()) + "-" + std::to_string(rng() % 1000000000ULL);
+  uint64_t hi = 0, lo = 0;
+  {
+    std::lock_guard<std::mutex> lock(rngMutex);
+    hi = rng();
+    lo = rng();
+  }
+  hi = (hi & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;  // version 4
+  lo = (lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;  // RFC 4122 variant
+  char buf[37];
+  std::snprintf(buf, sizeof buf, "%08llx-%04llx-%04llx-%04llx-%012llx",
+                static_cast<unsigned long long>(hi >> 32),
+                static_cast<unsigned long long>((hi >> 16) & 0xFFFFULL),
+                static_cast<unsigned long long>(hi & 0xFFFFULL),
+                static_cast<unsigned long long>(lo >> 48),
+                static_cast<unsigned long long>(lo & 0xFFFFFFFFFFFFULL));
+  return prefix + "-" + buf;
 }
 
 static std::string lower(std::string s) {
