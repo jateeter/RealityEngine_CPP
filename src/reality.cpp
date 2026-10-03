@@ -36,24 +36,41 @@ long long now_ms() {
   return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
-// Minted identity is `<prefix>-<uuid>`: a random (version 4) UUID in canonical
-// lowercase form, on every runtime (RealityEngine_CI#518). Ids are unique across
-// the universe, not just within one engine, and a minted id is recognisable by
-// shape -- corpus ids are never UUIDs -- so a cross-engine comparison can tell
-// identity an engine minted from identity the corpus declared without a name
-// list. This replaced `<prefix>-<millis>-<n>`, whose length differed from the
-// other runtimes' formats and made byte comparisons fail on identity alone.
+// Minted identity is `<prefix>-<uuid>`, a time-ordered (version 7) UUID in
+// canonical lowercase form, on every runtime (RealityEngine_CI#518, #281). Ids
+// are unique across the universe, recognisable by shape -- corpus ids are never
+// UUIDs -- and they sort in creation order: 48 bits of Unix milliseconds, then a
+// 12-bit counter that increases within one millisecond, then 62 random bits.
+//
+// Creation order is load-bearing. SURFACE_SPEC breaks `activeRegions` ties on
+// machineId, so two machines on one region are ordered by their ids; random
+// (v4) ids ordered them differently on every engine and split universal
+// vectors on every event. Engines that load the same machines in the same order
+// mint ids that sort the same way, as the earlier `<prefix>-<millis>-<n>` did.
 std::string make_id(const std::string& prefix) {
   static std::mt19937_64 rng{std::random_device{}()};
   static std::mutex rngMutex;
-  uint64_t hi = 0, lo = 0;
+  static uint64_t lastMs = 0;
+  static uint64_t counter = 0;
+  uint64_t ms = 0, seq = 0, rand = 0;
   {
     std::lock_guard<std::mutex> lock(rngMutex);
-    hi = rng();
-    lo = rng();
+    ms = static_cast<uint64_t>(now_ms());
+    if (ms <= lastMs) {
+      ms = lastMs;
+      if (++counter > 0xFFFULL) {  // counter exhausted: borrow the next millisecond
+        ++ms;
+        counter = 0;
+      }
+    } else {
+      counter = 0;
+    }
+    lastMs = ms;
+    seq = counter;
+    rand = rng();
   }
-  hi = (hi & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;  // version 4
-  lo = (lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;  // RFC 4122 variant
+  const uint64_t hi = ((ms & 0xFFFFFFFFFFFFULL) << 16) | 0x7000ULL | seq;      // version 7
+  const uint64_t lo = (rand & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;  // RFC 9562 variant
   char buf[37];
   std::snprintf(buf, sizeof buf, "%08llx-%04llx-%04llx-%04llx-%012llx",
                 static_cast<unsigned long long>(hi >> 32),

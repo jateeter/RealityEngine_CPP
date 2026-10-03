@@ -1013,6 +1013,24 @@ static void verify_exhausted_test_source_serializes_inactive() {
 }
 
 int main() {
+  // Minted ids are time-ordered UUIDs (RealityEngine_CI#518, #281): canonical
+  // form, version 7, distinct, and strictly increasing in creation order, so two
+  // machines on one region sort the same way on every engine.
+  {
+    std::string prev;
+    for (int i = 0; i < 2000; ++i) {
+      const std::string id = make_id("machine");
+      assert(id.size() == std::string("machine-").size() + 36);
+      assert(id.compare(0, 8, "machine-") == 0);
+      const std::string u = id.substr(8);
+      assert(u[8] == '-' && u[13] == '-' && u[18] == '-' && u[23] == '-');
+      assert(u[14] == '7');
+      assert(u[19] == '8' || u[19] == '9' || u[19] == 'a' || u[19] == 'b');
+      assert(u > prev);
+      prev = u;
+    }
+  }
+
   {
     RealityEvent v({VectorElement{1.0, ComparatorType::Gte, 0.5}}, true, "v");
     assert(v.match({0.75}).matched);
