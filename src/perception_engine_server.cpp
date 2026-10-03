@@ -3271,8 +3271,11 @@ private:
       Json parsed = json::parse(raw);
       long long ts = now_ms();
       long long step = 0;
+      // Built outside stateMutex: it reads the machine catalog under its own lock.
+      auto osreFold = osre_fold_cells(parsed);
       {
         std::lock_guard<std::mutex> lock(stateMutex);
+        engine.set_osre_fold(std::move(osreFold));
         if (parsed.at("perceptualSpace").is_array()) {
           auto ps = json::to_numbers(parsed.at("perceptualSpace"));
           ps = aggregator::aggregate_machine_outputs(std::move(ps), parsed.at("machineResults"));
@@ -3622,6 +3625,41 @@ private:
       dispatchRecords.erase(dispatchRecordOrder.front());
       dispatchRecordOrder.pop_front();
     }
+  }
+
+  // The OSRE cells this push produced: every cell of every mergeBatch output
+  // region, mapped to the writing machine's declared outputMergeTransformation
+  // (default "or"). Where several machines' outputs cover one cell, the first
+  // by machine NAME decides — ids are minted per runtime, so id order would
+  // differ between runtimes (ARBITER_CONTRACT.md §4.4b).
+  std::map<int, std::string> osre_fold_cells(const Json& step) {
+    std::map<int, std::pair<std::string, std::string>> byCell;  // cell -> (name, transformation)
+    const Json& batch = step.at("mergeBatch");
+    if (!batch.is_array()) return {};
+    std::lock_guard<std::mutex> lock(machineCatalogMutex);
+    for (const auto& op : batch.array()) {
+      const std::string machineId = op.at("machineId").as_string();
+      const Json& region = op.at("region");
+      if (machineId.empty() || !region.is_object()) continue;
+      std::string name = op.at("machineName").as_string(machineId);
+      std::string transformation = "or";
+      if (machineCatalog.is_object()) {
+        auto it = machineCatalog.object().find(machineId);
+        if (it != machineCatalog.object().end()) {
+          name = it->second.at("name").as_string(name);
+          transformation = it->second.at("outputMergeTransformation").as_string("or");
+        }
+      }
+      const int offset = static_cast<int>(region.at("offset").as_number(-1));
+      const int length = static_cast<int>(region.at("length").as_number(0));
+      for (int c = offset; c >= 0 && c < offset + length; ++c) {
+        auto found = byCell.find(c);
+        if (found == byCell.end() || name < found->second.first) byCell[c] = {name, transformation};
+      }
+    }
+    std::map<int, std::string> cells;
+    for (auto& [cell, entry] : byCell) cells[cell] = entry.second;
+    return cells;
   }
 
   void cache_machine_catalog(const Json& data) {

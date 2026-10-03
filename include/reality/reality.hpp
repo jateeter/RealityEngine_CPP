@@ -106,6 +106,10 @@ inline constexpr bool kRefuseChainFoldWithoutTop = true;
 std::optional<Vector> fold_outputs(const std::vector<Vector>& outputs,
                                    OutputMergeTransformation t,
                                    std::optional<int> chainTop = std::nullopt);
+// A machine's declared fold operator applied over [0..1] to a source value `s`
+// and the OSRE value `o` (ARBITER_CONTRACT.md §4.4b). Unknown names fold as the
+// default, `or`.
+double fold_unit_interval(const std::string& transformation, double s, double o);
 SimPattern sim_pattern_from_string(const std::string& s);
 MatchAlgorithm match_algorithm_from_string(const std::string& s);
 
@@ -1001,6 +1005,11 @@ public:
   void record_contention();
   // GET /api/sources/contention payload.
   Json contention_json() const;
+  // The OSRE cells of the last push — cell -> the declared
+  // outputMergeTransformation of the machine whose output wrote it
+  // (ARBITER_CONTRACT.md §4.4b). A source on one of these cells is folded with
+  // the OSRE value by that operator over [0..1] instead of replacing it.
+  void set_osre_fold(std::map<int, std::string> cells);
   bool update_sensor_value(const std::string& sensorId, const Vector& values);
   Vector assemble_vector() const;
   void update_from_perceptual_space(const Vector& values);
@@ -1025,6 +1034,7 @@ private:
   void ensure_capacity(int requiredEnd, const std::string& context);
   std::map<std::string, SourceConfig> sources;
   std::vector<ContendedCell> lastContention;
+  std::map<int, std::string> osreFold;
   long long lastContentionTransition = 0;
   std::map<std::string, ContentionCounter> contentionCounters;
   std::map<std::string, int> testStep;

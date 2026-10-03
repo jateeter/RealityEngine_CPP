@@ -2205,8 +2205,24 @@ Json PerceptionEngine::contention_json() const {
   return Json::Object{{"transition", static_cast<double>(lastContentionTransition)},
                       {"cells", cells}, {"counters", counters}};
 }
+double fold_unit_interval(const std::string& t, double s, double o) {
+  // The multi-valued form of each declared operator over [0..1], chain top 1.
+  // The PE meets LLM-provided values in [0..1], so a Boolean gate's first-order
+  // form, which would collapse them to 0 or 1, is not used here.
+  if (t == "and" || t == "meet" || t == "discrete-median") return std::min(s, o);
+  if (t == "strong-disjunction") return std::min(1.0, s + o);
+  if (t == "strong-conjunction") return std::max(0.0, s + o - 1.0);
+  if (t == "xor") return std::max(std::min(s, 1.0 - o), std::min(1.0 - s, o));
+  if (t == "nor") return 1.0 - std::max(s, o);
+  if (t == "nand") return 1.0 - std::min(s, o);
+  return std::max(s, o);  // or, join, and anything unrecognised
+}
+void PerceptionEngine::set_osre_fold(std::map<int, std::string> cells) { osreFold = std::move(cells); }
 Vector PerceptionEngine::assemble_vector() const {
   Vector out = persistentVector;
+  // Which cells a source wrote this instant: only those are folded with the
+  // OSRE term; a cell only the OSRE holds keeps its value.
+  std::vector<char> sourceWrote(out.size(), 0);
   for (const SourceConfig* sp : active_sources_canonical()) {
     const SourceConfig& s = *sp;
     auto vals = source_values(s);
@@ -2219,8 +2235,18 @@ Vector PerceptionEngine::assemble_vector() const {
                 << out.size() << " — region not written (machineId=" << s.machineId
                 << ", sourceId=" << s.id << ")" << std::endl;
     }
-    for (int i = 0; i < s.region.length && i < static_cast<int>(vals.size()) && s.region.offset + i < static_cast<int>(out.size()); ++i)
+    for (int i = 0; i < s.region.length && i < static_cast<int>(vals.size()) && s.region.offset + i < static_cast<int>(out.size()); ++i) {
+      if (s.region.offset + i < 0) continue;
       out[static_cast<size_t>(s.region.offset + i)] = std::clamp(vals[static_cast<size_t>(i)], 0.0, 1.0);
+      sourceWrote[static_cast<size_t>(s.region.offset + i)] = 1;
+    }
+  }
+  // A source on an OSRE cell is folded with the OSRE value by the writing
+  // machine's operator rather than replacing it (ARBITER_CONTRACT.md §4.4b).
+  for (const auto& [cell, transformation] : osreFold) {
+    if (cell < 0 || cell >= static_cast<int>(out.size()) || !sourceWrote[static_cast<size_t>(cell)]) continue;
+    const size_t c = static_cast<size_t>(cell);
+    out[c] = std::clamp(fold_unit_interval(transformation, out[c], persistentVector[c]), 0.0, 1.0);
   }
   return out;
 }
@@ -2299,6 +2325,8 @@ void PerceptionEngine::reset() {
   lastContention.clear();
   lastContentionTransition = 0;
   contentionCounters.clear();
+  // No push since the reset, so no OSRE term to fold with.
+  osreFold.clear();
 }
 Vector PerceptionEngine::source_values(const SourceConfig& s) const {
   if (s.kind == "test") {
