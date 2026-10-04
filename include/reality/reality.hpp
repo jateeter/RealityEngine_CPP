@@ -1056,8 +1056,10 @@ public:
   // (ARBITER_CONTRACT.md §4.4b). A source on one of these cells is folded with
   // the OSRE value by that operator over [0..1] instead of replacing it.
   void set_osre_fold(std::map<int, OsreFoldCell> cells);
-  // A bare operator per cell, no machine name (tests).
-  void set_osre_fold(const std::map<int, std::string>& cells);
+  // A bare operator per cell, no machine name (tests). Named apart from
+  // set_osre_fold: as an overload, {{50, "or"}} could also aggregate-initialise
+  // an OsreFoldCell (machine = "or"), and GCC rejects the call as ambiguous.
+  void set_osre_fold_ops(const std::map<int, std::string>& cells);
   bool update_sensor_value(const std::string& sensorId, const Vector& values);
   // `folds`, when given, receives every Source-vs-OSRE fold of this assembly,
   // ascending by cell. Only the push records them (record_contention).
