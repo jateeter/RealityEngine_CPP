@@ -1,6 +1,9 @@
 #include "reality/http.hpp"
+#include "reality/instance_clock.hpp"
 #include "reality/reality.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cmath>
 #include <filesystem>
@@ -11,10 +14,12 @@
 #include <iostream>
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <mutex>
 #include <shared_mutex>
 #include <sstream>
 #include <thread>
+#include <tuple>
 
 using namespace reality;
 
@@ -23,6 +28,75 @@ namespace {
 // the largest a caller may ask for. SURFACE_SPEC.md states both.
 constexpr long kStepPairDefaultTimeoutMs = 5000;
 constexpr long kStepPairMaxTimeoutMs = 60000;
+// GET /api/arbitration's window (RealityEngine_CI#296): the declared default
+// and ceiling, from SURFACE_SPEC.md. The ceiling matches the trajectory
+// capacity, the memory envelope every runtime already carries per step.
+constexpr long kArbitrationWindowDefault = 1;
+constexpr long kArbitrationWindowMax = 1024;
+
+// Ascending (provider, originId, cesId, outputVectorId) -- the MEAN canonical
+// order of ARBITER_CONTRACT.md 4, led by provider -- so a retained record lists
+// the same contributions in the same order on every runtime (#296).
+bool contribution_canonical_less(const Contribution& a, const Contribution& b) {
+  return std::tie(a.provider, a.originId, a.cesId, a.outputVectorId) <
+         std::tie(b.provider, b.originId, b.cesId, b.outputVectorId);
+}
+
+// Records as GET /api/arbitration lists them. `canonical` orders records by cell
+// and contributions canonically, as the retention mode must; without it the
+// legacy order is kept exactly.
+Json::Array arbitration_records_json(std::vector<ArbitrationRecord> records, bool canonical) {
+  auto emit = [](const Contribution& c) {
+    return Json::Object{
+        {"provider", c.provider},
+        {"determinism", determinism_name(determinism_of(c.provider))},
+        {"originId", c.originId},
+        {"cesId", c.cesId.empty() ? Json{} : Json{c.cesId}},
+        {"outputVectorId", c.outputVectorId.empty() ? Json{} : Json{c.outputVectorId}},
+        {"ragStatusCode", c.ragStatusCode.empty() ? Json{} : Json{c.ragStatusCode}},
+        {"value", c.value}};
+  };
+  if (canonical) {
+    std::sort(records.begin(), records.end(),
+              [](const ArbitrationRecord& a, const ArbitrationRecord& b) { return a.cell < b.cell; });
+    for (auto& r : records) {
+      std::sort(r.contributors.begin(), r.contributors.end(), contribution_canonical_less);
+      std::sort(r.suppressed.begin(), r.suppressed.end(), contribution_canonical_less);
+    }
+  }
+  Json::Array out;
+  for (const auto& r : records) {
+    Json::Array contributors, suppressed;
+    for (const auto& c : r.contributors) contributors.push_back(emit(c));
+    for (const auto& c : r.suppressed) suppressed.push_back(emit(c));
+    out.push_back(Json::Object{
+        {"instant", static_cast<double>(r.instant)},
+        {"cell", static_cast<double>(r.cell)},
+        {"rule", r.rule},
+        {"resolved", r.resolved},
+        {"contributors", contributors},
+        {"suppressed", suppressed}});
+  }
+  return out;
+}
+
+// One retained step's arbitration (#296): its records and the Lamport value it
+// committed at.
+struct RetainedArbitration {
+  long long lamport = 0;
+  std::vector<ArbitrationRecord> records;
+};
+
+// A non-negative integer with nothing after it, or -1.
+long parse_step(const std::string& raw) {
+  if (raw.empty() || !std::all_of(raw.begin(), raw.end(), [](unsigned char c) { return std::isdigit(c); }))
+    return -1;
+  try {
+    return std::stol(raw);
+  } catch (...) {
+    return -1;
+  }
+}
 
 class RealityService {
 public:
@@ -55,7 +129,21 @@ public:
     if (phaseDetailEnv) spaceRuntime.set_phase_detail(true);
     // Every step and every reset runs with spaceRuntimeMutex held, so this
     // runs under it too: the completion and the pair become visible together.
+    //
+    // A committed step ticks the Lamport clock and is retained before the
+    // completion is published, so an observer woken for step n finds n's
+    // arbitration records already there (#296). A reset (-1) restarts the step
+    // count and drops what was retained; the clock keeps its value.
     spaceRuntime.onStepCommitted = [this](long step) {
+      if (step >= 0) {
+        const long long tick = clock.tick();
+        if (arbitrationRetention && arbitrationWindow > 0) {
+          arbitrationSteps[step] = RetainedArbitration{tick, spaceRuntime.last_arbitration()};
+          prune_arbitration_steps(step);
+        }
+      } else {
+        arbitrationSteps.clear();
+      }
       completedStep = step;
       stepCommitted.notify_all();
     };
@@ -1158,33 +1246,34 @@ public:
     // Wire shape matches the Scala runtime's /api/arbitration byte for byte;
     // cross-runtime parity is the acceptance test for this contract, so a
     // divergent shape here would defeat the endpoint's own purpose.
-    server.route("GET", "/api/arbitration", [this](const http::Request&) {
+    //
+    // Retention keyed by step (RealityEngine_CI#296): with arbitrationRetention
+    // off this is the legacy object; on, it is the list of retained steps in
+    // the window, oldest first, and `?step=N` addresses one of them.
+    server.route("GET", "/api/arbitration", [this](const http::Request& req) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
-      Json::Array records;
-      {
-        auto emit = [](const Contribution& c) {
-          return Json::Object{
-              {"provider", c.provider},
-              {"determinism", determinism_name(determinism_of(c.provider))},
-              {"originId", c.originId},
-              {"cesId", c.cesId.empty() ? Json{} : Json{c.cesId}},
-              {"outputVectorId", c.outputVectorId.empty() ? Json{} : Json{c.outputVectorId}},
-              {"ragStatusCode", c.ragStatusCode.empty() ? Json{} : Json{c.ragStatusCode}},
-              {"value", c.value}};
-        };
-        for (const auto& r : spaceRuntime.last_arbitration()) {
-          Json::Array contributors, suppressed;
-          for (const auto& c : r.contributors) contributors.push_back(emit(c));
-          for (const auto& c : r.suppressed) suppressed.push_back(emit(c));
-          records.push_back(Json::Object{
-              {"instant", static_cast<double>(r.instant)},
-              {"cell", static_cast<double>(r.cell)},
-              {"rule", r.rule},
-              {"resolved", r.resolved},
-              {"contributors", contributors},
-              {"suppressed", suppressed}});
-        }
+      auto stepIt = req.queryParams.find("step");
+      if (stepIt != req.queryParams.end()) {
+        const long n = parse_step(stepIt->second);
+        if (n < 0) return http::error_response("step must be a non-negative integer", 400);
+        if (!arbitrationRetention)
+          return http::error_response(
+              "arbitration retention is off; GET /api/arbitration?step=N needs arbitrationRetention true", 409);
+        if (n > completedStep) return http::error_response("step " + std::to_string(n) + " has not resolved", 404);
+        auto it = arbitrationSteps.find(n);
+        if (it == arbitrationSteps.end())
+          return http::error_response("step " + std::to_string(n) + " is no longer retained", 410);
+        return ok(arbitration_step_json(n, it->second));
       }
+      if (arbitrationRetention) {
+        Json::Array steps;
+        const long from = std::max(0L, completedStep - arbitrationWindow + 1);
+        for (auto it = arbitrationSteps.lower_bound(from);
+             it != arbitrationSteps.end() && it->first <= completedStep; ++it)
+          steps.push_back(arbitration_step_json(it->first, it->second));
+        return ok(Json{steps});
+      }
+      const Json::Array records = arbitration_records_json(spaceRuntime.last_arbitration(), false);
       const auto& registry = ArbitrationRegistry::instance();
       return ok(Json::Object{
           {"registryEntries", static_cast<double>(registry.size())},
@@ -1192,6 +1281,13 @@ public:
           {"shards", static_cast<double>(arbiter_shards())},
           {"count", static_cast<double>(records.size())},
           {"records", records}});
+    });
+    // The instance's clock (#296): its UUID, the Lamport value of the newest
+    // committed step (never reset), and that step's number (-1 before the
+    // first since boot or reset).
+    server.route("GET", "/api/engine/clock", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      return ok(clock_json(clock.lamport(), completedStep));
     });
     server.route("GET", "/api/perceptual-simulation/history", [this](const http::Request&) {
       Json::Array arr;
@@ -1749,6 +1845,32 @@ private:
       {"intervalMs", static_cast<double>(samplerIntervalMs)}
     };
   }
+  // The clock as every surface reports it: {instance, lamport, step}.
+  Json clock_json(long long lamport, long step) const {
+    return Json::Object{{"instance", clock.instance()},
+                        {"lamport", static_cast<double>(lamport)},
+                        {"step", static_cast<double>(step)}};
+  }
+
+  // One retained step: its records, canonically ordered, under its clock.
+  Json arbitration_step_json(long step, const RetainedArbitration& retained) const {
+    const Json::Array records = arbitration_records_json(retained.records, true);
+    const auto& registry = ArbitrationRegistry::instance();
+    return Json::Object{
+        {"clock", clock_json(retained.lamport, step)},
+        {"registryEntries", static_cast<double>(registry.size())},
+        {"registrySource", registry.source().empty() ? Json{} : Json{registry.source()}},
+        {"shards", static_cast<double>(arbiter_shards())},
+        {"count", static_cast<double>(records.size())},
+        {"records", records}};
+  }
+
+  // Drop every retained step outside the window ending at `latest`.
+  void prune_arbitration_steps(long latest) {
+    arbitrationSteps.erase(arbitrationSteps.begin(),
+                           arbitrationSteps.lower_bound(latest - arbitrationWindow + 1));
+  }
+
   // The declared shape of a control (SURFACE_SPEC.md, "/api/engine/config").
   // `default` is the specification's value, restated here so a reader of the
   // response can see what the runtime is supposed to hold as well as what it
@@ -1817,6 +1939,54 @@ private:
       };
     };
 
+    // Retention off is the legacy escape (#296): the legacy response, and
+    // nothing kept per step. Turning it off drops what was kept, so the escape
+    // restores the memory profile as well as the shape; turning it on starts
+    // with the next committed step.
+    controls.push_back(EngineControl{
+      "arbitrationRetention", "engine",
+      [this] { return control_json("arbitrationRetention", "engine", arbitrationRetention, false); },
+      [this](const Json& body, std::string& error, int& status) {
+        if (!body.at("value").is_bool()) {
+          error = "arbitrationRetention requires a boolean `value`";
+          status = 400;
+          return false;
+        }
+        arbitrationRetention = body.at("value").as_bool();
+        if (!arbitrationRetention) arbitrationSteps.clear();
+        return true;
+      },
+      [this] {
+        arbitrationRetention = false;
+        arbitrationSteps.clear();
+      }
+    });
+    // Narrowing takes effect at once, so the next read answers for the new
+    // window.
+    controls.push_back(EngineControl{
+      "arbitrationWindow", "engine",
+      [this] {
+        return control_json("arbitrationWindow", "engine", static_cast<double>(arbitrationWindow),
+                            static_cast<double>(kArbitrationWindowDefault));
+      },
+      [this](const Json& body, std::string& error, int& status) {
+        const Json& v = body.at("value");
+        if (!v.is_number() || v.as_number() < 0 || v.as_number() > kArbitrationWindowMax ||
+            v.as_number() != std::floor(v.as_number())) {
+          error = "arbitrationWindow requires a whole-number `value` in [0, " +
+                  std::to_string(kArbitrationWindowMax) + "]";
+          status = 400;
+          return false;
+        }
+        arbitrationWindow = static_cast<long>(v.as_number());
+        prune_arbitration_steps(completedStep);
+        return true;
+      },
+      [this] {
+        arbitrationWindow = kArbitrationWindowDefault;
+        prune_arbitration_steps(completedStep);
+      }
+    });
     controls.push_back(EngineControl{
       "historyLimit", "engine",
       [this] {
@@ -1968,6 +2138,22 @@ private:
   // numbered from 0; -1 means none has completed.
   std::condition_variable stepCommitted;
   long completedStep = -1;
+  // The instance's Lamport clock (RealityEngine_CI#296): {instance, lamport,
+  // step}. Booted with the service, before the corpus loads, so an allocated
+  // instance that cannot keep its clock -- or whose UUID another live process
+  // holds -- fails at once rather than after the load. Ticked under
+  // spaceRuntimeMutex, once per committed step; never reset.
+  InstanceClock clock = InstanceClock::boot();
+  // Arbitration retention keyed by step (#296). Off by default: GET
+  // /api/arbitration answers in its legacy shape and nothing is kept per step.
+  // On, each committed step's records are kept under its step number, stamped
+  // with the Lamport value it committed at, for the arbitrationWindow steps
+  // ending at the latest. A map keyed by step rather than a ring of the latest
+  // n, so the window's anchor can later move (K-line histories). Guarded by
+  // spaceRuntimeMutex.
+  bool arbitrationRetention = false;
+  long arbitrationWindow = kArbitrationWindowDefault;
+  std::map<long, RetainedArbitration> arbitrationSteps;
   mutable std::mutex vectorMutex;
   mutable std::mutex sequenceMutex;
   mutable std::mutex checkpointMutex;
