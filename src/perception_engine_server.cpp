@@ -3637,7 +3637,7 @@ private:
   // (default "or"). Where several machines' outputs cover one cell, the first
   // by machine NAME decides — ids are minted per runtime, so id order would
   // differ between runtimes (ARBITER_CONTRACT.md §4.4b).
-  std::map<int, std::string> osre_fold_cells(const Json& step) {
+  std::map<int, OsreFoldCell> osre_fold_cells(const Json& step) {
     std::map<int, std::pair<std::string, std::string>> byCell;  // cell -> (name, transformation)
     const Json& batch = step.at("mergeBatch");
     if (!batch.is_array()) return {};
@@ -3662,8 +3662,8 @@ private:
         if (found == byCell.end() || name < found->second.first) byCell[c] = {name, transformation};
       }
     }
-    std::map<int, std::string> cells;
-    for (auto& [cell, entry] : byCell) cells[cell] = entry.second;
+    std::map<int, OsreFoldCell> cells;
+    for (auto& [cell, entry] : byCell) cells[cell] = OsreFoldCell{entry.first, entry.second};
     return cells;
   }
 
@@ -4047,6 +4047,10 @@ int main(int argc, char** argv) {
   std::string localAIMachinesDir = argc > 4 ? argv[4] : (std::getenv("LOCAL_AI_MACHINES_DIR") ? std::getenv("LOCAL_AI_MACHINES_DIR") : "../localAIStack/data/machines");
   int vectorDimension = argc > 5 ? std::stoi(argv[5]) : (std::getenv("VECTOR_DIMENSION") ? std::stoi(std::getenv("VECTOR_DIMENSION")) : 7680);
   bool bootstrapLocalAI = truthy_env(std::getenv("LOCAL_AI_BOOTSTRAP"));
+  // The fold applies a cell's declared arbitration rule (ARBITER_CONTRACT.md
+  // §4.4b, RealityEngine_CI#525), so the PE loads the registry the RE loads.
+  const char* machinesEnv = std::getenv("MACHINES_DIR");
+  ArbitrationRegistry::instance().load(machinesEnv && *machinesEnv ? machinesEnv : "../RealityEngine_Machines/machines");
   http::Server server;
   PerceptionService service(realityUrl, localAIUrl, localAIMachinesDir, vectorDimension, bootstrapLocalAI);
   service.mount(server);

@@ -994,6 +994,33 @@ struct ContendedCell {
   SourceRef winner;
   std::vector<SourceRef> suppressed;  // canonical (name, id) order
 };
+// The OSRE side of a fold cell: the writing machine's name (first by name where
+// several cover the cell) and its declared outputMergeTransformation (§4.4b).
+struct OsreFoldCell {
+  std::string machine;
+  std::string transformation = "or";
+};
+// One Source-vs-OSRE fold of a push assembly (ARBITER_CONTRACT.md §4.4b,
+// amended 2026-10-04, RealityEngine_CI#525).
+struct FoldRecord {
+  int cell = 0;
+  std::string resolution;    // "declared-rule" | "osre-fold"
+  std::string rule;          // declared-rule: the rule applied
+  std::string op;            // osre-fold: T_M
+  std::string declaredRule;  // osre-fold on a declared cell the fold could not apply
+  std::string review;        // "provider-unranked": the cell does not name the source's provider
+  std::string machine;
+  double osreValue = 0.0;
+  SourceRef source;
+  std::string provider;
+  double sourceValue = 0.0;
+  double resolved = 0.0;
+  std::string kept;          // "osre" | "source" | "both" | "combined"
+};
+// The contract provider of a source (§4.4b): the first `.` segment of its
+// origin through the surface aliases (openclaw -> acp, ollama/localaistack ->
+// localai); an empty origin or `signal` falls back to kind.
+std::string source_provider(const SourceConfig& source);
 struct ContentionCounter {
   long long contended = 0;   // transitions in which the source shared a cell
   long long suppressed = 0;  // transitions in which it lost at least one cell
@@ -1028,9 +1055,13 @@ public:
   // outputMergeTransformation of the machine whose output wrote it
   // (ARBITER_CONTRACT.md §4.4b). A source on one of these cells is folded with
   // the OSRE value by that operator over [0..1] instead of replacing it.
-  void set_osre_fold(std::map<int, std::string> cells);
+  void set_osre_fold(std::map<int, OsreFoldCell> cells);
+  // A bare operator per cell, no machine name (tests).
+  void set_osre_fold(const std::map<int, std::string>& cells);
   bool update_sensor_value(const std::string& sensorId, const Vector& values);
-  Vector assemble_vector() const;
+  // `folds`, when given, receives every Source-vs-OSRE fold of this assembly,
+  // ascending by cell. Only the push records them (record_contention).
+  Vector assemble_vector(std::vector<FoldRecord>* folds = nullptr) const;
   void update_from_perceptual_space(const Vector& values);
   void advance();
   void reset();
@@ -1053,7 +1084,8 @@ private:
   void ensure_capacity(int requiredEnd, const std::string& context);
   std::map<std::string, SourceConfig> sources;
   std::vector<ContendedCell> lastContention;
-  std::map<int, std::string> osreFold;
+  std::map<int, OsreFoldCell> osreFold;
+  std::vector<FoldRecord> lastFolds;
   long long lastContentionTransition = 0;
   std::map<std::string, ContentionCounter> contentionCounters;
   std::map<std::string, int> testStep;

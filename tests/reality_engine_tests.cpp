@@ -856,6 +856,74 @@ static void verify_osre_fold_operator() {
   assert(near(pe.assemble_vector()[50], 0.3));
 }
 
+// The fold on a declared cell (ARBITER_CONTRACT.md §4.4b, amended 2026-10-04,
+// RealityEngine_CI#525): the arbitration registry's rule governs, so under
+// PRECEDENCE {acp:1, machine:3} a machine at 0 beats an agent at 1 -- the one
+// pair where T_M ('or' = max) would let the generated value win. Every fold is
+// recorded and counted; undeclared cells keep T_M. Cells 9050-9052, which no
+// other test declares: the registry is a process singleton and load() adds.
+static void verify_fold_declared_rule() {
+  auto near = [](double a, double b) { return std::fabs(a - b) < 1e-12; };
+  auto src = [](const std::string& origin, const std::string& kind) {
+    SourceConfig s;
+    s.origin = origin;
+    s.kind = kind;
+    return s;
+  };
+  assert(source_provider(src("acp.openclaw.target.assessment", "sensor")) == "acp");
+  assert(source_provider(src("openclaw", "sensor")) == "acp");
+  assert(source_provider(src("ollama", "sensor")) == "localai");
+  assert(source_provider(src("localai.x-mcp-y", "sensor")) == "localai");  // first segment, never a substring
+  assert(source_provider(src("mqtt", "sensor")) == "mqtt");
+  assert(source_provider(src("", "sensor")) == "sensor");
+  assert(source_provider(src("signal", "test")) == "synthetic");
+  assert(determinism_of(source_provider(src("somesurface.x", "sensor"))) == Determinism::Generated);
+
+  const std::string path = "/tmp/re-cpp-fold-registry.json";
+  std::ofstream(path) << R"({"entries":[
+    {"cell":9050,"rule":"PRECEDENCE","providerRanks":{"acp":1,"machine":3}},
+    {"cell":9052,"rule":"PRECEDENCE","providerRanks":{"acp":3,"machine":3}},
+    {"cell":9053,"rule":"PRECEDENCE","providerRanks":{"acp":1,"machine":3}}]})";
+  setenv("ARBITRATION_REGISTRY", path.c_str(), 1);
+  ArbitrationRegistry::instance().load("");
+  unsetenv("ARBITRATION_REGISTRY");
+
+  PerceptionEngine pe(9100);
+  Vector ps(9100, 0.0);
+  ps[9051] = 0.2;  // the machine wrote 0 at 9050 and 9052, 0.2 at 9051
+  pe.update_from_perceptual_space(ps);
+  SourceConfig agent = make_seed("agent", "agent assessment", {9050, 3}, {1.0, 1.0, 1.0});
+  agent.origin = "acp.openclaw.target.assessment";
+  pe.add_source(agent);
+  // A seed the cell does not name, on declared cell 9053: it keeps T_M.
+  pe.add_source(make_seed("seed", "unnamed seed", {9053, 1}, {1.0}));
+  pe.set_osre_fold(std::map<int, OsreFoldCell>{
+      {9050, {"Peer", "or"}}, {9051, {"Peer", "or"}}, {9052, {"Peer", "or"}}, {9053, {"Peer", "or"}}});
+  std::vector<FoldRecord> folds;
+  Vector v = pe.assemble_vector(&folds);
+  assert(near(v[9050], 0.0));  // PRECEDENCE: the machine's 0 beats the agent's 1 (5a)
+  assert(near(v[9051], 1.0));  // undeclared: T_M = max(1, 0.2)
+  assert(near(v[9052], 1.0));  // equal ranks fall back to T_M
+  assert(near(v[9053], 1.0));  // an unnamed provider keeps T_M on a declared cell
+  assert(folds.size() == 4 && folds[0].cell == 9050 && folds[1].cell == 9051 && folds[2].cell == 9052);
+  assert(folds[3].cell == 9053 && folds[3].review == "provider-unranked" && folds[3].provider == "synthetic");
+  assert(folds[0].resolution == "declared-rule" && folds[0].rule == "PRECEDENCE" && folds[0].kept == "osre");
+  assert(folds[0].provider == "acp" && folds[0].machine == "Peer");
+  assert(folds[1].resolution == "osre-fold" && folds[1].op == "or" && folds[1].kept == "source");
+  assert(folds[2].resolution == "osre-fold" && folds[2].declaredRule == "PRECEDENCE");
+
+  pe.record_contention();
+  Json c = pe.contention_json();
+  assert(c.at("folds").array().size() == 4);
+  const Json& counter = c.at("counters").array().front();
+  assert(counter.at("contended").as_number() == 1 && counter.at("suppressed").as_number() == 1);
+  pe.assemble_vector();  // a read assembles, but never records or counts
+  assert(pe.contention_json().at("counters").array().front().at("contended").as_number() == 1);
+  pe.reset();
+  assert(pe.contention_json().at("folds").array().empty());
+  std::remove(path.c_str());
+}
+
 // ── activity expires continuously, not at reset ──────────────────────────────
 //
 // RealityEngine_CI#175. #41 made reset() validate the stored flag; this makes
@@ -1110,6 +1178,7 @@ static void verify_instance_clock() {
 
 int main() {
   verify_instance_clock();
+  verify_fold_declared_rule();
   // Minted ids are time-ordered UUIDs (RealityEngine_CI#518, #281): canonical
   // form, version 7, distinct, and strictly increasing in creation order, so two
   // machines on one region sort the same way on every engine.
