@@ -844,12 +844,12 @@ static void verify_osre_fold_operator() {
   pe.add_source(make_seed("seed-osre", "OSRE lane seed", {50, 2}, {0.3, 0.3}));
   // Without an OSRE term the source's value stands, as before.
   assert(near(pe.assemble_vector()[50], 0.3));
-  pe.set_osre_fold({{50, "or"}, {51, "and"}, {52, "or"}});
+  pe.set_osre_fold_ops({{50, "or"}, {51, "and"}, {52, "or"}});
   Vector v = pe.assemble_vector();
   assert(near(v[50], 0.6));  // max(0.3, 0.6)
   assert(near(v[51], 0.3));  // min(0.3, 0.6)
   assert(near(v[52], 0.6));  // OSRE only — unchanged
-  pe.set_osre_fold({{50, "strong-disjunction"}});
+  pe.set_osre_fold_ops({{50, "strong-disjunction"}});
   assert(near(pe.assemble_vector()[50], 0.9));
   pe.reset();
   // Reset clears the fold along with the OSRE term it folded with.

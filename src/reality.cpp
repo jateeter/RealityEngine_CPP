@@ -2288,7 +2288,7 @@ double fold_unit_interval(const std::string& t, double s, double o) {
   return std::max(s, o);  // or, join, and anything unrecognised
 }
 void PerceptionEngine::set_osre_fold(std::map<int, OsreFoldCell> cells) { osreFold = std::move(cells); }
-void PerceptionEngine::set_osre_fold(const std::map<int, std::string>& cells) {
+void PerceptionEngine::set_osre_fold_ops(const std::map<int, std::string>& cells) {
   osreFold.clear();
   for (const auto& [cell, t] : cells) osreFold[cell] = OsreFoldCell{"", t};
 }
