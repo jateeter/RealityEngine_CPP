@@ -2264,6 +2264,7 @@ Json PerceptionEngine::contention_json() const {
     if (!f.rule.empty()) o["rule"] = f.rule;
     if (!f.op.empty()) o["operator"] = f.op;
     if (!f.declaredRule.empty()) o["declaredRule"] = f.declaredRule;
+    if (!f.review.empty()) o["review"] = f.review;
     o["osre"] = Json::Object{{"machine", f.machine}, {"provider", "machine"}, {"value", f.osreValue}};
     o["source"] = Json::Object{{"id", f.source.id}, {"name", f.source.name}, {"kind", f.source.kind},
                                {"provider", f.provider}, {"value", f.sourceValue}};
@@ -2352,7 +2353,12 @@ Vector PerceptionEngine::assemble_vector(std::vector<FoldRecord>* folds) const {
     const ArbitrationEntry* entry = ArbitrationRegistry::instance().entry_for(cell);
     bool byRule = false;
     bool osreWins = false;
-    if (entry && entry->rule == "PRECEDENCE") {
+    // The declared rule applies only to a provider the cell names. An unnamed
+    // provider keeps T_M and is flagged for review: it is either ranked
+    // explicitly or placed in the unnamed-provider trustability ranking, never
+    // overridden by default (owner decision 2026-10-04, CI#525).
+    const bool named = entry && entry->providerRanks.count(provider) > 0;
+    if (entry && entry->rule == "PRECEDENCE" && named) {
       const int osreRank = fold_provider_rank("machine", *entry);
       const int sourceRank = fold_provider_rank(provider, *entry);
       byRule = osreRank != sourceRank;
@@ -2377,6 +2383,7 @@ Vector PerceptionEngine::assemble_vector(std::vector<FoldRecord>* folds) const {
       r.resolution = "osre-fold";
       r.op = fold.transformation;
       if (entry) r.declaredRule = entry->rule;
+      if (entry && !named) r.review = "provider-unranked";
       r.kept = (resolved == o && resolved == s) ? "both" : resolved == o ? "osre" : resolved == s ? "source" : "combined";
     }
     folds->push_back(std::move(r));

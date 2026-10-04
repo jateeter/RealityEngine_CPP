@@ -1008,6 +1008,7 @@ struct FoldRecord {
   std::string rule;          // declared-rule: the rule applied
   std::string op;            // osre-fold: T_M
   std::string declaredRule;  // osre-fold on a declared cell the fold could not apply
+  std::string review;        // "provider-unranked": the cell does not name the source's provider
   std::string machine;
   double osreValue = 0.0;
   SourceRef source;

@@ -882,7 +882,8 @@ static void verify_fold_declared_rule() {
   const std::string path = "/tmp/re-cpp-fold-registry.json";
   std::ofstream(path) << R"({"entries":[
     {"cell":9050,"rule":"PRECEDENCE","providerRanks":{"acp":1,"machine":3}},
-    {"cell":9052,"rule":"PRECEDENCE","providerRanks":{"acp":3,"machine":3}}]})";
+    {"cell":9052,"rule":"PRECEDENCE","providerRanks":{"acp":3,"machine":3}},
+    {"cell":9053,"rule":"PRECEDENCE","providerRanks":{"acp":1,"machine":3}}]})";
   setenv("ARBITRATION_REGISTRY", path.c_str(), 1);
   ArbitrationRegistry::instance().load("");
   unsetenv("ARBITRATION_REGISTRY");
@@ -894,13 +895,18 @@ static void verify_fold_declared_rule() {
   SourceConfig agent = make_seed("agent", "agent assessment", {9050, 3}, {1.0, 1.0, 1.0});
   agent.origin = "acp.openclaw.target.assessment";
   pe.add_source(agent);
-  pe.set_osre_fold(std::map<int, OsreFoldCell>{{9050, {"Peer", "or"}}, {9051, {"Peer", "or"}}, {9052, {"Peer", "or"}}});
+  // A seed the cell does not name, on declared cell 9053: it keeps T_M.
+  pe.add_source(make_seed("seed", "unnamed seed", {9053, 1}, {1.0}));
+  pe.set_osre_fold(std::map<int, OsreFoldCell>{
+      {9050, {"Peer", "or"}}, {9051, {"Peer", "or"}}, {9052, {"Peer", "or"}}, {9053, {"Peer", "or"}}});
   std::vector<FoldRecord> folds;
   Vector v = pe.assemble_vector(&folds);
   assert(near(v[9050], 0.0));  // PRECEDENCE: the machine's 0 beats the agent's 1 (5a)
   assert(near(v[9051], 1.0));  // undeclared: T_M = max(1, 0.2)
   assert(near(v[9052], 1.0));  // equal ranks fall back to T_M
-  assert(folds.size() == 3 && folds[0].cell == 9050 && folds[1].cell == 9051 && folds[2].cell == 9052);
+  assert(near(v[9053], 1.0));  // an unnamed provider keeps T_M on a declared cell
+  assert(folds.size() == 4 && folds[0].cell == 9050 && folds[1].cell == 9051 && folds[2].cell == 9052);
+  assert(folds[3].cell == 9053 && folds[3].review == "provider-unranked" && folds[3].provider == "synthetic");
   assert(folds[0].resolution == "declared-rule" && folds[0].rule == "PRECEDENCE" && folds[0].kept == "osre");
   assert(folds[0].provider == "acp" && folds[0].machine == "Peer");
   assert(folds[1].resolution == "osre-fold" && folds[1].op == "or" && folds[1].kept == "source");
@@ -908,7 +914,7 @@ static void verify_fold_declared_rule() {
 
   pe.record_contention();
   Json c = pe.contention_json();
-  assert(c.at("folds").array().size() == 3);
+  assert(c.at("folds").array().size() == 4);
   const Json& counter = c.at("counters").array().front();
   assert(counter.at("contended").as_number() == 1 && counter.at("suppressed").as_number() == 1);
   pe.assemble_vector();  // a read assembles, but never records or counts
