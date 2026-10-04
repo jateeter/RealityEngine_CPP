@@ -2219,7 +2219,15 @@ std::vector<ContendedCell> PerceptionEngine::source_contention() const {
 void PerceptionEngine::record_contention() {
   lastContention = source_contention();
   lastContentionTransition = globalStep;
+  lastFolds.clear();
+  assemble_vector(&lastFolds);
   std::set<std::string> contended, lost;
+  // A fold counts toward its source's `contended`, and toward `suppressed`
+  // when the OSRE side was kept (§4.4b, CI#525).
+  for (const auto& f : lastFolds) {
+    contended.insert(f.source.id);
+    if (f.kept == "osre") lost.insert(f.source.id);
+  }
   for (const auto& c : lastContention) {
     contended.insert(c.winner.id);
     for (const auto& l : c.suppressed) { contended.insert(l.id); lost.insert(l.id); }
@@ -2250,8 +2258,21 @@ Json PerceptionEngine::contention_json() const {
                                     {"contended", static_cast<double>(it->second.contended)},
                                     {"suppressed", static_cast<double>(it->second.suppressed)}});
   }
+  Json::Array folds;
+  for (const auto& f : lastFolds) {
+    Json::Object o{{"cell", static_cast<double>(f.cell)}, {"resolution", f.resolution}};
+    if (!f.rule.empty()) o["rule"] = f.rule;
+    if (!f.op.empty()) o["operator"] = f.op;
+    if (!f.declaredRule.empty()) o["declaredRule"] = f.declaredRule;
+    o["osre"] = Json::Object{{"machine", f.machine}, {"provider", "machine"}, {"value", f.osreValue}};
+    o["source"] = Json::Object{{"id", f.source.id}, {"name", f.source.name}, {"kind", f.source.kind},
+                               {"provider", f.provider}, {"value", f.sourceValue}};
+    o["resolved"] = f.resolved;
+    o["kept"] = f.kept;
+    folds.push_back(std::move(o));
+  }
   return Json::Object{{"transition", static_cast<double>(lastContentionTransition)},
-                      {"cells", cells}, {"counters", counters}};
+                      {"cells", cells}, {"folds", folds}, {"counters", counters}};
 }
 double fold_unit_interval(const std::string& t, double s, double o) {
   // The multi-valued form of each declared operator over [0..1], chain top 1.
@@ -2265,12 +2286,37 @@ double fold_unit_interval(const std::string& t, double s, double o) {
   if (t == "nand") return 1.0 - std::min(s, o);
   return std::max(s, o);  // or, join, and anything unrecognised
 }
-void PerceptionEngine::set_osre_fold(std::map<int, std::string> cells) { osreFold = std::move(cells); }
-Vector PerceptionEngine::assemble_vector() const {
+void PerceptionEngine::set_osre_fold(std::map<int, OsreFoldCell> cells) { osreFold = std::move(cells); }
+void PerceptionEngine::set_osre_fold(const std::map<int, std::string>& cells) {
+  osreFold.clear();
+  for (const auto& [cell, t] : cells) osreFold[cell] = OsreFoldCell{"", t};
+}
+std::string source_provider(const SourceConfig& source) {
+  std::string origin = source.origin;
+  std::transform(origin.begin(), origin.end(), origin.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  const std::string head = origin.substr(0, origin.find('.'));
+  if (head.empty() || head == "signal")
+    return (source.kind == "test" || source.kind == "simulated") ? "synthetic" : "sensor";
+  if (head == "openclaw") return "acp";
+  if (head == "ollama" || head == "localaistack") return "localai";
+  return head;  // an unregistered provider ranks as generated (determinism_of)
+}
+namespace {
+// A provider's rank under a declared entry: its providerRanks value, else its
+// determinism class -- the arbiter's own ranking.
+int fold_provider_rank(const std::string& provider, const ArbitrationEntry& entry) {
+  auto it = entry.providerRanks.find(provider);
+  return it != entry.providerRanks.end() ? it->second : determinism_rank(determinism_of(provider));
+}
+}  // namespace
+Vector PerceptionEngine::assemble_vector(std::vector<FoldRecord>* folds) const {
   Vector out = persistentVector;
   // Which cells a source wrote this instant: only those are folded with the
-  // OSRE term; a cell only the OSRE holds keeps its value.
+  // OSRE term; a cell only the OSRE holds keeps its value. `writer` is the
+  // source whose value landed -- the last writer in composition order.
   std::vector<char> sourceWrote(out.size(), 0);
+  std::vector<const SourceConfig*> writer(out.size(), nullptr);
   for (const SourceConfig* sp : active_sources_canonical()) {
     const SourceConfig& s = *sp;
     auto vals = source_values(s);
@@ -2287,14 +2333,53 @@ Vector PerceptionEngine::assemble_vector() const {
       if (s.region.offset + i < 0) continue;
       out[static_cast<size_t>(s.region.offset + i)] = std::clamp(vals[static_cast<size_t>(i)], 0.0, 1.0);
       sourceWrote[static_cast<size_t>(s.region.offset + i)] = 1;
+      writer[static_cast<size_t>(s.region.offset + i)] = sp;
     }
   }
-  // A source on an OSRE cell is folded with the OSRE value by the writing
-  // machine's operator rather than replacing it (ARBITER_CONTRACT.md §4.4b).
-  for (const auto& [cell, transformation] : osreFold) {
+  // A source on an OSRE cell is folded with the OSRE value rather than
+  // replacing it: by the cell's declared arbitration rule where the registry
+  // declares one -- PRECEDENCE takes the higher-ranked provider's value whole,
+  // so a deterministic machine beats a generated source at any value
+  // (criterion 5a) -- and otherwise by the writing machine's operator
+  // (ARBITER_CONTRACT.md §4.4b, amended 2026-10-04, RealityEngine_CI#525).
+  for (const auto& [cell, fold] : osreFold) {
     if (cell < 0 || cell >= static_cast<int>(out.size()) || !sourceWrote[static_cast<size_t>(cell)]) continue;
     const size_t c = static_cast<size_t>(cell);
-    out[c] = std::clamp(fold_unit_interval(transformation, out[c], persistentVector[c]), 0.0, 1.0);
+    const double s = out[c];
+    const double o = persistentVector[c];
+    const SourceConfig& src = *writer[c];
+    const std::string provider = source_provider(src);
+    const ArbitrationEntry* entry = ArbitrationRegistry::instance().entry_for(cell);
+    bool byRule = false;
+    bool osreWins = false;
+    if (entry && entry->rule == "PRECEDENCE") {
+      const int osreRank = fold_provider_rank("machine", *entry);
+      const int sourceRank = fold_provider_rank(provider, *entry);
+      byRule = osreRank != sourceRank;
+      osreWins = osreRank > sourceRank;
+    }
+    const double resolved = byRule ? (osreWins ? o : s) : fold_unit_interval(fold.transformation, s, o);
+    out[c] = std::clamp(resolved, 0.0, 1.0);
+    if (!folds) continue;
+    FoldRecord r;
+    r.cell = cell;
+    r.machine = fold.machine;
+    r.osreValue = o;
+    r.source = SourceRef{src.id, src.name, src.kind, src.activatedAt};
+    r.provider = provider;
+    r.sourceValue = s;
+    r.resolved = resolved;
+    if (byRule) {
+      r.resolution = "declared-rule";
+      r.rule = entry->rule;
+      r.kept = osreWins ? "osre" : "source";
+    } else {
+      r.resolution = "osre-fold";
+      r.op = fold.transformation;
+      if (entry) r.declaredRule = entry->rule;
+      r.kept = (resolved == o && resolved == s) ? "both" : resolved == o ? "osre" : resolved == s ? "source" : "combined";
+    }
+    folds->push_back(std::move(r));
   }
   return out;
 }
@@ -2371,6 +2456,7 @@ void PerceptionEngine::reset() {
     s.activatedAt = 0;
   }
   lastContention.clear();
+  lastFolds.clear();
   lastContentionTransition = 0;
   contentionCounters.clear();
   // No push since the reset, so no OSRE term to fold with.
