@@ -631,6 +631,67 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: get_api_engine_isre_history
+  /api/engine/steps/{n}/pair:
+    get:
+      tags:
+      - Engine
+      summary: The (ISRE, OSRE) pair for step n, waiting up to timeoutMs at its completion point
+      parameters:
+      - name: n
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+        description: Step number; steps are numbered from 0 on every runtime
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_engine_steps_n_pair
+  /api/engine/clock:
+    get:
+      tags:
+      - Engine
+      summary: The instance clock {instance, lamport, step} for the newest committed step
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_engine_clock
+  /api/arbitration:
+    get:
+      tags:
+      - Engine
+      summary: 'Arbitration records: the legacy latest-step object, or retained steps keyed by step (?step=N)'
+      parameters:
+      - name: step
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+        description: Read one retained step. 404 not resolved, 410 no longer retained, 409 while arbitrationRetention is off.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_arbitration
   /api/engine/process:
     post:
       tags:
