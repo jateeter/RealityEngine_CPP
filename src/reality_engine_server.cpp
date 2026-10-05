@@ -437,8 +437,23 @@ public:
                    << (static_cast<double>(ns) / 1e9) << "\n";
           }
         }
+        // The five universal step phases (SURFACE_SPEC.md, "phaseDetail"), on
+        // every runtime under the same names. Absent while the gate is off.
+        if (spaceRuntime.phase_detail()) {
+          static const char* stepPhases[5] = {"step.isre_capture", "step.compose", "step.resolve",
+                                              "step.commit", "step.publish"};
+          for (int k = 0; k < 5; ++k) {
+            extras << "re_step_phase_seconds_total{runtime=\"cpp\",phase=\"" << stepPhases[k] << "\"} "
+                   << (static_cast<double>(pt.stepPhaseNs[k]) / 1e9) << "\n";
+          }
+        }
         extras.unsetf(std::ios::fixed);
-        extras << "# HELP re_step_phase_detail Whether the merge_build sub-phase probes are enabled.\n";
+        if (spaceRuntime.phase_detail()) {
+          extras << "# HELP re_step_phase_detail_steps_total Steps the universal step phases were measured over.\n";
+          extras << "# TYPE re_step_phase_detail_steps_total counter\n";
+          extras << "re_step_phase_detail_steps_total{runtime=\"cpp\"} " << pt.stepDetailSteps << "\n";
+        }
+        extras << "# HELP re_step_phase_detail Whether step phase timing (phaseDetail) is on.\n";
         extras << "# TYPE re_step_phase_detail gauge\n";
         extras << "re_step_phase_detail{runtime=\"cpp\"} " << (spaceRuntime.phase_detail() ? 1 : 0) << "\n";
         extras << "# HELP re_step_phase_steps_total Steps measured — the denominator for re_step_phase_seconds_total.\n";
