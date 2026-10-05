@@ -1,0 +1,44 @@
+# GCC compile and unit tests: a checkout-local gate, deliberately minimal.
+#
+# Development happens on macOS, where clang builds this engine. GCC on Linux,
+# which the RealityEngine_CI regression lane uses, rejects some code clang
+# accepts: #159 merged a call clang resolved and GCC reported as ambiguous, and
+# nothing saw it until the CI nightly failed at build-cpp (fixed in #160). This
+# job runs the same `make all` and `make test` on GCC before merge.
+#
+# It is the minimal peripheral lane RealityEngine_CI/docs/ENGINEERING_CONTRACT.md
+# allows ("this repository is the authority — peripheral CI stays minimal"):
+# unit tests on the runner's preinstalled g++, two header packages, no sibling
+# checkouts, no universe. A green run here says this checkout compiles and its
+# unit tests pass on GCC. It does not verify a change; RealityEngine_CI does,
+# against a live universe (BUILD_CONTROL_CONTRACT.md).
+name: GCC build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gcc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # The packages the RealityEngine_CI regression lane installs for this
+      # engine (regression-tests.yml, "Install native toolchains").
+      - name: Install build headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libssl-dev libboost-dev
+          g++ --version | head -1
+
+      - name: make all
+        run: make -j"$(nproc)" all
+
+      - name: make test
+        run: make test
