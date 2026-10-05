@@ -723,8 +723,21 @@ public:
       // Adding live activation to this payload would be a cross-runtime
       // contract change: LSP and Scala return the same summary shape, and a
       // field added here alone is the divergence class #176 and #197 were about.
+      //
+      // Every resident machine is listed (RealityEngine_CPP#163, SURFACE_SPEC.md
+      // "POST /api/machines always ingests"). A machine with no
+      // perceptualMapping is ingested and resident but never enters the
+      // spaceRuntime, so it is listed from its machine registry copy, the same
+      // fallback GET /api/machines/:id uses. Listing the spaceRuntime alone
+      // omitted it here while LSP and Scala listed it, and a caller finding
+      // machines through this list could not find, or delete, it.
+      //
+      // Lock order matches GET /api/machines/:id: machine registry, then spaceRuntime.
+      std::shared_lock<std::shared_mutex> lock(registryMutex);
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
-      for (const auto& m : machines_in_canonical_order(spaceRuntime.running_machines())) {
+      std::map<std::string, Machine> resident = spaceRuntime.running_machines();
+      for (const auto& [id, m] : machines) resident.emplace(id, m);
+      for (const auto& m : machines_in_canonical_order(resident)) {
         arr.push_back(m.to_json());
       }
       return ok(Json::Object{{"machines", arr}});
