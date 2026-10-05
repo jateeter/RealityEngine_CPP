@@ -15,9 +15,8 @@
 name: GCC build
 
 on:
-  pull_request:
   push:
-    branches: [main]
+    branches: [tmp-gcc-check-demo-pre160]
 
 permissions:
   contents: read
