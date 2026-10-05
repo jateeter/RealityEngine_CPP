@@ -52,6 +52,11 @@ make e2e-healthkit-spezi
 
 Use `make all`, not `make build`.
 
+`.github/workflows/gcc-build.yml` runs `make all` and `make test` on GCC
+(ubuntu) for every PR. clang on macOS accepts code GCC rejects (#159/#160), and
+the CI regression lane builds with GCC. It is the minimal peripheral lane the CI
+engineering contract allows: a compile and unit-test gate, never verification.
+
 ## Runtime Contract
 
 - The machine corpus should usually load from `../RealityEngine_Machines/machines`.
