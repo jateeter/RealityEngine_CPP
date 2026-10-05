@@ -734,6 +734,14 @@ public:
     std::uint64_t governanceNs    = 0;  // resolve_governance + severity ranking
     std::uint64_t coveragePagingNs = 0; // paging-decision / deprecated-fire records
     std::uint64_t mergeOpNs       = 0;  // MergeOperation construction
+
+    // The five universal step phases (SURFACE_SPEC.md, "phaseDetail"), each the
+    // span between two declared boundaries: B0 step start, B1 ISRE captured,
+    // B2 every composer joined, B3 OSRE resolved, B4 pair committed, B5
+    // completion published. Gated by phaseDetail like the sub-phases above;
+    // stepDetailSteps counts the steps they were measured over.
+    std::uint64_t stepPhaseNs[5]  = {0, 0, 0, 0, 0};
+    std::uint64_t stepDetailSteps = 0;
   };
   // Map across machines, in parallel, over one atomic collection
   // (SURFACE_SPEC.md, "POST /api/engine/process"; RealityEngine_CI#254).
@@ -894,6 +902,12 @@ private:
   SimulationStep run_phases(int stepNumber, std::optional<ComparatorType> overrideType);
   PhaseTimings phaseTimings;
   bool phaseDetail = false;
+  // Universal step-phase clock: whether the step in progress is measured
+  // (captured at B0, so a toggle mid-step cannot split one step's phases), and
+  // the last boundary crossed.
+  bool stepPhaseActive = false;
+  std::chrono::steady_clock::time_point stepPhaseMark{};
+  void tick_step_phase(int phase);
   int initialDimension;
   PerceptualSpace space;
   std::map<std::string, Machine> machines;

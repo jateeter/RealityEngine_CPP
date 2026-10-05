@@ -1349,8 +1349,13 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   // extract_machine_input — records what the corpus read, not an approximation
   // of it.  The arbitration feedback from step n-1 is already merged in; the
   // gap between this and the seed is what arbitration did.
+  // B0: the step starts. The universal phases are measured only while
+  // phaseDetail is on, decided once here for the whole step.
+  stepPhaseActive = phaseDetail;
+  if (stepPhaseActive) stepPhaseMark = std::chrono::steady_clock::now();
   TrajectoryEntry isre = sparse_trajectory(stepNumber, space.vector());
   TrajectoryEntry osre;
+  tick_step_phase(0);  // B1: ISRE captured
 
   struct MachinePhaseJob {
     std::string id;
@@ -1467,6 +1472,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   };
 
   for (size_t i = 0; i < futures.size(); ++i) results[i] = futures[i].get();
+  tick_step_phase(1);  // B2: every composer joined
   // The barrier itself: how long the main thread spends waiting for the last
   // machine to finish. This is the span RealityEngine_CI#256 proposes to bleed
   // into the OSRE work rather than serialise ahead of it.
@@ -1835,6 +1841,7 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
               [](const TrajectoryCell& a, const TrajectoryCell& b) { return a.index < b.index; });
     step.arbitration = std::move(records);
   }
+  tick_step_phase(2);  // B3: OSRE resolved
   // Phase 4 — apply compose/meta-CES event-bus subscriptions, latching
   // 1.0 bits at the offsets every subscriber asked for.  These writes
   // make producer "fired" signals visible to meta-machines on the next step.
@@ -1882,8 +1889,21 @@ void PerceptualSpaceRuntime::record_trajectory(TrajectoryEntry isre, TrajectoryE
     isreHistory.erase(isreHistory.begin(), isreHistory.begin() + static_cast<long>(isreHistory.size() - maxTrajectory));
   if (osreHistory.size() > maxTrajectory)
     osreHistory.erase(osreHistory.begin(), osreHistory.begin() + static_cast<long>(osreHistory.size() - maxTrajectory));
+  tick_step_phase(3);  // B4: pair committed
   // The pair is committed: the step's completion point (RealityEngine_CI#375).
   if (onStepCommitted) onStepCommitted(committed);
+  tick_step_phase(4);  // B5: completion published
+  if (stepPhaseActive) {
+    phaseTimings.stepDetailSteps += 1;
+    stepPhaseActive = false;
+  }
+}
+void PerceptualSpaceRuntime::tick_step_phase(int phase) {
+  if (!stepPhaseActive) return;
+  const auto now = std::chrono::steady_clock::now();
+  phaseTimings.stepPhaseNs[phase] += static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now - stepPhaseMark).count());
+  stepPhaseMark = now;
 }
 void PerceptualSpaceRuntime::rebuild_edge_cache() const {
   // Canonical order — by machine name, then id — the same order
