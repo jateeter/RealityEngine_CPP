@@ -240,6 +240,12 @@ public:
       : ws(std::move(stream)), hub(std::move(hub)), on_open(std::move(on_open)) {}
 
   void run(beast_http::request<beast_http::string_body> request) {
+    // The tcp_stream arrives from HttpSession with that session's per-request
+    // deadline (HTTP_SESSION_TIMEOUT_MS, 5 s) still armed. Left armed, it closed
+    // every WebSocket 5 s after it opened, mid-read (close code 1006). The
+    // websocket stream's own suggested timeouts take over from here, and Beast
+    // requires the lower layer's expiry to be off when they do.
+    beast::get_lowest_layer(ws).expires_never();
     ws.set_option(beast_websocket::stream_base::timeout::suggested(beast::role_type::server));
     ws.set_option(beast_websocket::stream_base::decorator([](beast_websocket::response_type& res) {
       res.set(beast_http::field::server, "RealityEngine_CPP");
@@ -301,6 +307,14 @@ public:
         heartbeatTimer(this->stream.get_executor()) {}
 
   void run(beast_http::request<beast_http::string_body> req) {
+    // The tcp_stream arrives from HttpSession with that session's per-request
+    // deadline (HTTP_SESSION_TIMEOUT_MS, 5 s) still armed. An event stream lives
+    // as long as its client, so the deadline must go: left armed, the first
+    // write after it — the 15 s keepalive — failed with a timeout and closed
+    // the socket, so every /api/engine/stream and /api/events client was cut
+    // off at 15 s and had to reconnect, losing any step sent in between. A dead
+    // peer is detected by the heartbeat's failed write instead.
+    stream.expires_never();
     auto res = std::make_shared<beast_http::response<beast_http::empty_body>>();
     res->version(req.version());
     res->result(beast_http::status::ok);
@@ -322,6 +336,7 @@ public:
   void send(std::string text) {
     asio::post(stream.get_executor(),
       [self = shared_from_this(), text = std::move(text)]() mutable {
+        if (self->closed) return;
         self->outbox.push_back(std::move(text));
         if (!self->writing) self->write_next();
       });
@@ -329,7 +344,7 @@ public:
 
 private:
   void write_next() {
-    if (outbox.empty()) { writing = false; return; }
+    if (closed || outbox.empty()) { writing = false; return; }
     writing = true;
     const std::string& data = outbox.front();
     std::ostringstream oss;
@@ -338,18 +353,39 @@ private:
     asio::async_write(stream, asio::buffer(*chunk),
       [self = shared_from_this(), chunk](beast::error_code ec, std::size_t) {
         self->outbox.pop_front();
-        if (ec) { self->writing = false; return; }
+        if (ec) { self->close(); return; }
         self->write_next();
       });
   }
 
+  // A failed write means the peer is gone. Close, and stop the heartbeat: it
+  // holds the session alive, so without this a dead session kept waking every
+  // interval to fail another write, indefinitely.
+  void close() {
+    if (closed) return;
+    closed = true;
+    writing = false;
+    outbox.clear();
+    heartbeatTimer.cancel();
+    beast::error_code ignored;
+    stream.socket().shutdown(tcp::socket::shutdown_both, ignored);
+    stream.close();
+  }
+
   void schedule_heartbeat() {
-    heartbeatTimer.expires_after(std::chrono::seconds(15));
+    if (closed) return;
+    heartbeatTimer.expires_after(std::chrono::milliseconds(heartbeat_ms()));
     heartbeatTimer.async_wait([self = shared_from_this()](beast::error_code ec) {
-      if (ec) return;
+      if (ec || self->closed) return;
       self->send(": keepalive\r\n\r\n");
       self->schedule_heartbeat();
     });
+  }
+
+  // SURFACE_SPEC: a keepalive comment every 15 s. Overridable for tests.
+  static int heartbeat_ms() {
+    static const int ms = env_int("SSE_HEARTBEAT_MS", 15000, 10);
+    return ms;
   }
 
   beast::tcp_stream stream;
@@ -357,6 +393,7 @@ private:
   asio::steady_timer heartbeatTimer;
   std::deque<std::string> outbox;
   bool writing = false;
+  bool closed = false;
 };
 
 void Server::SseHub::add(std::weak_ptr<SseSession> session) {
