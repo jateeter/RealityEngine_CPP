@@ -539,7 +539,9 @@ public:
           : 0;
         vectorSize = engine.vector_dimension();
       }
-      return http::Response{200, semantic_metrics_text(sources, globalStep, vectorSize, lastPushMs),
+      return http::Response{200,
+                            semantic_metrics_text(sources, globalStep, vectorSize, lastPushMs) +
+                              mqtt_metrics_text(),
                             "text/plain; charset=utf-8"};
     });
     server.route("GET", "/api/integrations/localai/status", [this](const http::Request&) {
@@ -3573,6 +3575,38 @@ private:
                          "Escalation-class actions dispatched, by RAG status of the determination.",
                          "counter", {{"rag", rag}}, count);
     }
+    return out;
+  }
+
+  // MQTT bridge block, PE_METRICS_CONTRACT.md "MQTT bridge": the names, HELP
+  // text and order the TypeScript PE emits, so the Semantic Guardrails MQTT
+  // panels read every runtime (RealityEngine_CPP#169). A disabled bridge emits
+  // the two gauges at 0 and no counters, as there. Reads the bridge the same
+  // unguarded way /api/mqtt/status does.
+  std::string mqtt_metrics_text() const {
+    std::string out;
+    if (!mqttBridge) {
+      out += metric_line("mqtt_bridge_enabled", "MQTT bridge is configured (1) or disabled (0).", "gauge", {}, 0);
+      out += metric_line("mqtt_bridge_connected", "MQTT bridge is currently connected to the broker (1/0).", "gauge", {}, 0);
+      return out;
+    }
+    const auto s = mqttBridge->stats();
+    auto n = [](uint64_t v) { return static_cast<long long>(v); };
+    out += metric_line("mqtt_bridge_enabled", "MQTT bridge is configured (1) or disabled (0).", "gauge", {}, 1);
+    out += metric_line("mqtt_bridge_connected", "MQTT bridge is currently connected to the broker (1/0).", "gauge", {},
+                       mqttBridge->is_connected() ? 1 : 0);
+    out += metric_line("mqtt_messages_received_total", "Total MQTT PUBLISH messages received.", "counter", {},
+                       n(s.messagesReceived));
+    out += metric_line("mqtt_messages_mapped_total", "Total messages successfully mapped to a region.", "counter", {},
+                       n(s.messagesMapped));
+    out += metric_line("mqtt_messages_rejected_total", "Total messages rejected by mapping/normalize.", "counter", {},
+                       n(s.messagesRejected));
+    out += metric_line("mqtt_messages_unmatched_total", "Total messages whose topic matched no rule.", "counter", {},
+                       n(s.messagesUnmatched));
+    out += metric_line("mqtt_pushes_triggered_total", "Total perceive pushes triggered by MQTT ingest.", "counter", {},
+                       n(s.pushesTriggered));
+    out += metric_line("mqtt_mappings_loaded", "Number of mapping rules in the registry.", "gauge", {},
+                       static_cast<long long>(mqttBridge->registry().size()));
     return out;
   }
 
