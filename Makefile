@@ -45,7 +45,7 @@ SRC_OBJ := $(SRC:%.cpp=$(OBJ_DIR)/%.o)
 SERVER_OBJ := $(OBJ_DIR)/src/reality_engine_server.o $(OBJ_DIR)/src/perception_engine_server.o
 CLI_OBJ    := $(OBJ_DIR)/src/http.o $(OBJ_DIR)/tools/reality_engine_cli.o
 
-TEST_NAMES := reality_engine_tests arbiter_tests sta_checker_tests mqtt_client_tests \
+TEST_NAMES := reality_engine_tests arbiter_tests sta_checker_tests mqtt_client_tests http_session_tests \
               mqtt_mapping_tests e2e_machine_sequences e2e_machine_domains \
               e2e_domain_scenarios e2e_ai_trigger_dispatch e2e_yuma_localai_cascade \
               cesgen_oracles_parity cesgen_provenance cesgen_composition \
@@ -87,11 +87,12 @@ $(BIN_DIR)/cesgen_index_compile: $(OBJ_DIR)/tests/cesgen_index_compile.o | $(BIN
 $(TEST_NAMES:%=$(BIN_DIR)/%): $(BIN_DIR)/%: $(SRC_OBJ) $(OBJ_DIR)/tests/%.o | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
-test: $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/arbiter_tests $(BIN_DIR)/sta_checker_tests $(BIN_DIR)/mqtt_client_tests $(BIN_DIR)/mqtt_mapping_tests
+test: $(BIN_DIR)/reality_engine_tests $(BIN_DIR)/arbiter_tests $(BIN_DIR)/sta_checker_tests $(BIN_DIR)/mqtt_client_tests $(BIN_DIR)/mqtt_mapping_tests $(BIN_DIR)/http_session_tests
 	$(BIN_DIR)/reality_engine_tests
 	$(BIN_DIR)/sta_checker_tests
 	$(BIN_DIR)/mqtt_client_tests
 	$(BIN_DIR)/mqtt_mapping_tests
+	$(BIN_DIR)/http_session_tests
 
 e2e-corpus: $(BIN_DIR)/e2e_machine_sequences $(BIN_DIR)/e2e_machine_domains $(BIN_DIR)/e2e_domain_scenarios $(BIN_DIR)/e2e_ai_trigger_dispatch $(BIN_DIR)/e2e_yuma_localai_cascade $(BIN_DIR)/cesgen_oracles_parity $(BIN_DIR)/cesgen_provenance $(BIN_DIR)/cesgen_composition $(BIN_DIR)/cesgen_governance $(BIN_DIR)/cesgen_deprecation
 	$(BIN_DIR)/e2e_machine_sequences ../RealityEngine_Machines/machines
