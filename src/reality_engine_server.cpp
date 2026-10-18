@@ -811,6 +811,15 @@ public:
       }
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      // A corpus-declared id is kept when no resident machine holds it, and
+      // minted otherwise (SURFACE_SPEC, "POST /api/machines keeps a declared
+      // id"; owner decision 2026-10-18). The loader minted for every POST, while
+      // LSP kept the declared id, so a machine loaded at runtime had a different
+      // identity on each engine and the byte-equivalence surfaces diverged.
+      if (const std::string declared = declared_machine_id(req.body);
+          !declared.empty() && machines.find(declared) == machines.end()) {
+        m.id = declared;
+      }
       // Always ingests. A resident name is versioned and reallocated rather
       // than rejected or replaced — this used to mint a fresh id and keep the
       // requested name, so two resident machines answered to one name and a
@@ -1688,6 +1697,19 @@ private:
   // difference as an engine divergence.
   //
   // Caller holds registryMutex and spaceRuntimeMutex.
+  // The id a POST body declares for its machine, from either accepted shape
+  // (the corpus envelope or the bare Machine object), or "" when it declares
+  // none. The body has already parsed once, so this does not throw on it.
+  static std::string declared_machine_id(const std::string& raw) {
+    try {
+      Json root = json::parse(raw);
+      const Json& mj = root.at("machine").is_object() ? root.at("machine") : root;
+      return mj.at("id").is_string() ? mj.at("id").as_string() : std::string();
+    } catch (const std::exception&) {
+      return std::string();
+    }
+  }
+
   bool version_on_conflict(Machine& m) {
     bool resident = false;
     for (const auto& [_, existing] : machines) {

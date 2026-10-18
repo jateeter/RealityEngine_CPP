@@ -750,6 +750,55 @@ print(f"  POST /api/machines: {requested_name!r} -> v2 {regions(ingested)}, v3 {
       f"original untouched; DELETE frees the name and restores the declared mapping")
 INGEST_PY
 
+# ── POST /api/machines keeps a declared id that no resident machine holds ────
+#
+# SURFACE_SPEC, "POST /api/machines keeps a declared id" (owner decision
+# 2026-10-18). A machine whose body declares an id is ingested under that id when
+# no resident machine holds it; otherwise, and with no declared id, the engine
+# mints one. This route minted for every POST while LSP kept the declared id, so
+# a machine loaded at runtime had a different identity on each engine.
+python3 - "http://localhost:${REALITY_ENGINE_E2E_PORT}" <<'DECLARED_ID_PY'
+import json, sys, urllib.request
+
+base = sys.argv[1]
+
+
+def call(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(base + path, data=data, method=method,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        raw = r.read()
+        return json.loads(raw) if raw else {}
+
+
+listing = call("GET", "/api/machines")
+machines = listing.get("machines", listing) if isinstance(listing, dict) else listing
+template = call("GET", f"/api/machines/{machines[0]['id']}")
+template = template.get("machine", template)
+body = json.loads(json.dumps(template))
+body["name"] = "E2E Declared Id Probe"
+body["id"] = "e2e-declared-id-probe"
+
+first = call("POST", "/api/machines", body)["machine"]
+if first["id"] != "e2e-declared-id-probe":
+    raise SystemExit(f"a declared id no resident machine holds was not kept: got {first['id']!r}")
+
+second = call("POST", "/api/machines", body)["machine"]
+if second["id"] == "e2e-declared-id-probe":
+    raise SystemExit("a declared id already held was reused: the resident machine was replaced")
+if second["name"] != "E2E Declared Id Probe v2":
+    raise SystemExit(f"the re-post was not versioned: {second['name']!r}")
+resident = call("GET", "/api/machines/e2e-declared-id-probe")
+resident = resident.get("machine", resident)
+if resident["name"] != "E2E Declared Id Probe":
+    raise SystemExit(f"the resident machine was modified: {resident['name']!r}")
+
+for mid in (second["id"], "e2e-declared-id-probe"):
+    call("DELETE", f"/api/machines/{mid}")
+print("  declared id: kept when free; a held one is minted and the resident machine untouched")
+DECLARED_ID_PY
+
 # ── The per-machine process routes actually process ──────────────────────────
 #
 # These answered 200 with `sequenceResults: {}` and `totalInputs: 0` for every
