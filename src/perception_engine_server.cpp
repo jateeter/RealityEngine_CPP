@@ -2147,6 +2147,19 @@ private:
     return text.str();
   }
 
+  // Models Ollama refuses `format` for ("structured output is unavailable").
+  // The same list, and the same rule, are in the LSP, Scala and TypeScript PEs:
+  // all three engines must send or omit `format` identically for a model
+  // (RealityEngine_CI docs/OLLAMA_INTEGRATION.md, "Structured output").
+  static bool ollama_model_supports_structured_output(const std::string& model) {
+    static const char* const kNoStructuredOutput[] = {"nemotron-3-nano"};
+    const std::string family = model.substr(0, model.find(':'));
+    for (const char* known : kNoStructuredOutput) {
+      if (family == known) return false;
+    }
+    return true;
+  }
+
   Json build_ollama_payload(const DispatchRecord& record, const Json& body, const std::string& model) const {
     if (body.at("payload").is_object()) return body.at("payload");
     const std::string systemPrompt = body.at("systemPrompt").as_string(
@@ -2164,7 +2177,7 @@ private:
       {"messages", messages}
     };
     if (body.at("format").is_string()) payload["format"] = body.at("format").as_string();
-    else if (body.at("formatJson").as_bool(true)) payload["format"] = "json";
+    else if (body.at("formatJson").as_bool(ollama_model_supports_structured_output(model))) payload["format"] = "json";
     if (body.at("options").is_object()) payload["options"] = body.at("options");
     return Json(payload);
   }
