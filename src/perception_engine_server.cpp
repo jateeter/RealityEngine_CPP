@@ -399,6 +399,36 @@ Json completion_schema_for_mapping(const Json& mapping) {
   };
 }
 
+// For a model Ollama will not constrain with `format`: the keys that
+// completion_schema_for_mapping would require, as plain words plus an example
+// shape, appended to the system prompt. Built from the mapping's pointers in
+// declaration order so the text is byte-identical in the LSP, Scala and
+// TypeScript PEs (RealityEngine_CI docs/OLLAMA_INTEGRATION.md, "Structured
+// output"): the same model must see the same prompt from every engine.
+std::string completion_contract_prompt(const Json& mapping) {
+  std::vector<std::string> keys;
+  const Json& extract = mapping.at("extract");
+  if (mapping.is_object() && extract.is_object() && extract.at("type").as_string() == "json") {
+    Json::Array pointers;
+    if (extract.at("pointers").is_array()) pointers = extract.at("pointers").array();
+    else if (extract.at("pointer").is_string()) pointers.push_back(extract.at("pointer"));
+    for (const auto& item : pointers) {
+      std::string key = json_pointer_top_level_key(item.as_string());
+      if (key.empty()) key = "value";
+      if (std::find(keys.begin(), keys.end(), key) == keys.end()) keys.push_back(key);
+    }
+  }
+  const std::string lead = "\n\nRespond with ONLY one JSON object, with no prose and no markdown fences, that has exactly ";
+  if (keys.empty()) return lead + "this key, an array of numbers: values. For example: {\"values\": [0]}";
+  std::string names, example;
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (i) { names += ", "; example += ", "; }
+    names += keys[i];
+    example += "\"" + keys[i] + "\": 0";
+  }
+  return lead + "these keys, each a number or boolean: " + names + ". For example: {" + example + "}";
+}
+
 Json openai_text_format_for_mapping(const Json& mapping) {
   return Json::Object{
     {"format", Json::Object{
@@ -2160,11 +2190,15 @@ private:
     return true;
   }
 
-  Json build_ollama_payload(const DispatchRecord& record, const Json& body, const std::string& model) const {
+  Json build_ollama_payload(const DispatchRecord& record, const Json& body, const std::string& model, const Json& mapping) const {
     if (body.at("payload").is_object()) return body.at("payload");
-    const std::string systemPrompt = body.at("systemPrompt").as_string(
+    const bool supportsStructured = ollama_model_supports_structured_output(model);
+    const bool sendFormat = body.at("format").is_string() || body.at("formatJson").as_bool(supportsStructured);
+    std::string systemPrompt = body.at("systemPrompt").as_string(
       "You are a local PE-controlled Ollama adapter. Analyze the trigger envelope and respond as JSON. "
       "When committing a PE completion, include a numeric values array matching the configured source mapping.");
+    // No `format` to constrain the reply: say what it must contain, in the prompt.
+    if (!sendFormat) systemPrompt += completion_contract_prompt(mapping);
     const std::string userPrompt = body.at("prompt").as_string(
       "Review this RealityEngine trigger envelope and produce a concise JSON result for PE completion ingest.");
     Json::Array messages{
@@ -2177,7 +2211,11 @@ private:
       {"messages", messages}
     };
     if (body.at("format").is_string()) payload["format"] = body.at("format").as_string();
-    else if (body.at("formatJson").as_bool(ollama_model_supports_structured_output(model))) payload["format"] = "json";
+    else if (sendFormat) payload["format"] = "json";
+    // Reasoning adds nothing to filling in named fields and made replies slower
+    // and less reliable on the models that cannot take `format` (measured on
+    // nemotron-3-nano: 8/8 valid at 0.4 s with thinking off, 6/8 at 2-8 s on).
+    if (!supportsStructured) payload["think"] = false;
     if (body.at("options").is_object()) payload["options"] = body.at("options");
     return Json(payload);
   }
@@ -2207,7 +2245,7 @@ private:
     });
 
     try {
-      Json payload = build_ollama_payload(record, body, model);
+      Json payload = build_ollama_payload(record, body, model, completionMapping);
       std::string raw = http::post_json(ollamaBaseUrl + "/api/chat", json::stringify(payload));
       Json response = json::parse(raw);
       std::string content = response.at("message").at("content").as_string(response.at("response").as_string());
