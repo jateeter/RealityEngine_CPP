@@ -3548,6 +3548,16 @@ private:
     std::string local;
     for (char c : sequence) local += (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') ? c : '_';
     const std::string action = governance.at("actionCode").is_string() ? governance.at("actionCode").as_string() : "";
+    // Escalation guardrail, as in Scala and TypeScript: re:EscalationDetermination
+    // requires RED. The axiom is open-world, so an unstated status is consistent
+    // and counted apart from an explicit non-RED, which is a violation. The map
+    // was declared and exported here but never written, so the Semantic
+    // Guardrails escalation panels could not see this runtime.
+    if (action == "emergency-dispatch" || action == "urgent-intervention") {
+      const std::string rag = governance.at("ragStatusCode").is_string() ? governance.at("ragStatusCode").as_string() : "";
+      std::lock_guard<std::mutex> lock(semanticsMutex);
+      semanticEscalations[rag.empty() ? std::string("unstated") : rag] += 1;
+    }
     return Json::Object{
       {"machineIri", base.empty() ? Json(nullptr) : Json(base + "#machine")},
       {"sequenceIri", base.empty() || sequence.empty() ? Json(nullptr) : Json(base + "#seq-" + (local.empty() ? std::string("unnamed") : local))},
