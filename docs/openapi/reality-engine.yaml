@@ -24,6 +24,7 @@ servers:
 - url: https://localhost:5001
   description: Docker TLS proxy (CI deployment)
 tags:
+- name: Cloneable machines
 - name: Configuration
 - name: Demos
 - name: Engine
@@ -1233,6 +1234,110 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
       operationId: get_api_buses_semantic_id
+  /api/machines/cloneable:
+    get:
+      tags:
+      - Cloneable machines
+      summary: Every machine's cloneable verdict, reason code and n, recognised at load
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_machines_cloneable
+  /api/engine/clone/machine/{machineId}:
+    post:
+      tags:
+      - Cloneable machines
+      summary: Clone a cloneable machine at its initial state for one dispatch envelope
+      parameters:
+      - *id003
+      - name: asset
+        in: query
+        required: true
+        schema:
+          type: string
+        description: 'The assetID: the stack frame the dispatched agent acts on and returns through.'
+      - name: envelope
+        in: query
+        required: true
+        schema:
+          type: string
+        description: The envelopeId of the dispatch envelope; the envelope is the clone's slot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      operationId: post_api_engine_clone_machine_machineId
+  /api/engine/recycle/machine/{cloneId}:
+    post:
+      tags:
+      - Cloneable machines
+      summary: Recycle a clone, presenting its block generation; frees the block
+      parameters:
+      - name: cloneId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: <machineId>.<engineInstance>.<envelopeId>
+      - name: generation
+        in: query
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+        description: The block generation the clone was made with; any other is refused (409).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_engine_recycle_machine_cloneId
+  /api/engine/clones:
+    get:
+      tags:
+      - Cloneable machines
+      summary: Live clones with their block allocations and generations
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_engine_clones
   /api/machine-graph:
     get:
       tags:
