@@ -57,6 +57,13 @@ public:
   };
 
   void route(std::string method, std::string pattern, Handler handler);
+  // A route a client may reach without a client certificate when the server
+  // serves TLS (RealityEngine_CI#668, docs/TRANSPORT_SECURITY.md): the PE's
+  // device ingest, which a phone reaches with server TLS and a token. With
+  // none registered, the handshake itself requires a client certificate.
+  void allow_without_client_certificate(std::string pattern);
+  bool requires_client_certificate(const std::string& path) const;
+  bool has_certificate_optional_routes() const { return !certificateOptional.empty(); }
   void websocket(std::string pattern, std::shared_ptr<WebSocketHub> hub, WebSocketOpenHandler on_open);
   void sse(std::string pattern, std::shared_ptr<SseHub> hub);
   void listen(int port);
@@ -88,7 +95,23 @@ private:
   std::vector<Route> routes;
   std::vector<WebSocketRoute> websocketRoutes;
   std::vector<SseRoute> sseRoutes;
+  std::vector<std::regex> certificateOptional;
 };
+
+// Lane TLS (RealityEngine_CI#668, the runtime contract in its
+// docs/TRANSPORT_SECURITY.md). Read from RE_TLS_CERT, RE_TLS_KEY, RE_TLS_CA and
+// RE_TLS_CRL. When RE_TLS_CERT is set, Server::listen serves TLS 1.3 only on the
+// same port, with no plaintext listener, and outbound https to an internal peer
+// verifies against RE_TLS_CA alone and presents this certificate.
+struct TlsSettings {
+  std::string cert, key, ca, crl;
+  bool serving() const { return !cert.empty(); }
+  bool lane() const { return !ca.empty(); }
+};
+TlsSettings tls_settings_from_env();
+// Internal peers trust the lane CA only; anything else is an external party,
+// verified against the system store for that link only.
+bool is_internal_host(const std::string& host);
 
 Response json_response(const std::string& body, int status = 200);
 Response error_response(const std::string& message, int status = 400);
