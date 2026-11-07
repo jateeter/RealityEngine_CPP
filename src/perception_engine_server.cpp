@@ -607,6 +607,14 @@ public:
     server.route("POST", "/api/integrations/acp/dispatch", [this](const http::Request& req) {
       return dispatch_acp(parse_body(req));
     });
+    // The HealthKit bridge on a phone reaches these with server TLS and its
+    // bearer token, not a client certificate: the PE's device ingest is a
+    // user-facing surface under the runtime contract (RealityEngine_CI
+    // docs/TRANSPORT_SECURITY.md; localHealthkitBridge docs/INGEST_CONTRACT.md).
+    // Every other PE route, resync included (a service calls it), requires one.
+    server.allow_without_client_certificate("/api/integrations/healthkit/ingest");
+    server.allow_without_client_certificate("/api/integrations/healthkit/status");
+    server.allow_without_client_certificate("/api/integrations/healthkit/scope");
     server.route("GET", "/api/integrations/healthkit/status", [this](const http::Request&) {
       return ok(healthkit_status());
     });

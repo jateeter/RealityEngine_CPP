@@ -21,6 +21,17 @@ puts the mapping's required keys and an example shape in the system prompt
 models, sends `think: false`. A change to the list or the rule lands in all four
 repos together.
 
+## Lane TLS — three-engine parity
+
+`http.cpp` serves and calls TLS under RealityEngine_CI's runtime contract
+(`docs/TRANSPORT_SECURITY.md`). Three choices there must match LSP and Scala,
+because a difference shows up as an engine divergence:
+- the internal-peer rule, `is_internal_host`;
+- the PE's device routes (`allow_without_client_certificate`): HealthKit `ingest`, `status` and `scope`;
+- the 403 `{"error":"client certificate required"}` answer for any other route reached without a certificate.
+
+A change to any of them lands in all three repos together.
+
 ## Standing rules
 
 The standing rules are in

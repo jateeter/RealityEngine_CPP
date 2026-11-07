@@ -65,6 +65,12 @@ engineering contract allows: a compile and unit-test gate, never verification.
   contract, not by this file. See "## Machine ingestion" below.
 - Keep `/api/machines`, `/api/engine/active`, `/api/perceive`, `/api/pe/*`, and MQTT behavior aligned with LSP and Scala.
 - OpenClaw/ACP environment defaults should match the root application map.
+- **Lane TLS** (RealityEngine_CI#668, this repo's #193). With `RE_TLS_CERT` set,
+  the RE and PE serve TLS 1.3 with mTLS on their own ports, and call internal
+  peers over `https` with the lane CA and their own certificate. With it unset,
+  nothing changes. The contract, including which peers count as internal and
+  which PE routes are open to devices, is `RealityEngine_CI/docs/TRANSPORT_SECURITY.md`.
+  The code is `src/http.cpp`; `tests/http_tls_tests.cpp` pins it.
 
 ## Machine ingestion
 
