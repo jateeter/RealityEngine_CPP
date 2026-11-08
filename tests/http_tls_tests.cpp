@@ -252,6 +252,15 @@ int main() {
     ++skips;
     std::cout << "  skip X25519MLKEM768: this OpenSSL has no post-quantum hybrid group\n";
   }
+  // Session resumption (TLS 1.3 tickets): a client that caches its session,
+  // as Node's https agent does, must be served on its next connection too.
+  const std::string sess = p.dir + "/session.pem";
+  s_client(p, rePort, "/health", own + " -sess_out " + sess);
+  std::string resumed = s_client(p, rePort, "/health", own + " -sess_in " + sess);
+  std::string reuse = run("echo | perl -e 'alarm shift; exec @ARGV' 5 " + openssl_bin() + " s_client -connect 127.0.0.1:" +
+                          std::to_string(rePort) + " -servername localhost -CAfile " + p.ca + " " + own + " -sess_in " + sess);
+  EXPECT(answered(resumed, "200") && reuse.find("Reused") != std::string::npos,
+         "serve: a resumed TLS 1.3 session with a client certificate is served");
   std::string sse = s_client(p, rePort, "/stream", own, 1);
   EXPECT(sse.find("text/event-stream") != std::string::npos && sse.find(": connected") != std::string::npos,
          "serve: an event stream over TLS");
