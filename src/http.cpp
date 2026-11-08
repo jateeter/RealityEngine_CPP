@@ -319,6 +319,14 @@ std::shared_ptr<ssl::context> make_server_context(const TlsSettings& tls, bool r
   // devices (Server::allow_without_client_certificate).
   int mode = SSL_VERIFY_PEER | (requireAtHandshake ? SSL_VERIFY_FAIL_IF_NO_PEER_CERT : 0);
   SSL_CTX_set_verify(ctx->native_handle(), mode, nullptr);
+  // A server that verifies client certificates must name its session context,
+  // or OpenSSL refuses every resumed session with an internal_error alert. The
+  // first live TLS universe hit exactly that: Manager's Node agent caches TLS
+  // sessions, so its second connection to a C++ RE failed while curl's
+  // one-shot connections succeeded.
+  static const unsigned char kSessionContext[] = "realityengine";
+  if (SSL_CTX_set_session_id_context(ctx->native_handle(), kSessionContext, sizeof(kSessionContext) - 1) != 1)
+    throw std::runtime_error(openssl_error("TLS: cannot set the session id context"));
   return ctx;
 }
 
