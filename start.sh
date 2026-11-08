@@ -143,12 +143,29 @@ check_port_free() {
   fi
 }
 
+# Lane TLS (RealityEngine_CI#668): with RE_TLS_CERT set the RE and PE serve TLS
+# 1.3 with mTLS, so this script's own probes and the PE's RE URL use https, the
+# lane CA and this instance's certificate (issued kind both, so it is a client
+# certificate too), through a curl that speaks TLS 1.3 (macOS /usr/bin/curl is
+# SecureTransport and cannot). With it unset, nothing changes.
+if [ -n "${RE_TLS_CERT:-}" ]; then
+  ENGINE_SCHEME=https
+  _lane_curl=curl
+  for _c in /opt/homebrew/opt/curl/bin/curl /usr/local/opt/curl/bin/curl; do
+    [ -x "$_c" ] && { _lane_curl="$_c"; break; }
+  done
+  ENGINE_CURL=("$_lane_curl" --tlsv1.3 --cacert "${RE_TLS_CA:?RE_TLS_CERT is set, so RE_TLS_CA must be too}" --cert "$RE_TLS_CERT" --key "${RE_TLS_KEY:?RE_TLS_CERT is set, so RE_TLS_KEY must be too}")
+else
+  ENGINE_SCHEME=http
+  ENGINE_CURL=(curl)
+fi
+
 wait_for_http() {
   local url="$1"
   local name="$2"
   local i
   for i in $(seq 1 30); do
-    if curl -sf "$url" >/dev/null 2>&1; then
+    if "${ENGINE_CURL[@]}" -sf "$url" >/dev/null 2>&1; then
       ok "$name ready at $url"
       return 0
     fi
@@ -159,7 +176,7 @@ wait_for_http() {
 
 machine_count_from_api() {
   local url="$1"
-  curl -sf "$url/api/machines" 2>/dev/null | python3 -c '
+  "${ENGINE_CURL[@]}" -sf "$url/api/machines" 2>/dev/null | python3 -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
@@ -287,7 +304,7 @@ if ! ps -p "$(cat "$RE_PID_FILE")" >/dev/null 2>&1; then
   die "Reality Engine exited before becoming healthy"
 fi
 
-if ! wait_for_http "http://localhost:${REALITY_ENGINE_PORT}/api/health" "Reality Engine"; then
+if ! wait_for_http "${ENGINE_SCHEME}://localhost:${REALITY_ENGINE_PORT}/api/health" "Reality Engine"; then
   tail -40 "$RE_LOG_FILE" || true
   bash "$ROOT_DIR/stop.sh" "${INSTANCE_ID:+--instance=$INSTANCE_ID}" >/dev/null 2>&1 || true
   die "Reality Engine failed to become healthy"
@@ -299,7 +316,7 @@ if [ "${RE_LOAD_MACHINES}" != "0" ]; then
     ./stop.sh >/dev/null 2>&1 || true
     die "python3 is required to verify startup machine loading"
   fi
-  MACHINE_COUNT="$(machine_count_from_api "http://localhost:${REALITY_ENGINE_PORT}")"
+  MACHINE_COUNT="$(machine_count_from_api "${ENGINE_SCHEME}://localhost:${REALITY_ENGINE_PORT}")"
   if [ "${MACHINE_COUNT:-0}" -le 0 ]; then
     tail -60 "$RE_LOG_FILE" || true
     ./stop.sh >/dev/null 2>&1 || true
@@ -311,7 +328,7 @@ else
 fi
 
 info "Starting Perception Engine on port $PERCEPTION_ENGINE_PORT${INSTANCE_ID:+ [instance: $INSTANCE_ID]}..."
-nohup "$ROOT_DIR/bin/perception_engine_server" "$PERCEPTION_ENGINE_PORT" "http://localhost:${REALITY_ENGINE_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" \
+nohup "$ROOT_DIR/bin/perception_engine_server" "$PERCEPTION_ENGINE_PORT" "${ENGINE_SCHEME}://localhost:${REALITY_ENGINE_PORT}" "$LOCAL_AI_API_URL" "$LOCAL_AI_MACHINES_DIR" "$VECTOR_DIMENSION" \
   > "$PE_LOG_FILE" 2>&1 &
 echo $! > "$PE_PID_FILE"
 sleep 0.2
@@ -321,7 +338,7 @@ if ! ps -p "$(cat "$PE_PID_FILE")" >/dev/null 2>&1; then
   die "Perception Engine exited before becoming healthy"
 fi
 
-if ! wait_for_http "http://localhost:${PERCEPTION_ENGINE_PORT}/api/health" "Perception Engine"; then
+if ! wait_for_http "${ENGINE_SCHEME}://localhost:${PERCEPTION_ENGINE_PORT}/api/health" "Perception Engine"; then
   tail -40 "$PE_LOG_FILE" || true
   bash "$ROOT_DIR/stop.sh" "${INSTANCE_ID:+--instance=$INSTANCE_ID}" >/dev/null 2>&1 || true
   die "Perception Engine failed to become healthy"
@@ -331,8 +348,8 @@ echo ""
 echo "=================================================="
 echo "RealityEngine_CPP Running"
 echo "=================================================="
-printf "  %-24s %s\n" "Reality Engine" "http://localhost:${REALITY_ENGINE_PORT}"
-printf "  %-24s %s\n" "Perception Engine" "http://localhost:${PERCEPTION_ENGINE_PORT}"
+printf "  %-24s %s\n" "Reality Engine" "${ENGINE_SCHEME}://localhost:${REALITY_ENGINE_PORT}"
+printf "  %-24s %s\n" "Perception Engine" "${ENGINE_SCHEME}://localhost:${PERCEPTION_ENGINE_PORT}"
 printf "  %-24s %s\n" "Vector dimension" "${VECTOR_DIMENSION}"
 printf "  %-24s %s\n" "local AI API" "${LOCAL_AI_API_URL}"
 printf "  %-24s %s\n" "Qdrant shared store" "${QDRANT_URL}"
