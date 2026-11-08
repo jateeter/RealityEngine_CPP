@@ -222,7 +222,9 @@ else
 fi
 
 info "Checking unified Qdrant at $QDRANT_URL..."
-if curl -sf "$QDRANT_URL/collections" >/dev/null 2>&1 || curl -sf "$QDRANT_URL/healthz" >/dev/null 2>&1; then
+# Qdrant and localAI are on the lane's TLS too when RE_TLS_CERT is set
+# (localAIStack#172): probed with this instance's certificate, like the engines.
+if "${ENGINE_CURL[@]}" -sf "$QDRANT_URL/collections" >/dev/null 2>&1 || "${ENGINE_CURL[@]}" -sf "$QDRANT_URL/healthz" >/dev/null 2>&1; then
   ok "Unified Qdrant reachable"
 else
   if [ "$ALLOW_MISSING_QDRANT" = true ]; then
@@ -247,7 +249,7 @@ else
 fi
 
 info "Checking optional local AI API at $LOCAL_AI_API_URL..."
-if curl -sf "$LOCAL_AI_API_URL/health" >/dev/null 2>&1; then
+if "${ENGINE_CURL[@]}" -sf "$LOCAL_AI_API_URL/health" >/dev/null 2>&1; then
   ok "local AI API reachable"
 else
   warn "local AI API not reachable; perception external-signal endpoints still available"
@@ -258,7 +260,7 @@ if [ "$LOCAL_AI_BOOTSTRAP" = "true" ] || [ "$LOCAL_AI_BOOTSTRAP" = "1" ] || [ "$
   info "local AI bootstrap enabled; Perception Engine will register localAIStack sensors and import bridge machines"
 fi
 
-if command -v python3 >/dev/null 2>&1 && curl -sf "$QDRANT_URL/collections" >/tmp/re_cpp_qdrant_collections.json 2>/dev/null; then
+if command -v python3 >/dev/null 2>&1 && "${ENGINE_CURL[@]}" -sf "$QDRANT_URL/collections" >/tmp/re_cpp_qdrant_collections.json 2>/dev/null; then
   python3 - /tmp/re_cpp_qdrant_collections.json "$QDRANT_LOCALAI_COLLECTION" "$QDRANT_REALITY_COLLECTION" <<'PY' || true
 import json, sys
 path = sys.argv[1]
