@@ -346,6 +346,20 @@ public:
   // travels with it, but whether this deployment is currently allowed to change
   // it does not.
   bool outputMergeLocked = true;
+  // The corpus file this machine was loaded from, by file name
+  // ("AGX001_aquaculture-water-quality-stability.json"), or empty for a machine
+  // registered from a request body. Cloneability reads it (SURFACE_SPEC.md,
+  // "Cloneable machines"): a document handoff names its source by file stem and
+  // a bus edge its target by file name, and the machine id is a normalised
+  // stem, so neither can be recovered from the id. Not serialised.
+  std::string sourceFile;
+  // Set on a clone only (SURFACE_SPEC.md, "POST /api/engine/clone/machine/
+  // :machineId"): the template it was cloned from, the assetID it acts on and
+  // the dispatch envelope that is its slot. Serialised only when set, so no
+  // other machine grows a field on the compared /api/machines surfaces.
+  std::optional<std::string> cloneOf;
+  std::string assetId;
+  std::string envelopeId;
 
   Machine(std::string machineName = "unnamed",
           std::string machineDescription = "",

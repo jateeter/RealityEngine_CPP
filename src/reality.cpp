@@ -928,7 +928,7 @@ Json Machine::to_json(bool full) const {
   }
   Json mapping = nullptr;
   if (perceptualMapping) mapping = reality::to_json(*perceptualMapping);
-  return Json::Object{
+  Json::Object out{
     {"id", id}, {"name", name}, {"description", description}, {"matchAlgorithm", to_string(matchAlgorithm)},
     {"outputMergeTransformation", to_string(outputMergeTransformation)},
     {"outputMergeLocked", outputMergeLocked},
@@ -936,6 +936,12 @@ Json Machine::to_json(bool full) const {
     {"totalEvents", static_cast<double>(total_vector_count())}, {"sequenceIds", seqIds}, {"sequences", seqs},
     {"metadata", metadata}, {"perceptualMapping", mapping}
   };
+  if (cloneOf) {
+    out["cloneOf"] = *cloneOf;
+    out["assetId"] = assetId;
+    out["envelopeId"] = envelopeId;
+  }
+  return out;
 }
 
 PerceptualSpace::PerceptualSpace(int dim) : values(static_cast<size_t>(dim < 0 ? 0 : dim), 0.0) {}
@@ -2669,7 +2675,10 @@ std::vector<Machine> load_machines_from_directory(const std::string& directory, 
     std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::string stem = file.stem().string();
     std::transform(stem.begin(), stem.end(), stem.begin(), [](unsigned char c) { return std::isalnum(c) ? static_cast<char>(std::tolower(c)) : '-'; });
-    try { out.push_back(load_machine_from_json_string(raw, "machine-" + stem, opts)); }
+    try {
+      out.push_back(load_machine_from_json_string(raw, "machine-" + stem, opts));
+      out.back().sourceFile = file.filename().string();
+    }
     catch (const std::exception& e) { std::cerr << "Failed to load " << file << ": " << e.what() << "\n"; }
   }
   return out;

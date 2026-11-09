@@ -1,3 +1,4 @@
+#include "reality/clone_space.hpp"
 #include "reality/http.hpp"
 #include "reality/instance_clock.hpp"
 #include "reality/reality.hpp"
@@ -570,6 +571,98 @@ public:
       }
       return http::error_response("Unknown control: " + name, 404);
     });
+    // ── Clone and recycle (SURFACE_SPEC.md, "Cloneable machines") ─────────
+    //
+    // One clone per dispatch envelope, at the template's initial state, in the
+    // lowest free 64-cell block of the clone band. The checks run in the
+    // specification's order, so two engines refusing the same request refuse
+    // it with the same status.
+    server.route("POST", "/api/engine/clone/machine/:machineId", [this](const http::Request& req) {
+      const std::string machineId = url_decode(req.pathParams.at("machineId"));
+      auto query = [&](const char* key) {
+        auto it = req.queryParams.find(key);
+        return it == req.queryParams.end() ? std::string() : url_decode(it->second);
+      };
+      const std::string asset = query("asset");
+      const std::string envelope = query("envelope");
+      if (asset.empty() || envelope.empty()) return http::error_response("asset and envelope are required", 400);
+
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      auto it = machines.find(machineId);
+      if (it == machines.end()) return http::error_response("Machine not found", 404);
+      const Machine& tmpl = it->second;
+      if (tmpl.cloneOf) return refused(400, "a clone is not cloneable", Json::Object{{"reason", "clone"}});
+      const clones::Verdict verdict = clones::assess(tmpl, clones::bus_target_files(machines));
+      if (!verdict.cloneable)
+        return refused(400, "machine is not cloneable", Json::Object{{"reason", verdict.reason}});
+      if (engineInstance.empty()) return http::error_response("engine launched without an INSTANCE_ID", 409);
+      if (const clones::Clone* held = cloneSpace.by_envelope(envelope)) {
+        if (held->machineId == machineId) return ok(held->to_json());  // a retried dispatch
+        return http::error_response("envelope " + envelope + " holds a clone of another machine", 409);
+      }
+      if (cloneSpace.live_of(machineId) >= cloneMaxActive)
+        return http::error_response("template is at clone.maxActive", 409);
+      const auto block = cloneSpace.lowest_free_block();
+      if (!block) return http::error_response("the clone band has no free block", 409);
+
+      clones::Clone c;
+      c.cloneId = machineId + "." + engineInstance + "." + envelope;
+      c.machineId = machineId;
+      c.engineInstance = engineInstance;
+      c.envelopeId = envelope;
+      c.assetId = asset;
+      c.block = *block;
+      c.generation = cloneSpace.generation(*block);
+      c.inputLength = tmpl.perceptualMapping->input.length;
+      c.outputLength = tmpl.perceptualMapping->output.length;
+      c.fanoutLength = verdict.folded;
+
+      // The template as declared: the registry copy is never stepped, and
+      // reset() makes the initial state explicit rather than inherited.
+      Machine clone = tmpl;
+      clone.reset();
+      clone.id = c.cloneId;
+      clone.sourceFile.clear();
+      // The registry copy is transition-inhibited by construction (only the
+      // runtime copy steps); a clone starts as a fresh, uninhibited machine.
+      clone.transitionsInhibited = false;
+      clone.cloneOf = machineId;
+      clone.assetId = asset;
+      clone.envelopeId = envelope;
+      clone.perceptualMapping->input = c.input();
+      clone.perceptualMapping->output = c.output();
+      add_machine(clone);
+      cloneSpace.add(c);
+      return http::json_response(json::stringify(c.to_json()), 201);
+    });
+    server.route("POST", "/api/engine/recycle/machine/:cloneId", [this](const http::Request& req) {
+      const std::string cloneId = url_decode(req.pathParams.at("cloneId"));
+      auto g = req.queryParams.find("generation");
+      long generation = 0;
+      if (g == req.queryParams.end() || !parse_whole(g->second, generation))
+        return http::error_response("generation is required, as an integer", 400);
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
+      std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      const clones::Clone* c = cloneSpace.by_id(cloneId);
+      if (!c) return http::error_response("No live clone " + cloneId, 404);
+      if (c->generation != generation)
+        return refused(409, "generation is not the clone's", Json::Object{{"generation", static_cast<double>(c->generation)}});
+      const clones::Clone freed = *c;
+      remove_machine(cloneId);
+      const long next = cloneSpace.recycle(cloneId);
+      return ok(Json::Object{
+        {"cloneId", cloneId},
+        {"block", Json::Object{{"index", static_cast<double>(freed.block)}, {"offset", static_cast<double>(freed.offset())},
+                               {"length", static_cast<double>(clones::kBlockCells)}}},
+        {"generation", static_cast<double>(next)}});
+    });
+    server.route("GET", "/api/engine/clones", [this](const http::Request&) {
+      std::shared_lock<std::shared_mutex> lock(registryMutex);
+      Json::Array out;
+      for (const auto& c : cloneSpace.live()) out.push_back(c.to_json());
+      return ok(Json::Object{{"clones", out}});
+    });
     server.route("GET", "/api/engine/active", [this](const http::Request&) { return ok(Json::Object{{"activeEvents", active_vectors_json()}}); });
     server.route("GET", "/api/engine/history", [this](const http::Request& req) {
       int limit = 0;
@@ -757,6 +850,17 @@ public:
       }
       return ok(Json::Object{{"machines", arr}});
     });
+    // Cloneable machines (SURFACE_SPEC.md, "Cloneable machines"). Registered
+    // ahead of /api/machines/:id: routes match in registration order, and
+    // "cloneable" would otherwise be read as a machine id.
+    //
+    // Assessed on every read against the machines registered now, which is the
+    // specification's reassessment on every POST, PUT and DELETE without a
+    // second copy of the verdicts to keep in step.
+    server.route("GET", "/api/machines/cloneable", [this](const http::Request&) {
+      std::shared_lock<std::shared_mutex> lock(registryMutex);
+      return ok(clones::listing(machines));
+    });
     server.route("GET", "/api/machines/:id", [this](const http::Request& req) {
       std::shared_lock<std::shared_mutex> lock(registryMutex);
       auto it = machines.find(req.pathParams.at("id"));
@@ -841,6 +945,9 @@ public:
       }
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      if (cloneSpace.is_clone(req.pathParams.at("id"))) return clone_refused();
+      // A replaced corpus machine keeps its file: the id names the same machine.
+      if (auto old = machines.find(req.pathParams.at("id")); old != machines.end()) m.sourceFile = old->second.sourceFile;
       remove_machine(req.pathParams.at("id"));
       add_machine(m);
       return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}});
@@ -851,6 +958,7 @@ public:
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       auto it = machines.find(req.pathParams.at("id"));
       if (it == machines.end()) return http::error_response("Machine not found", 404);
+      if (cloneSpace.is_clone(it->first)) return clone_refused();
       Machine updated = it->second;
       if (body.at("name").is_string()) updated.name = body.at("name").as_string();
       if (body.at("description").is_string()) updated.description = body.at("description").as_string();
@@ -864,6 +972,7 @@ public:
     server.route("DELETE", "/api/machines/:id", [this](const http::Request& req) {
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
+      if (cloneSpace.is_clone(req.pathParams.at("id"))) return clone_refused();
       bool removed = remove_machine(req.pathParams.at("id"));
       return ok(Json::Object{{"success", removed}});
     });
@@ -1075,6 +1184,7 @@ public:
       std::string stem = path.stem().string();
       std::transform(stem.begin(), stem.end(), stem.begin(), [](unsigned char c) { return std::isalnum(c) ? static_cast<char>(std::tolower(c)) : '-'; });
       Machine m = load_machine_from_json_string(raw, "machine-" + stem);
+      m.sourceFile = path.filename().string();
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       add_machine(m);
@@ -1497,6 +1607,26 @@ private:
     return out;
   }
   static http::Response ok(const Json& value) { return http::json_response(json::stringify(value)); }
+  // An error carrying fields beside its message: a clone refusal's `reason`, a
+  // recycle's current `generation`.
+  static http::Response refused(int status, const std::string& message, Json::Object extra) {
+    extra["error"] = message;
+    return http::json_response(json::stringify(Json(extra)), status);
+  }
+  // A clone changes only through recycle: PUT, PATCH or DELETE on one would
+  // leave its block held by a machine that no longer exists.
+  static http::Response clone_refused() {
+    return http::error_response("a clone changes only through POST /api/engine/recycle/machine/:cloneId", 409);
+  }
+  // A whole number, optionally negative, and nothing else.
+  static bool parse_whole(const std::string& s, long& out) {
+    if (s.empty() || s.size() > 18) return false;
+    size_t i = (s[0] == '-') ? 1 : 0;
+    if (i == s.size()) return false;
+    for (size_t j = i; j < s.size(); ++j) if (!std::isdigit(static_cast<unsigned char>(s[j]))) return false;
+    out = std::stol(s);
+    return true;
+  }
   static Json string_array(const std::vector<std::string>& values) {
     Json::Array out;
     for (const auto& value : values) out.emplace_back(value);
@@ -2037,6 +2167,29 @@ private:
         prune_arbitration_steps(completedStep);
       }
     });
+    // The bound on live clones of one template on this engine instance
+    // (SURFACE_SPEC.md, "The clone space"). Lowering it below the live count
+    // refuses new clones of that template until the count falls; it never
+    // recycles one.
+    controls.push_back(EngineControl{
+      "clone.maxActive", "engine",
+      [this] {
+        return control_json("clone.maxActive", "engine", static_cast<double>(cloneMaxActive),
+                            static_cast<double>(clones::kMaxActiveDefault));
+      },
+      [this](const Json& body, std::string& error, int& status) {
+        const Json& v = body.at("value");
+        if (!v.is_number() || v.as_number() < 0 || v.as_number() > clones::kBlocks ||
+            v.as_number() != std::floor(v.as_number())) {
+          error = "clone.maxActive requires a whole-number `value` in [0, " + std::to_string(clones::kBlocks) + "]";
+          status = 400;
+          return false;
+        }
+        cloneMaxActive = static_cast<long>(v.as_number());
+        return true;
+      },
+      [this] { cloneMaxActive = clones::kMaxActiveDefault; }
+    });
     controls.push_back(EngineControl{
       "historyLimit", "engine",
       [this] {
@@ -2176,6 +2329,18 @@ private:
   };
 
   std::map<std::string, Machine> machines;
+  // Live clones and block generations (SURFACE_SPEC.md, "Cloneable machines"),
+  // guarded by registryMutex like the machines they register. A restart loses
+  // them all, and every generation starts again at 0.
+  clones::Space cloneSpace;
+  // clone.maxActive, guarded by spaceRuntimeMutex like every other control.
+  long cloneMaxActive = clones::kMaxActiveDefault;
+  // The id this engine instance was launched as (INSTANCE_ID, e.g. cpp-1): the
+  // middle segment of every clone id. Without it nothing can be cloned.
+  const std::string engineInstance = [] {
+    const char* v = std::getenv("INSTANCE_ID");
+    return std::string(v ? v : "");
+  }();
   std::map<std::string, Json> vectorStore;
   std::map<std::string, CriticalEventSequence> sequences;
   std::map<std::string, std::map<std::string, Checkpoint>> checkpoints;
