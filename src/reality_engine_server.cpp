@@ -624,6 +624,9 @@ public:
       clone.reset();
       clone.id = c.cloneId;
       clone.sourceFile.clear();
+      // The registry copy is transition-inhibited by construction (only the
+      // runtime copy steps); a clone starts as a fresh, uninhibited machine.
+      clone.transitionsInhibited = false;
       clone.cloneOf = machineId;
       clone.assetId = asset;
       clone.envelopeId = envelope;
