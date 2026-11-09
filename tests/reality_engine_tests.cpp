@@ -1,3 +1,4 @@
+#include "reality/clone_space.hpp"
 #include "reality/reality.hpp"
 #include "reality/instance_clock.hpp"
 
@@ -1176,8 +1177,124 @@ static void verify_instance_clock() {
   fs::remove_all(dir);
 }
 
+// ── cloneable machines (SURFACE_SPEC.md, "Cloneable machines") ───────────────
+//
+// Each rule of the nine-rule table, by the reason code a machine failing only
+// that rule is given; the listing's shape and order; and the block space:
+// lowest free first, a generation per block that recycling increments.
+static Machine clone_fixture(const std::string& file, const std::string& metadata,
+                             int inLen = 4, int outLen = 4, bool mapping = true) {
+  const std::string pm = mapping
+    ? R"("perceptualMapping": {"input": {"offset": 0, "length": )" + std::to_string(inLen) +
+      R"(}, "output": {"offset": 100, "length": )" + std::to_string(outLen) + "}},"
+    : "";
+  const std::string raw = R"({"version": "1.0.0", "machine": {"name": ")" + file + R"(", )" + pm +
+                          R"( "metadata": )" + metadata + R"(, "sequences": []}})";
+  std::string stem = file.substr(0, file.size() - 5);
+  Machine m = load_machine_from_json_string(raw, "machine-" + stem);
+  m.sourceFile = file;
+  return m;
+}
+
+static void verify_clone_space() {
+  using namespace reality::clones;
+  const std::string producer = R"({"type": "published-domain-bus-producer", "targetMachineFile": "Bus.json", "targetInputElements": [0, 1, 2]})";
+  const std::string agent = R"("agentBinding": {"agent": "a"})";
+  auto md = [&](const std::string& extra, const std::string& edges) {
+    return "{" + agent + (extra.empty() ? "" : ", " + extra) + R"(, "interconnections": [)" + edges + "]}";
+  };
+  std::map<std::string, Machine> ms;
+  auto put = [&](Machine m) { ms[m.id] = m; };
+  put(clone_fixture("Ok.json", md("", producer)));
+  put(clone_fixture("NoAgent.json", R"({"interconnections": [)" + producer + "]}"));
+  put(clone_fixture("Handoff.json", R"({"interconnections": [{"type": "document-workflow-handoff", "sourceMachine": "Handoff"}]})"));
+  put(clone_fixture("HandoffElsewhere.json", R"({"interconnections": [{"type": "document-workflow-handoff", "sourceMachine": "Other"}]})"));
+  put(clone_fixture("NoFanout.json", md("", "")));
+  put(clone_fixture("Bus.json", md("", producer)));
+  put(clone_fixture("Safety.json", md(R"("severity": "life-safety")", producer)));
+  put(clone_fixture("Fixture.json", md(R"("tags": ["x", "test-fixture"])", producer)));
+  put(clone_fixture("Out.json", md(R"("cloneable": false)", producer)));
+  put(clone_fixture("WideIn.json", md("", producer), 17, 4));
+  put(clone_fixture("WideOut.json", md("", producer), 16, 17));
+  put(clone_fixture("NoMapping.json", md("", producer), 0, 0, false));
+  std::string wide;
+  for (int i = 0; i < 6; ++i) wide += std::string(i ? ", " : "") + producer;  // 18 folded cells
+  put(clone_fixture("WideFan.json", md("", wide)));
+
+  const auto targets = bus_target_files(ms);
+  assert(targets == std::set<std::string>{"Bus.json"});
+  auto reason = [&](const std::string& id) { return assess(ms.at(id), targets).reason; };
+  assert(assess(ms.at("machine-Ok"), targets).cloneable);
+  assert(*assess(ms.at("machine-Ok"), targets).n == 7);
+  assert(assess(ms.at("machine-Handoff"), targets).cloneable);
+  assert(*assess(ms.at("machine-Handoff"), targets).n == 4);  // a handoff folds no cells
+  assert(reason("machine-NoAgent") == "no-agentic-action");
+  assert(reason("machine-HandoffElsewhere") == "no-agentic-action");
+  assert(reason("machine-NoFanout") == "no-fanout");
+  assert(reason("machine-Bus") == "bus-target");
+  assert(reason("machine-Safety") == "life-safety");
+  assert(reason("machine-Fixture") == "fixture");
+  assert(reason("machine-Out") == "opted-out");
+  assert(reason("machine-WideIn") == "input-too-long");
+  assert(reason("machine-WideOut") == "output-too-long");
+  assert(reason("machine-NoMapping") == "input-too-long");
+  const Verdict fan = assess(ms.at("machine-WideFan"), targets);
+  assert(!fan.cloneable && fan.reason == "fanout-too-wide" && *fan.n == 22);
+  assert(!assess(ms.at("machine-Bus"), targets).n);  // n only once rule 9 is evaluated
+
+  // A machine with no file: neither a handoff source nor a bus target.
+  Machine bare = clone_fixture("Handoff.json", R"({"interconnections": [{"type": "document-workflow-handoff", "sourceMachine": "Handoff"}]})");
+  bare.sourceFile.clear();
+  assert(assess(bare, targets).reason == "no-agentic-action");
+
+  // The listing: sorted by id, clones left out, null reason/n where they apply.
+  Machine clone = ms.at("machine-Ok");
+  clone.id = "machine-Ok.cpp-1.env-1";
+  clone.cloneOf = "machine-Ok";
+  ms[clone.id] = clone;
+  const Json listed = listing(ms).at("machines");
+  assert(listed.array().size() == ms.size() - 1);
+  for (size_t i = 1; i < listed.array().size(); ++i)
+    assert(listed.array()[i - 1].at("id").as_string() < listed.array()[i].at("id").as_string());
+  for (const auto& e : listed.array()) {
+    assert(e.at("id").as_string() != clone.id);
+    if (e.at("id").as_string() == "machine-Ok") assert(e.at("reason").is_null() && e.at("n").as_number() == 7);
+    if (e.at("id").as_string() == "machine-Bus") assert(e.at("reason").as_string() == "bus-target" && e.at("n").is_null());
+  }
+
+  // The block space.
+  Space space;
+  auto mk = [](const std::string& id, int block, long gen) {
+    Clone c; c.cloneId = id; c.machineId = "machine-Ok"; c.envelopeId = "e-" + id; c.block = block; c.generation = gen;
+    c.inputLength = 4; c.outputLength = 3; c.fanoutLength = 3;
+    return c;
+  };
+  assert(*space.lowest_free_block() == 0);
+  space.add(mk("a", 0, 0));
+  space.add(mk("b", 1, 0));
+  assert(*space.lowest_free_block() == 2 && space.live_of("machine-Ok") == 2);
+  assert(space.recycle("a") == 1);  // generation 0 → 1
+  assert(*space.lowest_free_block() == 0 && space.generation(0) == 1 && space.generation(1) == 0);
+  space.add(mk("c", 0, space.generation(0)));
+  assert(space.by_envelope("e-c")->generation == 1);
+  const Json j = space.by_id("c")->to_json();
+  assert(j.at("block").at("offset").as_number() == kBandOffset);
+  assert(j.at("input").at("offset").as_number() == kBandOffset && j.at("input").at("length").as_number() == 4);
+  assert(j.at("output").at("offset").as_number() == kBandOffset + 16);
+  assert(j.at("fanout").at("offset").as_number() == kBandOffset + 32 && j.at("fanout").at("length").as_number() == 3);
+  assert(j.at("bus").at("offset").as_number() == kBandOffset + 48 && j.at("bus").at("length").as_number() == 4);
+  const Json j1 = space.by_id("b")->to_json();
+  assert(j1.at("block").at("offset").as_number() == kBandOffset + 64);
+  bool threw = false;
+  try { space.recycle("a"); } catch (const std::out_of_range&) { threw = true; }
+  assert(threw);
+  assert(space.live().front().cloneId == "c" && space.live().back().cloneId == "b");
+  std::cout << "clone space: ok\n";
+}
+
 int main() {
   verify_instance_clock();
+  verify_clone_space();
   verify_fold_declared_rule();
   // Minted ids are time-ordered UUIDs (RealityEngine_CI#518, #281): canonical
   // form, version 7, distinct, and strictly increasing in creation order, so two
