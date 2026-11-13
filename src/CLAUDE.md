@@ -28,6 +28,7 @@ repos together.
 because a difference shows up as an engine divergence:
 - the internal-peer rule, `is_internal_host`;
 - the PE's device routes (`allow_without_client_certificate`): HealthKit `ingest`, `status` and `scope`;
+- on those routes, the sources that must still present a certificate (`HEALTHKIT_CLIENT_CERTIFICATE_REQUIRED`, owner 2026-11-12), and how a request names its source: the `bridgeId` query, else the body's `source`, else its `bridgeId`, else the configured bridge (`device_certificate_refusal`); Rust and the TypeScript PE follow the same rule;
 - the 403 `{"error":"client certificate required"}` answer for any other route reached without a certificate.
 
 A change to any of them lands in all three repos together.
