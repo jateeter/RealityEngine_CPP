@@ -4087,7 +4087,7 @@ private:
   // multi-engine universe answers from one model unless an operator says
   // otherwise. Override per engine with OLLAMA_MODEL. See
   // RealityEngine_CI/docs/OLLAMA_INTEGRATION.md.
-  std::string ollamaModel = "llama3.1:8b";
+  std::string ollamaModel = "nemotron-3-nano:4b";
   std::string ollamaCompletionSourceMappingId = "agent-completion-risk";
   std::string openaiBaseUrl = "https://api.openai.com/v1";
   std::string openaiModel = "gpt-5";
