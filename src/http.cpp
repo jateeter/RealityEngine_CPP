@@ -636,7 +636,12 @@ private:
     bool keepAlive = request.keep_alive() && handled < maxRequests;
     Response response;
     try {
-      response = handle_with_idempotency(server, to_request(request));
+      Request req = to_request(request);
+      if constexpr (is_tls_v<Stream>) {
+        req.tls = true;
+        req.clientCertificate = has_verified_peer(stream);
+      }
+      response = handle_with_idempotency(server, std::move(req));
     } catch (const std::exception& e) {
       response = error_response(e.what(), 500);
       keepAlive = false;

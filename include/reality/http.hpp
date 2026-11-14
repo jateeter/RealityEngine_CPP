@@ -17,6 +17,11 @@ struct Request {
   std::map<std::string, std::string> headers;
   std::map<std::string, std::string> pathParams;
   std::map<std::string, std::string> queryParams;
+  // How the request arrived (RealityEngine_CI docs/TRANSPORT_SECURITY.md): over
+  // TLS, and with a client certificate the lane CA verified. A route open to
+  // devices uses them to require a certificate per source.
+  bool tls = false;
+  bool clientCertificate = false;
 };
 
 struct Response {

@@ -209,6 +209,12 @@ int main() {
   pe->allow_without_client_certificate("/device");
   pe->route("GET", "/device", [](const http::Request&) { return http::json_response("{\"device\":true}"); });
   pe->route("GET", "/service", [](const http::Request&) { return http::json_response("{\"service\":true}"); });
+  // What a device route sees of its caller, for the per-source rule (owner, 2026-11-12).
+  pe->allow_without_client_certificate("/whoami");
+  pe->route("GET", "/whoami", [](const http::Request& req) {
+    return http::json_response(std::string("{\"tls\":") + (req.tls ? "true" : "false") +
+                               ",\"cert\":" + (req.clientCertificate ? "true" : "false") + "}");
+  });
   const int pePort = free_port();
   std::thread([pe, pePort]() { pe->listen(pePort); }).detach();
   wait_for(rePort);
@@ -271,6 +277,11 @@ int main() {
   EXPECT(answered(s_client(p, pePort, "/service", own), "200"), "device route: the other routes still serve a lane client");
   EXPECT(!answered(s_client(p, pePort, "/device", "-cert " + p.rogueChain + " -key " + p.rogueKey), "200"),
          "device route: a presented untrusted certificate is still refused");
+
+  EXPECT(s_client(p, pePort, "/whoami", "").find("{\"tls\":true,\"cert\":false}") != std::string::npos,
+         "device route: the request says TLS, no client certificate");
+  EXPECT(s_client(p, pePort, "/whoami", own).find("{\"tls\":true,\"cert\":true}") != std::string::npos,
+         "device route: the request says TLS with a verified client certificate");
 
   if (failures) std::cerr << failures << " http tls test(s) failed\n";
   else std::cout << "http tls tests passed" << (skips ? " (" + std::to_string(skips) + " skipped)" : std::string()) << "\n";

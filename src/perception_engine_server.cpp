@@ -615,14 +615,25 @@ public:
     server.allow_without_client_certificate("/api/integrations/healthkit/ingest");
     server.allow_without_client_certificate("/api/integrations/healthkit/status");
     server.allow_without_client_certificate("/api/integrations/healthkit/scope");
-    server.route("GET", "/api/integrations/healthkit/status", [this](const http::Request&) {
+    // Per source (owner, 2026-11-12; TRANSPORT_SECURITY.md): a source named in
+    // HEALTHKIT_CLIENT_CERTIFICATE_REQUIRED (PIM's scope pushes) must present a
+    // lane certificate on these routes too; the others keep server TLS and their token.
+    server.route("GET", "/api/integrations/healthkit/status", [this](const http::Request& req) {
+      auto q = req.queryParams.find("bridgeId");
+      if (auto refused = device_certificate_refusal(req, q != req.queryParams.end() ? q->second : "")) return *refused;
       return ok(healthkit_status());
     });
     server.route("POST", "/api/integrations/healthkit/ingest", [this](const http::Request& req) {
-      return ingest_healthkit(parse_body(req), bearer_token(req));
+      Json body = parse_body(req);
+      if (auto refused = device_certificate_refusal(req, json_string_field(body, "bridgeId"))) return *refused;
+      return ingest_healthkit(body, bearer_token(req));
     });
     server.route("POST", "/api/integrations/healthkit/scope", [this](const http::Request& req) {
-      return healthkit_scope(parse_body(req), bearer_token(req));
+      Json body = parse_body(req);
+      std::string source = json_string_field(body, "source");
+      if (source.empty()) source = json_string_field(body, "bridgeId");
+      if (auto refused = device_certificate_refusal(req, source)) return *refused;
+      return healthkit_scope(body, bearer_token(req));
     });
     server.route("POST", "/api/integrations/healthkit/resync", [this](const http::Request& req) {
       return healthkit_resync(parse_body(req), bearer_token(req));
@@ -1457,9 +1468,36 @@ private:
     if (const char* bridgeId = std::getenv("HEALTHKIT_BRIDGE_ID")) healthKitBridgeId = bridgeId;
     if (const char* mapping = std::getenv("HEALTHKIT_DEFAULT_SOURCE_MAPPING_ID")) healthKitDefaultSourceMappingId = mapping;
     if (const char* token = std::getenv("HEALTHKIT_BRIDGE_TOKEN")) healthKitBridgeToken = token;
+    if (const char* list = std::getenv("HEALTHKIT_CLIENT_CERTIFICATE_REQUIRED")) {
+      std::string all = list, item;
+      for (std::size_t i = 0; i <= all.size(); ++i) {
+        if (i == all.size() || all[i] == ',') {
+          item.erase(0, item.find_first_not_of(" \t"));
+          item.erase(item.find_last_not_of(" \t") + 1);
+          if (!item.empty()) healthKitCertificateSources.insert(item);
+          item.clear();
+        } else {
+          item += all[i];
+        }
+      }
+    }
     if (const char* bridgeId = std::getenv("CAREKIT_BRIDGE_ID")) careKitBridgeId = bridgeId;
     if (const char* mapping = std::getenv("CAREKIT_DEFAULT_SOURCE_MAPPING_ID")) careKitDefaultSourceMappingId = mapping;
     if (const char* token = std::getenv("CAREKIT_BRIDGE_TOKEN")) careKitBridgeToken = token;
+  }
+
+  // A device route's source must present a client certificate when it is listed
+  // in HEALTHKIT_CLIENT_CERTIFICATE_REQUIRED; with none named, the source is the
+  // configured bridge. Only on TLS: plaintext has no certificates to ask for.
+  std::optional<http::Response> device_certificate_refusal(const http::Request& req, const std::string& named) const {
+    const std::string& source = named.empty() ? healthKitBridgeId : named;
+    if (req.tls && !req.clientCertificate && healthKitCertificateSources.count(source))
+      return http::error_response("client certificate required", 403);
+    return std::nullopt;
+  }
+
+  static std::string json_string_field(const Json& body, const std::string& key) {
+    return body.at(key).as_string();  // "" when absent or not a string
   }
 
   Json configured_source_mapping(const std::string& id) const {
@@ -4066,6 +4104,7 @@ private:
   std::string healthKitBridgeId = "healthkit-ios-bridge";
   std::string healthKitDefaultSourceMappingId = "healthkit-activity";
   std::string healthKitBridgeToken;
+  std::set<std::string> healthKitCertificateSources;  // HEALTHKIT_CLIENT_CERTIFICATE_REQUIRED
   std::string careKitBridgeId = "carekit-ios-bridge";
   std::string careKitDefaultSourceMappingId = "carekit-task";
   std::string careKitBridgeToken;
