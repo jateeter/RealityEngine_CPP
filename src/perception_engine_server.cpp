@@ -784,8 +784,8 @@ public:
       bool allowOverlap = overlapEnv &&
         (std::string(overlapEnv) == "1" || std::string(overlapEnv) == "true");
       auto warnings = newRegistry->validate_overlaps(allowOverlap);
-      // Preserve clientId from existing bridge if present
-      std::string clientId = mqttBridge ? mqttBridge->config().clientId : "reality-engine-pe";
+      // A running bridge's id, else this instance's MQTT_CLIENT_ID (#189).
+      std::string clientId = mqtt::MqttBridge::enable_client_id(mqttBridge.get());
       if (mqttBridge) { mqttBridge->stop(); mqttBridge.reset(); }
       mqtt::ClientConfig cfg;
       cfg.brokerHost = brokerHost;

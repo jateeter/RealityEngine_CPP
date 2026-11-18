@@ -453,6 +453,31 @@ void test_env_legacy_topic_map_backcompat() {
   ::unsetenv("MQTT_TOPIC_MAP");
 }
 
+// #189: after a disable there is no bridge; enable must take the instance's
+// MQTT_CLIENT_ID, not the shared default.
+void test_enable_client_id() {
+  ::unsetenv("MQTT_CLIENT_ID");
+  EXPECT(mq::MqttBridge::enable_client_id(nullptr) == "reality-engine-pe",
+         "no bridge, no MQTT_CLIENT_ID: the default");
+  ::setenv("MQTT_CLIENT_ID", "re-pe-cpp-1-c49a26c0", 1);
+  EXPECT(mq::MqttBridge::enable_client_id(nullptr) == "re-pe-cpp-1-c49a26c0",
+         "no bridge: the instance's MQTT_CLIENT_ID");
+  ::setenv("MQTT_CLIENT_ID", "", 1);
+  EXPECT(mq::MqttBridge::enable_client_id(nullptr) == "reality-engine-pe",
+         "an empty MQTT_CLIENT_ID is the default");
+  ::setenv("MQTT_CLIENT_ID", "re-pe-cpp-1-c49a26c0", 1);
+  mq::ClientConfig cfg;
+  cfg.brokerHost = "127.0.0.1";
+  cfg.brokerPort = 1;
+  cfg.clientId = "running-bridge-id";
+  auto reg = mq::MappingRegistry::from_json(reality::json::parse(
+      R"({"mappings":[{"id":"a","topicFilter":"t/a","region":{"offset":0,"length":1},"extract":{"type":"csv-float"}}]})"));
+  mq::MqttBridge running(cfg, std::make_unique<mq::MappingRegistry>(std::move(reg)), nullptr, nullptr);
+  EXPECT(mq::MqttBridge::enable_client_id(&running) == "running-bridge-id",
+         "a running bridge keeps its id");
+  ::unsetenv("MQTT_CLIENT_ID");
+}
+
 }  // namespace
 
 int main() {
@@ -481,6 +506,7 @@ int main() {
   test_env_disabled_when_no_host();
   test_env_enabled_with_inline_mappings();
   test_env_legacy_topic_map_backcompat();
+  test_enable_client_id();
   if (failures > 0) {
     std::cerr << "\n" << failures << " MQTT mapping assertion(s) failed.\n";
     return 1;

@@ -93,6 +93,13 @@ public:
   };
   static std::optional<EnvConfig> from_environment();
 
+  // The client id POST /api/mqtt/enable connects with: a running bridge's, else
+  // this PE's own MQTT_CLIENT_ID (startUniverse.sh sets one per instance), else
+  // the fixed default. After a disable there is no running bridge, and falling
+  // straight to the default made every C++ PE on a shared broker one client,
+  // each connect evicting the others (#189, RealityEngine_LSP#197).
+  static std::string enable_client_id(const MqttBridge* current);
+
   // Driven by tests (no real broker required): feed a synthetic PUBLISH
   // payload through the full mapping pipeline.  Used by the in-process
   // dispatcher test to validate end-to-end mapping flow.
