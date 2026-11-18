@@ -240,6 +240,12 @@ void MqttBridge::inject_message(const std::string& topic, const std::vector<uint
 // (file or inline) before it actually boots.
 static constexpr const char* DEFAULT_MQTT_BROKER_HOST = "yuma.lateraledge.cloud";
 
+std::string MqttBridge::enable_client_id(const MqttBridge* current) {
+  if (current && !current->config().clientId.empty()) return current->config().clientId;
+  if (const char* c = get_env("MQTT_CLIENT_ID")) return c;
+  return ClientConfig{}.clientId;
+}
+
 std::optional<MqttBridge::EnvConfig> MqttBridge::from_environment() {
   if (truthy_env(get_env("MQTT_DISABLED"))) return std::nullopt;
 
