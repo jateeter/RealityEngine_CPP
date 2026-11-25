@@ -63,6 +63,21 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: get_api_health
+  /api/clock:
+    get:
+      tags:
+      - Info & Health
+      summary: Get /api/clock
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_clock
   /api/state:
     get:
       tags:
