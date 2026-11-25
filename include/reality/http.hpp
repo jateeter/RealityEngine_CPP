@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <regex>
 #include <string>
 #include <vector>
@@ -28,6 +29,9 @@ struct Response {
   int status = 200;
   std::string body = "{}";
   std::string contentType = "application/json";
+  // Headers beyond the content type and CORS, written as given (RE-Clock,
+  // RealityEngine_CI#600).
+  std::vector<std::pair<std::string, std::string>> headers;
 };
 
 class SseSession;
@@ -62,6 +66,13 @@ public:
   };
 
   void route(std::string method, std::string pattern, Handler handler);
+  // Run around every request a route, a 404 or a handler failure answers
+  // (RealityEngine_CI#600, the participant clock): `beforeRequest` before it is
+  // handled, and its response, when it returns one, answers instead (a
+  // malformed RE-Clock is refused this way); `afterResponse` on every response
+  // before it is written (stamping RE-Clock). Unset, nothing changes.
+  std::function<std::optional<Response>(const Request&)> beforeRequest;
+  std::function<void(Response&)> afterResponse;
   // A route a client may reach without a client certificate when the server
   // serves TLS (RealityEngine_CI#668, docs/TRANSPORT_SECURITY.md): the PE's
   // device ingest, which a phone reaches with server TLS and a token. With
@@ -120,6 +131,12 @@ bool is_internal_host(const std::string& host);
 
 Response json_response(const std::string& body, int status = 200);
 Response error_response(const std::string& message, int status = 400);
+// The participant clock on outbound calls (RealityEngine_CI#600): `stamp`
+// ticks and returns the RE-Clock value for a request to an internal peer, and
+// `receive` takes each such response's RE-Clock (or none). Unset, nothing is
+// stamped. External parties are never stamped.
+void set_client_clock(std::function<std::string()> stamp,
+                      std::function<void(const std::optional<std::string>&)> receive);
 std::string request_json(const std::string& method, const std::string& url, const std::string& body = "");
 std::string request_json(const std::string& method, const std::string& url, const std::string& body, const std::map<std::string, std::string>& headers);
 std::string post_json(const std::string& url, const std::string& body);

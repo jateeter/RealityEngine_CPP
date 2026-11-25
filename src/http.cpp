@@ -1,6 +1,7 @@
 #include "reality/http.hpp"
 #include "reality/json.hpp"
 
+#include <algorithm>
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/beast/core.hpp>
@@ -118,7 +119,26 @@ static Request to_request(const beast_http::request<beast_http::string_body>& in
   req.method = std::string(in.method_string());
   req.path = std::string(in.target());
   req.body = in.body();
-  for (const auto& field : in) req.headers.emplace(std::string(field.name_string()), std::string(field.value()));
+  for (const auto& field : in) {
+    std::string name(field.name_string());
+    std::string lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    // A repeated RE-Clock is joined, as RFC 9110 combines a repeated field,
+    // so its parser sees and refuses it rather than silently keeping the
+    // first (SURFACE_SPEC "The header", RealityEngine_CI#600).
+    if (lower == "re-clock") {
+      auto it = std::find_if(req.headers.begin(), req.headers.end(), [](const auto& kv) {
+        std::string k = kv.first;
+        std::transform(k.begin(), k.end(), k.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return k == "re-clock";
+      });
+      if (it != req.headers.end()) {
+        it->second += ", " + std::string(field.value());
+        continue;
+      }
+    }
+    req.headers.emplace(std::move(name), std::string(field.value()));
+  }
   auto q = req.path.find('?');
   if (q != std::string::npos) {
     std::string query = req.path.substr(q + 1);
@@ -234,6 +254,7 @@ static beast_http::response<beast_http::string_body> to_beast_response(const Res
   out.set(beast_http::field::server, "RealityEngine_CPP");
   out.set(beast_http::field::content_type, res.contentType);
   set_cors_headers(out);
+  for (const auto& [name, value] : res.headers) out.set(name, value);
   out.body() = res.body;
   out.keep_alive(keepAlive);
   out.prepare_payload();
@@ -641,7 +662,9 @@ private:
         req.tls = true;
         req.clientCertificate = has_verified_peer(stream);
       }
-      response = handle_with_idempotency(server, std::move(req));
+      std::optional<Response> refused;
+      if (server.beforeRequest) refused = server.beforeRequest(req);
+      response = refused ? std::move(*refused) : handle_with_idempotency(server, std::move(req));
     } catch (const std::exception& e) {
       response = error_response(e.what(), 500);
       keepAlive = false;
@@ -649,6 +672,7 @@ private:
       response = error_response("unknown handler error", 500);
       keepAlive = false;
     }
+    if (server.afterResponse) server.afterResponse(response);
     auto out = std::make_shared<beast_http::response<beast_http::string_body>>(to_beast_response(response, keepAlive));
     beast::get_lowest_layer(stream).expires_after(std::chrono::milliseconds(timeoutMs));
     beast_http::async_write(stream, *out, [self = this->shared_from_this(), out, keepAlive](beast::error_code ec, std::size_t) {
@@ -882,6 +906,10 @@ static void set_method(beast_http::request<beast_http::string_body>& req, const 
 // A kept-alive connection to one host:port, plaintext or TLS. TLS connections
 // are pooled like plaintext ones: an engine instance's PE calls its RE many
 // times per step, and a handshake per call would put one on every step.
+// The participant clock on outbound calls (#600); set once at boot.
+static std::function<std::string()> clientClockStamp;
+static std::function<void(const std::optional<std::string>&)> clientClockReceive;
+
 class PersistentConnection {
 public:
   PersistentConnection(std::string scheme, std::string host, std::string port)
@@ -935,6 +963,9 @@ private:
     beast_http::read(s, buffer, parser);
     auto& res = parser.get();
     if (!res.keep_alive()) connected = false;
+    auto clockField = res.find("RE-Clock");
+    lastClockHeader = clockField == res.end() ? std::nullopt
+                                              : std::optional<std::string>(std::string(clockField->value()));
     return res.body();
   }
 
@@ -953,6 +984,10 @@ private:
     req.set(beast_http::field::host, host);
     req.set(beast_http::field::user_agent, "RealityEngine_CPP");
     for (const auto& [key, value] : headers) req.set(key, value);
+    // An internal peer's call is a send under the participant clock (#600);
+    // an external party's never carries it.
+    const bool clocked = clientClockStamp && is_internal_host(host);
+    if (clocked) req.set("RE-Clock", clientClockStamp());
     req.keep_alive(true);
     if (method == "POST" || method == "PATCH" || method == "PUT") {
       req.set(beast_http::field::content_type, "application/json");
@@ -960,7 +995,9 @@ private:
       req.body() = body;
     }
     req.prepare_payload();
-    return tls ? exchange(*secure, req, timeoutMs) : exchange(*plain, req, timeoutMs);
+    std::string body_ = tls ? exchange(*secure, req, timeoutMs) : exchange(*plain, req, timeoutMs);
+    if (clocked && clientClockReceive) clientClockReceive(lastClockHeader);
+    return body_;
   }
 
   void connect_if_needed(int timeoutMs) {
@@ -1006,9 +1043,16 @@ private:
   std::unique_ptr<tls_stream> secure;
   std::mutex mutex;
   bool connected = false;
+  std::optional<std::string> lastClockHeader;
 };
 
 static std::mutex clientMutex;
+
+void set_client_clock(std::function<std::string()> stamp,
+                      std::function<void(const std::optional<std::string>&)> receive) {
+  clientClockStamp = std::move(stamp);
+  clientClockReceive = std::move(receive);
+}
 static std::map<std::string, std::vector<std::unique_ptr<PersistentConnection>>> clients;
 static std::map<std::string, size_t> clientCursor;
 

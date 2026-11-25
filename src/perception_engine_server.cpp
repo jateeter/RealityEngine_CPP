@@ -1,4 +1,5 @@
 #include "reality/http.hpp"
+#include "reality/participant_clock.hpp"
 #include "reality/mqtt_bridge.hpp"
 #include "reality/reality.hpp"
 #include "reality/vector_aggregator.hpp"
@@ -454,6 +455,9 @@ public:
         localAIBaseUrl(std::move(localAIUrl)),
         localAIMachinesDirectory(std::move(localAIMachinesDir)),
         engine(vectorDimension) {
+    // The boot below reads the RE (machine catalog, source bootstrap) and
+    // localAI: those are sends from the PE's clock too (RealityEngine_CI#600).
+    install_client_clock(participantClock);
     // A corpus machine is (re)loaded whether or not a source already claims to
     // describe it, and the resulting source is active. Nothing in an existing
     // source says whether its machine still has the same CESs, interconnections
@@ -541,6 +545,21 @@ public:
       connection->send(state_update_message());
     });
     server.sse("/api/events", sseHub);
+    // The PE is a clock participant of its own (RealityEngine_CI#600): its
+    // own UUID (PE_INSTANCE_UUID), lock and marks; every request a receive,
+    // every response and every call to an internal peer -- its RE, localAI,
+    // the ACP gateway -- a send.
+    install_participant_clock(server, participantClock);
+    // GET /api/clock: {instance, lamport, commit, step} at the newest
+    // completed push, commit counting completed pushes and step globalStep.
+    server.route("GET", "/api/clock", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      return ok(Json::Object{{"instance", participantClock.instance()},
+                             {"lamport", static_cast<double>(lastPushClock.lamport)},
+                             {"commit", static_cast<double>(lastPushClock.commit)},
+                             {"step", static_cast<double>(engine.globalStep)},
+                             {"headers", clock_headers_json(participantClock)}});
+    });
     server.route("GET", "/api/health", [](const http::Request&) {
       return ok(Json::Object{{"status", "healthy"}});
     });
@@ -1027,6 +1046,11 @@ private:
     Json semantics = nullptr;
     // Id of the record this one replays; empty on a primary record.
     std::string replayOf;
+    // The PE's clock when it stored the record, {instance, lamport}: a stored
+    // message carries its clock in the body, because a header survives neither
+    // storage nor forwarding (RealityEngine_CI#600). A completion names it as
+    // causedBy.
+    Json clock = nullptr;
   };
   struct TriggerDispatchSummary {
     int mergeOps = 0;
@@ -1871,7 +1895,8 @@ private:
       // 3-of-3 contract, and an optional key makes it vary record to record.
       {"error", r.error.empty() ? Json(nullptr) : Json(r.error)},
       {"semantics", r.semantics.is_object() ? r.semantics : dispatch_semantics_unjoined()},
-      {"replayOf", r.replayOf.empty() ? Json(nullptr) : Json(r.replayOf)}
+      {"replayOf", r.replayOf.empty() ? Json(nullptr) : Json(r.replayOf)},
+      {"clock", r.clock}
     };
     return out;
   }
@@ -1968,6 +1993,7 @@ private:
       replay.providerReceipt = nullptr;
       replay.error.clear();
       replay.replayOf = original.id;
+      replay.clock = event_clock_json(participantClock, participantClock.send());
       replay.createdAt = now;
       replay.updatedAt = now;
       if (freshIds) {
@@ -2760,6 +2786,30 @@ private:
     return ok(response);
   }
 
+  // A completion's causedBy (RealityEngine_CI#600): the clock of the dispatch
+  // it completes. The PE's own record wins -- `dispatchId` naming a record
+  // still in the ledger -- else the sender's echo, a well-formed
+  // {instance, lamport} in the body, else null.
+  Json completion_caused_by(const Json& body) {
+    const std::string dispatchId = body.at("dispatchId").as_string();
+    if (!dispatchId.empty()) {
+      std::lock_guard<std::mutex> lock(dispatchMutex);
+      auto it = dispatchRecords.find(dispatchId);
+      if (it != dispatchRecords.end() && it->second.clock.is_object()) return it->second.clock;
+    }
+    const Json& echo = body.at("causedBy");
+    const std::string echoInstance = echo.at("instance").as_string();
+    // The header's form: a canonical UUID in lower case.
+    const bool lowerUuid = InstanceClock::canonical_uuid(echoInstance) &&
+        std::none_of(echoInstance.begin(), echoInstance.end(), [](unsigned char c) { return std::isupper(c) != 0; });
+    if (echo.is_object() && echo.at("instance").is_string() && lowerUuid && echo.at("lamport").is_number()) {
+      const double lamport = echo.at("lamport").as_number();
+      if (lamport >= 0 && lamport <= static_cast<double>(InstanceClock::kMaxLamport) && lamport == static_cast<double>(static_cast<long long>(lamport)))
+        return Json::Object{{"instance", echoInstance}, {"lamport", lamport}};
+    }
+    return nullptr;
+  }
+
   http::Response ingest_completion(const Json& body) {
     if (!body.is_object()) return http::error_response("completion body must be a JSON object", 400);
 
@@ -2807,6 +2857,8 @@ private:
     if (signalResponse.status < 200 || signalResponse.status >= 300) return signalResponse;
 
     Json signalResult = json::parse(signalResponse.body);
+    const Json causedBy = completion_caused_by(body);
+    const Json completionClock = event_clock_json(participantClock, participantClock.send());
     Json::Object completion{
       {"provider", provider},
       {"agent", agent},
@@ -2815,7 +2867,9 @@ private:
       {"correlationId", body.at("correlationId").as_string()},
       {"envelopeId", body.at("envelopeId").as_string()},
       {"completionId", body.at("completionId").as_string(body.at("id").as_string())},
-      {"receivedAt", static_cast<double>(now_ms())}
+      {"receivedAt", static_cast<double>(now_ms())},
+      {"clock", completionClock},
+      {"causedBy", causedBy}
     };
     if (body.at("metadata").is_object()) completion["metadata"] = body.at("metadata");
 
@@ -2827,6 +2881,8 @@ private:
       {"sourceMappingId", sourceMappingId},
       {"correlationId", body.at("correlationId").as_string()},
       {"envelopeId", body.at("envelopeId").as_string()},
+      {"clock", completionClock},
+      {"causedBy", causedBy},
       {"timestamp", static_cast<double>(now_ms())},
     }));
 
@@ -3386,6 +3442,7 @@ private:
           engine.update_from_perceptual_space(ps);
         }
         engine.advance();
+        lastPushClock = participantClock.commit_step();  // a completed push is the PE's commit (#600)
         // The step itself, which already carries its own `timestamp`, so the
         // "when" this field used to hold is still readable as
         // `lastPush.timestamp`.
@@ -4018,6 +4075,7 @@ private:
       record.attempts = 0;
       record.envelope = envelope;
       record.semantics = dispatch_semantics(machine.at("name").as_string(), op.at("governance"), record.sequenceIds);
+      record.clock = event_clock_json(participantClock, participantClock.send());
 
       {
         std::lock_guard<std::mutex> lock(dispatchMutex);
@@ -4178,6 +4236,11 @@ private:
   // MQTT bridge — optional; null when MQTT_BROKER_HOST is unset.  Owned by
   // PerceptionService so its lifetime is bounded by the service's.
   std::unique_ptr<mqtt::MqttBridge> mqttBridge;
+  // The PE's participant clock (RealityEngine_CI#600): its own UUID, lock and
+  // marks, booted with the service; and the clock at the newest completed
+  // push (stateMutex).
+  InstanceClock participantClock = InstanceClock::boot("PE_INSTANCE_UUID");
+  InstanceClock::Stamp lastPushClock{participantClock.lamport(), participantClock.commit()};
 };
 
 } // namespace
