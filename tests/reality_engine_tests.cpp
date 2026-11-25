@@ -1099,30 +1099,77 @@ static void verify_instance_clock() {
                        ("re-cpp-lamport-" + std::to_string(std::random_device{}()));
   const std::string uuid = "0192f3a0-0000-7000-8000-0000000002d9";
   const fs::path file = dir / (uuid + ".lamport");
+  fs::path commitFile = file;
+  commitFile.replace_extension(".commit");
+  constexpr long long R = InstanceClock::kReservation;
 
   {
     auto minted = InstanceClock::minted();
     assert(InstanceClock::canonical_uuid(minted.instance()));
     assert(minted.instance()[14] == '7');                       // version 7
-    assert(minted.lamport() == 0 && minted.tick() == 1);
-    assert(InstanceClock::minted().instance() != minted.instance());  // one per instance
+    assert(minted.lamport() == 0 && minted.commit() == 0);
+    const auto first = minted.commit_step();
+    assert(first.lamport == 1 && first.commit == 1);          // a commit ticks both
+    assert(minted.send() == 2 && minted.commit() == 1);       // a send ticks lamport only
+    assert(minted.receive(std::nullopt) == 3);                // a receive without a header: + 1
+    assert(minted.receive(100) == 101);                       // max(local, received) + 1
+    assert(minted.receive(5) == 102);                         // a received value behind moves it by one
+    assert(minted.commit_step().commit == 2 && minted.lamport() == 103);  // lamport >= commit holds
+    assert(InstanceClock::minted().instance() != minted.instance());  // one per participant
     assert(!InstanceClock::canonical_uuid("cpp-1"));             // an instance id is not a UUID
+  }
+  // The RE-Clock header (SURFACE_SPEC "The header").
+  {
+    assert(InstanceClock::parse_header("instance=" + uuid + "; lamport=42") == 42LL);
+    assert(InstanceClock::parse_header("instance=" + uuid + ";lamport=0") == 0LL);
+    assert(InstanceClock::parse_header("instance=" + uuid + " ;  lamport=9007199254740991") == 9007199254740991LL);
+    for (const std::string& bad : std::vector<std::string>{std::string(""), std::string("lamport=1; instance=") + uuid,
+                                  "instance=" + uuid, "instance=" + uuid + "; lamport=",
+                                  "instance=" + uuid + "; lamport=-1", "instance=" + uuid + "; lamport=01",
+                                  "instance=" + uuid + "; lamport=9007199254740992",
+                                  "instance=" + uuid + "; lamport=1; x=2",
+                                  "instance=0192F3A0-0000-7000-8000-0000000002D9; lamport=1",
+                                  "instance=cpp-1; lamport=1",
+                                  "instance=" + uuid + "; lamport=1, instance=" + uuid + "; lamport=2"}) {
+      assert(!InstanceClock::parse_header(bad));
+    }
+    auto c = InstanceClock::minted();
+    assert(c.header(7) == "instance=" + c.instance() + "; lamport=7");
+    assert(InstanceClock::parse_header(c.header(7)) == 7LL);
   }
   long long last = 0;
   {
     auto first = InstanceClock::persisted(uuid, file);
-    assert(first.tick() == 1 && first.tick() == 2 && first.tick() == 3);  // a new instance ticks from 1
-    assert(InstanceClock::read_reservation(file) == InstanceClock::kLamportReservation);
+    assert(first.commit_step().commit == 1 && first.commit_step().commit == 2);  // a new participant counts from 1
+    assert(InstanceClock::read_reservation(file) == R && InstanceClock::read_reservation(commitFile) == R);
   }  // the lock is released with the clock
   {
     auto second = InstanceClock::persisted(uuid, file);
-    assert(second.tick() == InstanceClock::kLamportReservation + 1);  // a restart never reissues a tick
-    for (int i = 0; i < 1100; ++i) last = second.tick();
-    assert(InstanceClock::read_reservation(file) >= last);  // persisted before it was issued
+    const auto resumed = second.commit_step();
+    assert(resumed.commit == R + 1 && resumed.lamport == R + 1);  // a restart never reissues a tick
+    for (int i = 0; i < 1100; ++i) last = second.send();
+    assert(InstanceClock::read_reservation(file) >= last);   // persisted before it was issued
+    // A receive that jumps past the reservation is durable before it is used.
+    const long long jumped = second.receive(last + 10 * R);
+    assert(jumped == last + 10 * R + 1);
+    assert(InstanceClock::read_reservation(file) >= jumped);
+    last = jumped;
   }
   {
     auto third = InstanceClock::persisted(uuid, file);
-    assert(third.tick() > last);                             // and the next boot starts beyond it
+    assert(third.send() > last);                             // and the next boot starts beyond it
+    assert(third.commit() < third.lamport());                // the marks are kept apart
+  }
+  // A clock directory from before #600 holds only <uuid>.lamport, which counted
+  // committed steps: it seeds both marks.
+  {
+    const std::string old = "0192f3a0-0000-7000-8000-0000000003aa";
+    std::ofstream(dir / (old + ".lamport")) << "500\n";
+    auto migrated = InstanceClock::persisted(old, dir / (old + ".lamport"));
+    assert(migrated.commit() == 500 && migrated.lamport() == 500);
+    assert(migrated.commit_step().commit == 501);
+    fs::path oldCommit = dir / (old + ".commit");
+    assert(InstanceClock::read_reservation(oldCommit) == 500 + R);
   }
   // A second live process with the same UUID refuses to boot. lockf locks are
   // per process, so the holder has to be another one.
@@ -1155,7 +1202,7 @@ static void verify_instance_clock() {
     ::close(ready[0]);
     assert(refused);
     auto afterExit = InstanceClock::persisted(uuid, file);  // released when the holder exits
-    assert(afterExit.tick() > last);
+    assert(afterExit.send() > last);
   }
   {
     std::ofstream(dir / "bad.lamport") << "not-a-number";

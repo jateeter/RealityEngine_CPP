@@ -81,10 +81,11 @@ Json::Array arbitration_records_json(std::vector<ArbitrationRecord> records, boo
   return out;
 }
 
-// One retained step's arbitration (#296): its records and the Lamport value it
-// committed at.
+// One retained step's arbitration (#296): its records and the clock it
+// committed at (#600: lamport and commit).
 struct RetainedArbitration {
   long long lamport = 0;
+  long long commit = 0;
   std::vector<ArbitrationRecord> records;
 };
 
@@ -137,9 +138,10 @@ public:
     // count and drops what was retained; the clock keeps its value.
     spaceRuntime.onStepCommitted = [this](long step) {
       if (step >= 0) {
-        const long long tick = clock.tick();
+        // A committed step ticks commit and lamport together (#600).
+        lastCommit = clock.commit_step();
         if (arbitrationRetention && arbitrationWindow > 0) {
-          arbitrationSteps[step] = RetainedArbitration{tick, spaceRuntime.last_arbitration()};
+          arbitrationSteps[step] = RetainedArbitration{lastCommit.lamport, lastCommit.commit, spaceRuntime.last_arbitration()};
           prune_arbitration_steps(step);
         }
       } else {
@@ -155,6 +157,32 @@ public:
     server.route("GET", "/api", [](const http::Request&) {
       return ok(Json::Object{{"name", "Reality Engine"}, {"version", "1.0.0-cpp"}, {"status", "running"}});
     });
+    // The participant clock on every request (RealityEngine_CI#600): each
+    // request is a receive, applied before it is handled -- max(local,
+    // received) + 1 with an RE-Clock header, + 1 without one -- and a malformed
+    // header is refused with 400 (still a receive). Each response is a send:
+    // the clock ticks, then stamps it.
+    server.beforeRequest = [this](const http::Request& req) -> std::optional<http::Response> {
+      std::optional<std::string> header;
+      for (const auto& [name, value] : req.headers) {
+        std::string lower = name;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower == "re-clock") header = value;
+      }
+      std::optional<long long> received;
+      if (header) {
+        received = InstanceClock::parse_header(*header);
+        if (!received) {
+          clock.receive(std::nullopt);
+          return http::error_response("malformed RE-Clock header", 400);
+        }
+      }
+      clock.receive(received);
+      return std::nullopt;
+    };
+    server.afterResponse = [this](http::Response& res) {
+      res.headers.emplace_back("RE-Clock", clock.header(clock.send()));
+    };
     server.route("GET", "/api/health", [](const http::Request&) {
       return ok(Json::Object{{"status", "healthy"}});
     });
@@ -1358,7 +1386,9 @@ public:
       if (!spaceRuntime.is_configured()) return http::error_response("Simulation not configured", 400);
       auto s = spaceRuntime.step();
       if (!s) return ok(Json::Object{{"done", true}, {"success", true}});
-      return ok(Json::Object{{"success", true}, {"step", to_json(*s)}});
+      Json stepJson = to_json(*s);
+      stepJson.object()["clock"] = clock_json(lastCommit.lamport, lastCommit.commit, s->stepNumber);
+      return ok(Json::Object{{"success", true}, {"step", stepJson}});
     });
     server.route("POST", "/api/perceptual-simulation/reset", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
@@ -1434,7 +1464,7 @@ public:
     // first since boot or reset).
     server.route("GET", "/api/engine/clock", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
-      return ok(clock_json(clock.lamport(), completedStep));
+      return ok(clock_json(lastCommit.lamport, lastCommit.commit, completedStep));
     });
     server.route("GET", "/api/perceptual-simulation/history", [this](const http::Request&) {
       Json::Array arr;
@@ -1545,9 +1575,11 @@ public:
       if (!haveInput) return http::error_response("Provide exactly one of: vector, sparseVector, domainVectors", 400);
 
       SimulationStep step;
+      InstanceClock::Stamp committedAt;
       {
         std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
         step = spaceRuntime.process_immediate(assembled, overrideType);
+        committedAt = lastCommit;
         perception.perceptual_space().set_vector(step.perceptualSpace);
       }
       // Subset selector (RealityEngine_CI#367). Absent => the full step, on the
@@ -1572,6 +1604,9 @@ public:
       auto compactQuery = req.queryParams.find("compact");
       if (compactQuery != req.queryParams.end()) compact = compactQuery->second == "true" || compactQuery->second == "1";
       if (compact) add_packed_merge_values(out);
+      // The committed step's clock, so a PE can key what it records by the
+      // RE's (instance, commit) (SURFACE_SPEC "Identity, clock and parity").
+      out.object()["clock"] = clock_json(committedAt.lamport, committedAt.commit, step.stepNumber);
       if (sseHub) sseHub->broadcast(json::stringify(out));
       return ok(out);
     });
@@ -2025,10 +2060,12 @@ private:
       {"intervalMs", static_cast<double>(samplerIntervalMs)}
     };
   }
-  // The clock as every surface reports it: {instance, lamport, step}.
-  Json clock_json(long long lamport, long step) const {
+  // The clock as every surface reports it: {instance, lamport, commit, step}
+  // (#600). lamport and commit are the committed step's, never a later receive.
+  Json clock_json(long long lamport, long long commit, long step) const {
     return Json::Object{{"instance", clock.instance()},
                         {"lamport", static_cast<double>(lamport)},
+                        {"commit", static_cast<double>(commit)},
                         {"step", static_cast<double>(step)}};
   }
 
@@ -2037,7 +2074,7 @@ private:
     const Json::Array records = arbitration_records_json(retained.records, true);
     const auto& registry = ArbitrationRegistry::instance();
     return Json::Object{
-        {"clock", clock_json(retained.lamport, step)},
+        {"clock", clock_json(retained.lamport, retained.commit, step)},
         {"registryEntries", static_cast<double>(registry.size())},
         {"registrySource", registry.source().empty() ? Json{} : Json{registry.source()}},
         {"shards", static_cast<double>(arbiter_shards())},
@@ -2359,6 +2396,10 @@ private:
   // holds -- fails at once rather than after the load. Ticked under
   // spaceRuntimeMutex, once per committed step; never reset.
   InstanceClock clock = InstanceClock::boot();
+  // The clock of the newest committed step since boot (#600): what
+  // GET /api/engine/clock and a step's reply report. Before the first, the
+  // clock as booted.
+  InstanceClock::Stamp lastCommit{clock.lamport(), clock.commit()};
   // Arbitration retention keyed by step (#296). Off by default: GET
   // /api/arbitration answers in its legacy shape and nothing is kept per step.
   // On, each committed step's records are kept under its step number, stamped
