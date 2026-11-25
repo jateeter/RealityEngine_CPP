@@ -1,6 +1,7 @@
 #include "reality/clone_space.hpp"
 #include "reality/http.hpp"
 #include "reality/instance_clock.hpp"
+#include "reality/participant_clock.hpp"
 #include "reality/reality.hpp"
 
 #include <algorithm>
@@ -157,32 +158,9 @@ public:
     server.route("GET", "/api", [](const http::Request&) {
       return ok(Json::Object{{"name", "Reality Engine"}, {"version", "1.0.0-cpp"}, {"status", "running"}});
     });
-    // The participant clock on every request (RealityEngine_CI#600): each
-    // request is a receive, applied before it is handled -- max(local,
-    // received) + 1 with an RE-Clock header, + 1 without one -- and a malformed
-    // header is refused with 400 (still a receive). Each response is a send:
-    // the clock ticks, then stamps it.
-    server.beforeRequest = [this](const http::Request& req) -> std::optional<http::Response> {
-      std::optional<std::string> header;
-      for (const auto& [name, value] : req.headers) {
-        std::string lower = name;
-        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (lower == "re-clock") header = value;
-      }
-      std::optional<long long> received;
-      if (header) {
-        received = InstanceClock::parse_header(*header);
-        if (!received) {
-          clock.receive(std::nullopt);
-          return http::error_response("malformed RE-Clock header", 400);
-        }
-      }
-      clock.receive(received);
-      return std::nullopt;
-    };
-    server.afterResponse = [this](http::Response& res) {
-      res.headers.emplace_back("RE-Clock", clock.header(clock.send()));
-    };
+    // The participant clock on every request and outbound call
+    // (RealityEngine_CI#600), shared with the PE (participant_clock.hpp).
+    install_participant_clock(server, clock);
     server.route("GET", "/api/health", [](const http::Request&) {
       return ok(Json::Object{{"status", "healthy"}});
     });

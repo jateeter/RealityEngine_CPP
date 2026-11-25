@@ -906,6 +906,10 @@ static void set_method(beast_http::request<beast_http::string_body>& req, const 
 // A kept-alive connection to one host:port, plaintext or TLS. TLS connections
 // are pooled like plaintext ones: an engine instance's PE calls its RE many
 // times per step, and a handshake per call would put one on every step.
+// The participant clock on outbound calls (#600); set once at boot.
+static std::function<std::string()> clientClockStamp;
+static std::function<void(const std::optional<std::string>&)> clientClockReceive;
+
 class PersistentConnection {
 public:
   PersistentConnection(std::string scheme, std::string host, std::string port)
@@ -959,6 +963,9 @@ private:
     beast_http::read(s, buffer, parser);
     auto& res = parser.get();
     if (!res.keep_alive()) connected = false;
+    auto clockField = res.find("RE-Clock");
+    lastClockHeader = clockField == res.end() ? std::nullopt
+                                              : std::optional<std::string>(std::string(clockField->value()));
     return res.body();
   }
 
@@ -977,6 +984,10 @@ private:
     req.set(beast_http::field::host, host);
     req.set(beast_http::field::user_agent, "RealityEngine_CPP");
     for (const auto& [key, value] : headers) req.set(key, value);
+    // An internal peer's call is a send under the participant clock (#600);
+    // an external party's never carries it.
+    const bool clocked = clientClockStamp && is_internal_host(host);
+    if (clocked) req.set("RE-Clock", clientClockStamp());
     req.keep_alive(true);
     if (method == "POST" || method == "PATCH" || method == "PUT") {
       req.set(beast_http::field::content_type, "application/json");
@@ -984,7 +995,9 @@ private:
       req.body() = body;
     }
     req.prepare_payload();
-    return tls ? exchange(*secure, req, timeoutMs) : exchange(*plain, req, timeoutMs);
+    std::string body_ = tls ? exchange(*secure, req, timeoutMs) : exchange(*plain, req, timeoutMs);
+    if (clocked && clientClockReceive) clientClockReceive(lastClockHeader);
+    return body_;
   }
 
   void connect_if_needed(int timeoutMs) {
@@ -1030,9 +1043,16 @@ private:
   std::unique_ptr<tls_stream> secure;
   std::mutex mutex;
   bool connected = false;
+  std::optional<std::string> lastClockHeader;
 };
 
 static std::mutex clientMutex;
+
+void set_client_clock(std::function<std::string()> stamp,
+                      std::function<void(const std::optional<std::string>&)> receive) {
+  clientClockStamp = std::move(stamp);
+  clientClockReceive = std::move(receive);
+}
 static std::map<std::string, std::vector<std::unique_ptr<PersistentConnection>>> clients;
 static std::map<std::string, size_t> clientCursor;
 

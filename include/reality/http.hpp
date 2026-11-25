@@ -131,6 +131,12 @@ bool is_internal_host(const std::string& host);
 
 Response json_response(const std::string& body, int status = 200);
 Response error_response(const std::string& message, int status = 400);
+// The participant clock on outbound calls (RealityEngine_CI#600): `stamp`
+// ticks and returns the RE-Clock value for a request to an internal peer, and
+// `receive` takes each such response's RE-Clock (or none). Unset, nothing is
+// stamped. External parties are never stamped.
+void set_client_clock(std::function<std::string()> stamp,
+                      std::function<void(const std::optional<std::string>&)> receive);
 std::string request_json(const std::string& method, const std::string& url, const std::string& body = "");
 std::string request_json(const std::string& method, const std::string& url, const std::string& body, const std::map<std::string, std::string>& headers);
 std::string post_json(const std::string& url, const std::string& body);

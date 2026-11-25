@@ -1,4 +1,5 @@
 #include "reality/http.hpp"
+#include "reality/participant_clock.hpp"
 #include "reality/mqtt_bridge.hpp"
 #include "reality/reality.hpp"
 #include "reality/vector_aggregator.hpp"
@@ -541,6 +542,20 @@ public:
       connection->send(state_update_message());
     });
     server.sse("/api/events", sseHub);
+    // The PE is a clock participant of its own (RealityEngine_CI#600): its
+    // own UUID (PE_INSTANCE_UUID), lock and marks; every request a receive,
+    // every response and every call to an internal peer -- its RE, localAI,
+    // the ACP gateway -- a send.
+    install_participant_clock(server, participantClock);
+    // GET /api/clock: {instance, lamport, commit, step} at the newest
+    // completed push, commit counting completed pushes and step globalStep.
+    server.route("GET", "/api/clock", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      return ok(Json::Object{{"instance", participantClock.instance()},
+                             {"lamport", static_cast<double>(lastPushClock.lamport)},
+                             {"commit", static_cast<double>(lastPushClock.commit)},
+                             {"step", static_cast<double>(engine.globalStep)}});
+    });
     server.route("GET", "/api/health", [](const http::Request&) {
       return ok(Json::Object{{"status", "healthy"}});
     });
@@ -3386,6 +3401,7 @@ private:
           engine.update_from_perceptual_space(ps);
         }
         engine.advance();
+        lastPushClock = participantClock.commit_step();  // a completed push is the PE's commit (#600)
         // The step itself, which already carries its own `timestamp`, so the
         // "when" this field used to hold is still readable as
         // `lastPush.timestamp`.
@@ -4178,6 +4194,11 @@ private:
   // MQTT bridge — optional; null when MQTT_BROKER_HOST is unset.  Owned by
   // PerceptionService so its lifetime is bounded by the service's.
   std::unique_ptr<mqtt::MqttBridge> mqttBridge;
+  // The PE's participant clock (RealityEngine_CI#600): its own UUID, lock and
+  // marks, booted with the service; and the clock at the newest completed
+  // push (stateMutex).
+  InstanceClock participantClock = InstanceClock::boot("PE_INSTANCE_UUID");
+  InstanceClock::Stamp lastPushClock{participantClock.lamport(), participantClock.commit()};
 };
 
 } // namespace
