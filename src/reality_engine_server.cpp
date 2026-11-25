@@ -1442,7 +1442,9 @@ public:
     // first since boot or reset).
     server.route("GET", "/api/engine/clock", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
-      return ok(clock_json(lastCommit.lamport, lastCommit.commit, completedStep));
+      Json out = clock_json(lastCommit.lamport, lastCommit.commit, completedStep);
+      out.object()["headers"] = clock_headers_json(clock);
+      return ok(out);
     });
     server.route("GET", "/api/perceptual-simulation/history", [this](const http::Request&) {
       Json::Array arr;

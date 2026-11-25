@@ -200,6 +200,20 @@ long long InstanceClock::receive(std::optional<long long> received) {
   return lamport_;
 }
 
+void InstanceClock::count_header(HeaderKind kind) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  switch (kind) {
+    case HeaderKind::Received: ++headerCounts_.received; break;
+    case HeaderKind::Missing: ++headerCounts_.missing; break;
+    case HeaderKind::Rejected: ++headerCounts_.rejected; break;
+  }
+}
+
+InstanceClock::HeaderCounts InstanceClock::header_counts() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return headerCounts_;
+}
+
 long long InstanceClock::lamport() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return lamport_;
@@ -218,6 +232,7 @@ InstanceClock::InstanceClock(InstanceClock&& other) noexcept
       commitReserved_(other.commitReserved_),
       lamportFile_(std::move(other.lamportFile_)),
       commitFile_(std::move(other.commitFile_)),
+      headerCounts_(other.headerCounts_),
       lockFd_(std::exchange(other.lockFd_, -1)) {}
 
 InstanceClock& InstanceClock::operator=(InstanceClock&& other) noexcept {
@@ -230,6 +245,7 @@ InstanceClock& InstanceClock::operator=(InstanceClock&& other) noexcept {
     commitReserved_ = other.commitReserved_;
     lamportFile_ = std::move(other.lamportFile_);
     commitFile_ = std::move(other.commitFile_);
+    headerCounts_ = other.headerCounts_;
     lockFd_ = std::exchange(other.lockFd_, -1);
   }
   return *this;

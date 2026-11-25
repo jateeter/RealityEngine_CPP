@@ -88,6 +88,18 @@ public:
   // in that order, separated by `;` with optional spaces).
   static std::optional<long long> parse_header(const std::string& value);
 
+  // The RE-Clock headers inbound requests presented since boot: well-formed,
+  // absent, and refused as malformed (SURFACE_SPEC "The instance clock",
+  // `headers` on GET /api/engine/clock and the PE's GET /api/clock).
+  struct HeaderCounts {
+    long long received = 0;
+    long long missing = 0;
+    long long rejected = 0;
+  };
+  enum class HeaderKind { Received, Missing, Rejected };
+  void count_header(HeaderKind kind);
+  HeaderCounts header_counts() const;
+
   static bool canonical_uuid(const std::string& s);
   static long long read_reservation(const std::filesystem::path& file);
 
@@ -103,6 +115,7 @@ private:
   long long commitReserved_ = 0;
   std::optional<std::filesystem::path> lamportFile_;
   std::optional<std::filesystem::path> commitFile_;
+  HeaderCounts headerCounts_;
   int lockFd_ = -1;
   mutable std::mutex mutex_;
 };
