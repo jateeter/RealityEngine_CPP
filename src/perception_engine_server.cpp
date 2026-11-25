@@ -2798,11 +2798,14 @@ private:
       if (it != dispatchRecords.end() && it->second.clock.is_object()) return it->second.clock;
     }
     const Json& echo = body.at("causedBy");
-    if (echo.is_object() && echo.at("instance").is_string() && InstanceClock::canonical_uuid(echo.at("instance").as_string()) &&
-        echo.at("lamport").is_number()) {
+    const std::string echoInstance = echo.at("instance").as_string();
+    // The header's form: a canonical UUID in lower case.
+    const bool lowerUuid = InstanceClock::canonical_uuid(echoInstance) &&
+        std::none_of(echoInstance.begin(), echoInstance.end(), [](unsigned char c) { return std::isupper(c) != 0; });
+    if (echo.is_object() && echo.at("instance").is_string() && lowerUuid && echo.at("lamport").is_number()) {
       const double lamport = echo.at("lamport").as_number();
       if (lamport >= 0 && lamport <= static_cast<double>(InstanceClock::kMaxLamport) && lamport == static_cast<double>(static_cast<long long>(lamport)))
-        return Json::Object{{"instance", echo.at("instance").as_string()}, {"lamport", lamport}};
+        return Json::Object{{"instance", echoInstance}, {"lamport", lamport}};
     }
     return nullptr;
   }
