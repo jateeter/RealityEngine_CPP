@@ -1883,7 +1883,9 @@ SimulationStep PerceptualSpaceRuntime::run_phases(int stepNumber, std::optional<
   phaseTimings.steps += 1;
 
   lastArbitration = step.arbitration;
+  committingStep = &step;
   record_trajectory(std::move(isre), std::move(osre));
+  committingStep = nullptr;
   return step;
 }
 void PerceptualSpaceRuntime::record_trajectory(TrajectoryEntry isre, TrajectoryEntry osre) {
@@ -2660,6 +2662,10 @@ Machine load_machine_from_json_string(const std::string& raw,
     }
     machine.add_sequence(seq);
   }
+  // The declared form, for the corpus fingerprint (#603): what the file or
+  // body declared, minus what ingestion assigns.
+  machine.declared = m;
+  if (machine.declared.is_object()) machine.declared.object().erase("id");
   return machine;
 }
 

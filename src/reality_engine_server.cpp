@@ -1,6 +1,7 @@
 #include "reality/clone_space.hpp"
 #include "reality/http.hpp"
 #include "reality/instance_clock.hpp"
+#include "reality/kline.hpp"
 #include "reality/participant_clock.hpp"
 #include "reality/reality.hpp"
 
@@ -137,6 +138,7 @@ public:
     // completion is published, so an observer woken for step n finds n's
     // arbitration records already there (#296). A reset (-1) restarts the step
     // count and drops what was retained; the clock keeps its value.
+    klines = make_kline_tracker();
     spaceRuntime.onStepCommitted = [this](long step) {
       if (step >= 0) {
         // A committed step ticks commit and lamport together (#600).
@@ -148,6 +150,9 @@ public:
       } else {
         arbitrationSteps.clear();
       }
+      // K-lines that closed at this step are stored before its completion is
+      // published (#603): the same place arbitration retention commits.
+      capture_klines(step);
       completedStep = step;
       stepCommitted.notify_all();
     };
@@ -161,6 +166,49 @@ public:
     // The participant clock on every request and outbound call
     // (RealityEngine_CI#600), shared with the PE (participant_clock.hpp).
     install_participant_clock(server, clock);
+    // K-line routes (#603; SURFACE_SPEC "Routes"). Registered before the
+    // parameterised one, which would otherwise take "open" and "stats" as ids.
+    server.route("GET", "/api/klines/open", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      return ok(klines->open_json());
+    });
+    server.route("GET", "/api/klines/stats", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      return ok(klines->stats());
+    });
+    server.route("POST", "/api/klines/export", [this](const http::Request& req) {
+      Json body = parse_body(req);
+      std::set<std::string> outcomes, machinesSel;
+      if (body.at("outcome").is_array())
+        for (const auto& o : body.at("outcome").array()) outcomes.insert(o.as_string());
+      if (body.at("machines").is_array())
+        for (const auto& m : body.at("machines").array()) machinesSel.insert(m.as_string());
+      const long long since = body.at("since").is_number() ? static_cast<long long>(body.at("since").as_number()) : 0;
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      http::Response r;
+      r.status = 200;
+      r.contentType = "application/x-ndjson";
+      r.body = klines->export_bundle(outcomes, since, machinesSel);
+      return r;
+    });
+    server.route("GET", "/api/klines/:id", [this](const http::Request& req) {
+      const std::string id = url_decode(req.pathParams.at("id"));
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      if (auto rec = klines->get(id)) return ok(*rec);
+      return http::error_response("no K-line " + id, 404);
+    });
+    server.route("GET", "/api/klines", [this](const http::Request& req) {
+      auto q = [&](const char* key) -> std::optional<std::string> {
+        auto it = req.queryParams.find(key);
+        if (it == req.queryParams.end() || it->second.empty()) return std::nullopt;
+        return url_decode(it->second);
+      };
+      const long since = parse_step(q("since").value_or("0"));
+      const long limit = parse_step(q("limit").value_or("100"));
+      if (since < 0 || limit < 0) return http::error_response("since and limit are non-negative integers", 400);
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      return ok(klines->list(q("outcome"), q("machine"), q("sequence"), since, static_cast<int>(limit)));
+    });
     server.route("GET", "/api/health", [](const http::Request&) {
       return ok(Json::Object{{"status", "healthy"}});
     });
@@ -1954,6 +2002,12 @@ private:
     machines[m.id].transitionsInhibited = running;
   }
   bool remove_machine(const std::string& id) {
+    if (klines && klines->controls().capture) {
+      if (const Machine* running = spaceRuntime.running_machine(id)) {
+        try { klines->on_machine_removed(running->name); }
+        catch (const std::exception& e) { kline_failed(e); }
+      }
+    }
     spaceRuntime.remove_machine(id);
     return machines.erase(id) > 0;
   }
@@ -2060,6 +2114,99 @@ private:
         {"shards", static_cast<double>(arbiter_shards())},
         {"count", static_cast<double>(records.size())},
         {"records", records}};
+  }
+
+  // ── K-lines (#603) ────────────────────────────────────────────────────
+  // The store is the instance's: <INSTANCE_KLINE_DIR>/<uuid>/, the parent
+  // defaulting to the clock directory's sibling. An instance whose UUID was
+  // minted keeps its K-lines in memory only: its UUID will not come back.
+  std::unique_ptr<kline::Tracker> make_kline_tracker() {
+    namespace fs = std::filesystem;
+    const char* allocated = std::getenv("INSTANCE_UUID");
+    std::string uuid = allocated ? allocated : "";
+    std::transform(uuid.begin(), uuid.end(), uuid.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    fs::path dir;
+    if (!uuid.empty() && uuid == clock.instance()) {
+      fs::path parent;
+      if (const char* d = std::getenv("INSTANCE_KLINE_DIR"); d && *d) parent = d;
+      else {
+        fs::path clockDir;
+        if (const char* c = std::getenv("INSTANCE_CLOCK_DIR"); c && *c) clockDir = c;
+        else {
+          const char* home = std::getenv("HOME");
+          clockDir = fs::path(home && *home ? home : ".") / ".reality-engine" / "clock";
+        }
+        parent = clockDir.parent_path() / "klines";
+      }
+      dir = parent / uuid;
+    }
+    const char* on = std::getenv("RE_KLINE_CAPTURE");
+    const bool capture = on && (std::string(on) == "1" || std::string(on) == "true");
+    auto tracker = std::make_unique<kline::Tracker>(
+        clock.instance(), capture ? kline::Store(dir) : kline::Store(), [this] { return clock.send(); });
+    tracker->controls().capture = capture;
+    if (capture) {
+      std::cerr << "K-line capture on — store " << (dir.empty() ? std::string("in memory") : dir.string()) << "\n";
+      tracker->recover();
+    }
+    return tracker;
+  }
+
+  void kline_failed(const std::exception& e) {
+    // A store that cannot be written stops capture rather than the engine,
+    // and says so; the steps themselves are unaffected.
+    std::cerr << "K-line capture stopped: " << e.what() << "\n";
+    klines->controls().capture = false;
+  }
+
+  // The fingerprint and longest path of the resident corpus, recomputed when
+  // machines are added or removed.
+  void refresh_corpus_facts() {
+    if (fingerprintVersion == spaceRuntime.mapping_version()) return;
+    std::vector<std::pair<std::string, Json>> declared;
+    int longest = 1;
+    for (const auto& [_, m] : spaceRuntime.running_machines()) {
+      declared.emplace_back(m.name, m.declared.is_object() ? m.declared : Json(Json::Object{{"name", m.name}}));
+      for (const auto& [sid, seq] : m.sequence_map()) {
+        const auto& events = seq.event_map();
+        // Longest simple path from an initial event, self-loops ignored.
+        std::function<int(const std::string&, std::set<std::string>&)> walk =
+            [&](const std::string& id, std::set<std::string>& seen) {
+              auto it = events.find(id);
+              if (it == events.end()) return 0;
+              int best = 0;
+              seen.insert(id);
+              for (const auto& n : it->second.next_vector_ids())
+                if (!seen.count(n)) best = std::max(best, walk(n, seen));
+              seen.erase(id);
+              return best + 1;
+            };
+        for (const auto& [eid, ev] : events)
+          if (ev.isInitial) { std::set<std::string> seen; longest = std::max(longest, walk(eid, seen)); }
+      }
+    }
+    corpusFingerprint = kline::corpus_fingerprint(declared);
+    klines->set_longest_path(longest);
+    fingerprintVersion = spaceRuntime.mapping_version();
+  }
+
+  void capture_klines(long step) {
+    if (!klines || !klines->controls().capture) return;
+    try {
+      if (step < 0) { klines->on_reset(); return; }
+      refresh_corpus_facts();
+      kline::StepView view;
+      view.step = step;
+      view.commit = lastCommit.commit;
+      view.simulation = spaceRuntime.committing_step();
+      view.running = &spaceRuntime.running_machines();
+      view.isre = spaceRuntime.last_isre();
+      view.osre = spaceRuntime.last_osre();
+      view.fingerprint = corpusFingerprint;
+      klines->on_step(view);
+    } catch (const std::exception& e) {
+      kline_failed(e);
+    }
   }
 
   // Drop every retained step outside the window ending at `latest`.
@@ -2380,6 +2527,14 @@ private:
   // GET /api/engine/clock and a step's reply report. Before the first, the
   // clock as booted.
   InstanceClock::Stamp lastCommit{clock.lamport(), clock.commit()};
+  // K-lines (RealityEngine_CI#603): the episodes captured at each committed
+  // step, in the instance's store. Capture is off by default; until the three
+  // voters serve it, RE_KLINE_CAPTURE=1 turns it on, and its controls are not
+  // on /api/engine/config, which is compared across engines. Guarded by
+  // spaceRuntimeMutex.
+  std::unique_ptr<kline::Tracker> klines;
+  std::string corpusFingerprint;
+  long fingerprintVersion = -1;
   // Arbitration retention keyed by step (#296). Off by default: GET
   // /api/arbitration answers in its legacy shape and nothing is kept per step.
   // On, each committed step's records are kept under its step number, stamped
