@@ -14,7 +14,12 @@ info:
 
     Wire-compatible with the LSP (Common Lisp) and Scala runtimes.
 
-    '
+
+    **The instance clock (RealityEngine_CI#600).** Every request may present
+    `RE-Clock: instance=<uuid>; lamport=<n>` and is a receive (`max(local, received) + 1`);
+    every response is a send and carries `RE-Clock`. A malformed or repeated header is
+    refused with 400 `{"error": "malformed RE-Clock header"}` (`MalformedClock`), still a
+    receive. See RealityEngine_CI SURFACE_SPEC.md "The instance clock".'
   x-generated-from: RealityEngine_CI/SURFACE_SPEC.md
 servers:
 - url: http://localhost:5300
@@ -67,14 +72,16 @@ paths:
     get:
       tags:
       - Info & Health
-      summary: Get /api/clock
+      summary: 'The PE''s own clock {instance, lamport, commit, step, headers}: commit counts completed pushes, step its globalStep'
       responses:
         '200':
           description: Success
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Object'
+                $ref: '#/components/schemas/InstanceClock'
+        '400':
+          $ref: '#/components/responses/MalformedClock'
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: get_api_clock
@@ -942,7 +949,27 @@ paths:
           description: Switching Protocols — WebSocket handshake
       operationId: websocket_ws
 components:
+  headers:
+    REClock:
+      description: 'The responder''s clock after this response (a send): `instance=<lower-case uuid>; lamport=<n>`, n in [0, 2^53-1].'
+      schema:
+        type: string
+        pattern: '^instance=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*;\s*lamport=(0|[1-9][0-9]*)$'
   responses:
+    MalformedClock:
+      description: A malformed or repeated RE-Clock header. Still a receive; the reply carries RE-Clock.
+      headers:
+        RE-Clock:
+          $ref: '#/components/headers/REClock'
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: string
+                enum: ['malformed RE-Clock header']
     NotFound:
       description: Resource not found
       content:
@@ -956,6 +983,38 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    InstanceClock:
+      description: 'The participant''s clock at its newest committed step (RealityEngine_CI#600). `instance`, `lamport` and `commit` are participant facts, left out of cross-runtime comparison; `step` is compared.'
+      type: object
+      required: [instance, lamport, commit, step, headers]
+      properties:
+        instance:
+          type: string
+          format: uuid
+          description: The participant's UUID (INSTANCE_UUID for an RE, PE_INSTANCE_UUID for a PE).
+        lamport:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+          description: The full Lamport clock; ticks on every committed step, send and receive; never resets.
+        commit:
+          type: integer
+          minimum: 0
+          description: Committed steps; never resets. lamport >= commit.
+        step:
+          type: integer
+          minimum: -1
+          description: The step count; resets on reset; -1 before the first step since boot or reset.
+        headers:
+          $ref: '#/components/schemas/ClockHeaderCounts'
+    ClockHeaderCounts:
+      description: Inbound requests since boot that presented a well-formed RE-Clock, none, or one refused with 400.
+      type: object
+      required: [received, missing, rejected]
+      properties:
+        received: {type: integer, minimum: 0}
+        missing: {type: integer, minimum: 0}
+        rejected: {type: integer, minimum: 0}
     Machine:
       type: object
       additionalProperties: true
