@@ -132,6 +132,20 @@ reserved 1024 ahead, written (temp + rename) before any tick past it — and hol
 `lockf` on `<uuid>.lock` for its life, so a second live process with the same
 UUID refuses to start. An unreadable or unwritable clock refuses the start too.
 
+K-lines (RealityEngine_CI#603, #178) are captured in `src/kline.cpp`
+(`include/reality/kline.hpp`) at the step completion point, beside arbitration
+retention: the tracker observes each committed step's sequence results and the
+running machines' active events, never re-deriving the transition rule, and
+appends closed K-lines (`re-kline/1`) and `sustain-end` events to the instance's
+store, `<INSTANCE_KLINE_DIR>/<uuid>/` (default the clock dir's sibling
+`klines/`), fsynced before the completion is published, with the open table
+checkpointed in `open.json`. A minted UUID keeps K-lines in memory only. Until
+LSP and Scala serve them, capture is off by default and turned on by
+`RE_KLINE_CAPTURE=1`; its controls are not on `/api/engine/config` and the
+routes (`/api/klines`, `/open`, `/stats`, `/:id`, `POST /export`) are not in the
+OpenAPI document, because both are compared across the voters.
+`bin/kline_tests` covers the boundaries and the store.
+
 ## Standing rules
 
 The standing rules are in

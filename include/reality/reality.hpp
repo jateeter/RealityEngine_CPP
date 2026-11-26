@@ -278,6 +278,9 @@ public:
   std::optional<RealityEvent*> get_vector(const std::string& vectorId);
   std::vector<RealityEvent*> active_vectors();
   std::vector<RealityEvent> all_vectors() const;
+  // The events by id, without a copy: the K-line tracker reads the running
+  // state each committed step (RealityEngine_CI#603).
+  const std::map<std::string, RealityEvent>& event_map() const { return vectors; }
   // Ids of this sequence's Initial Reality Events, sorted by id.
   //
   // Public because `GET /api/machines` reports it on the *summary* form of a
@@ -358,6 +361,10 @@ public:
   // the dispatch envelope that is its slot. Serialised only when set, so no
   // other machine grows a field on the compared /api/machines surfaces.
   std::optional<std::string> cloneOf;
+  // The machine object as its corpus file or request body declared it, without
+  // what ingestion assigns (no `id`): the input to the corpus fingerprint
+  // `sha256/resident-declared-v1` (SURFACE_SPEC "Corpus fingerprint").
+  Json declared = nullptr;
   std::string assetId;
   std::string envelopeId;
 
@@ -370,6 +377,8 @@ public:
   void add_sequence(const CriticalEventSequence& sequence);
   void remove_sequence(const std::string& sequenceId);
   std::vector<CriticalEventSequence> all_sequences() const;
+  // The sequences by id, without a copy (RealityEngine_CI#603).
+  const std::map<std::string, CriticalEventSequence>& sequence_map() const { return sequences; }
   std::vector<std::string> sequence_ids() const;
   int sequence_count() const;
   int total_vector_count() const;
@@ -904,6 +913,13 @@ public:
   // caller holds for the step, so the observer it notifies sees the pair and
   // the completion together.
   std::function<void(long)> onStepCommitted;
+  // The step being committed, while onStepCommitted runs for it; nullptr
+  // otherwise (and for a reset). The K-line tracker reads it (#603).
+  const SimulationStep* committing_step() const { return committingStep; }
+  // The newest ISRE and OSRE entries, without copying the histories; nullptr
+  // when none is held.
+  const TrajectoryEntry* last_isre() const { return isreHistory.empty() ? nullptr : &isreHistory.back(); }
+  const TrajectoryEntry* last_osre() const { return osreHistory.empty() ? nullptr : &osreHistory.back(); }
   void set_trajectory_limit(size_t limit);
   size_t trajectory_limit() const;
   PerceptualSpace& perceptual_space();
@@ -933,6 +949,7 @@ private:
   // is the OLDEST retained step, so after any second step it served the wrong
   // one (RealityEngine_CI#296 baseline finding A, and the C++ half of #283).
   std::vector<ArbitrationRecord> lastArbitration;
+  const SimulationStep* committingStep = nullptr;
   size_t maxTrajectory = 1024;
   // Appends ISRE(n) and OSRE(n) together.  They are captured at their own
   // observation points inside the step and recorded in one action, so no
