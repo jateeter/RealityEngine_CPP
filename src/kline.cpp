@@ -1152,6 +1152,18 @@ void Tracker::recover() {
   lastStep_ = -1;  // the engine's step count starts over
 }
 
+void Tracker::start_capture() {
+  open_.clear();
+  sustain_.clear();
+  closed_.clear();
+  ring_.clear();
+  baseline_.clear();
+  current_.clear();
+  lastStep_ = -1;
+  controls_.capture = true;
+  recover();
+}
+
 void Tracker::trim_ring() {
   long keepFrom = lastStep_ - std::max(1, ring_depth());
   for (const auto& kl : open_) keepFrom = std::min(keepFrom, kl.open.step - 1);

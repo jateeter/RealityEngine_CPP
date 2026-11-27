@@ -166,6 +166,11 @@ public:
   // At boot: closes every K-line in the checkpoint `interrupted` ("shutdown")
   // at the step it was checkpointed, and ends every sustain there.
   void recover();
+  // klineCapture turned on (at boot or at runtime): capture starts afresh,
+  // first closing what the checkpoint holds, as at boot (SURFACE_SPEC
+  // "Controls"). Turning it off is `controls().capture = false`, which leaves
+  // the store and its checkpoint untouched.
+  void start_capture();
   // A committed step (its commit tick already taken).
   void on_step(const StepView& view);
   // A reset: every open K-line closes `interrupted` ("reset") at `last`, the

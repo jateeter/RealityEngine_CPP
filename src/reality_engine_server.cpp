@@ -2142,12 +2142,12 @@ private:
     }
     const char* on = std::getenv("RE_KLINE_CAPTURE");
     const bool capture = on && (std::string(on) == "1" || std::string(on) == "true");
-    auto tracker = std::make_unique<kline::Tracker>(
-        clock.instance(), capture ? kline::Store(dir) : kline::Store(), [this] { return clock.send(); });
-    tracker->controls().capture = capture;
+    // The store opens whatever the control says, so the routes always answer
+    // from it; only capture writes to it.
+    auto tracker = std::make_unique<kline::Tracker>(clock.instance(), kline::Store(dir), [this] { return clock.send(); });
     if (capture) {
       std::cerr << "K-line capture on — store " << (dir.empty() ? std::string("in memory") : dir.string()) << "\n";
-      tracker->recover();
+      tracker->start_capture();
     }
     return tracker;
   }
@@ -2379,6 +2379,54 @@ private:
     controls.push_back(boolean_control("includeActiveRegions", &includeActiveRegionsDefault, true));
     controls.push_back(boolean_control("includeMachineResults", &includeMachineResultsDefault, true));
     controls.push_back(boolean_control("includePerceptualSpace", &includePerceptualSpaceDefault, true));
+    // K-lines (#603; SURFACE_SPEC "Controls"). Off stops capture and leaves the
+    // store untouched; on starts afresh, closing what the checkpoint holds.
+    controls.push_back(EngineControl{
+      "klineCapture", "engine",
+      [this] { return control_json("klineCapture", "engine", klines->controls().capture, false); },
+      [this](const Json& body, std::string& error, int& status) {
+        if (!body.at("value").is_bool()) {
+          error = "klineCapture requires a boolean `value`";
+          status = 400;
+          return false;
+        }
+        const bool on = body.at("value").as_bool();
+        if (on && !klines->controls().capture) {
+          try { klines->start_capture(); } catch (const std::exception& e) { kline_failed(e); }
+        } else if (!on) {
+          klines->controls().capture = false;
+        }
+        return true;
+      },
+      [this] { klines->controls().capture = false; }
+    });
+    auto whole_number_control = [this](std::string name, long long declaredDefault, long long max,
+                                       std::function<long long()> get, std::function<void(long long)> set) {
+      return EngineControl{
+        name, "engine",
+        [name, declaredDefault, get] {
+          return control_json(name, "engine", static_cast<double>(get()), static_cast<double>(declaredDefault));
+        },
+        [name, max, set](const Json& body, std::string& error, int& status) {
+          const Json& v = body.at("value");
+          if (!v.is_number() || v.as_number() < 0 || v.as_number() > static_cast<double>(max) ||
+              v.as_number() != std::floor(v.as_number())) {
+            error = name + " requires a whole-number `value` in [0, " + std::to_string(max) + "]";
+            status = 400;
+            return false;
+          }
+          set(static_cast<long long>(v.as_number()));
+          return true;
+        },
+        [declaredDefault, set] { set(declaredDefault); }
+      };
+    };
+    controls.push_back(whole_number_control(
+        "klineFeedbackHops", 3, 16, [this] { return static_cast<long long>(klines->controls().feedbackHops); },
+        [this](long long v) { klines->controls().feedbackHops = static_cast<int>(v); }));
+    controls.push_back(whole_number_control(
+        "klineStoreMaxBytes", 2147483648LL, 9007199254740991LL, [this] { return klines->controls().storeMaxBytes; },
+        [this](long long v) { klines->controls().storeMaxBytes = v; }));
     controls.push_back(EngineControl{
       "phaseDetail", "engine",
       [this] { return control_json("phaseDetail", "engine", spaceRuntime.phase_detail(), false); },
@@ -2528,10 +2576,10 @@ private:
   // clock as booted.
   InstanceClock::Stamp lastCommit{clock.lamport(), clock.commit()};
   // K-lines (RealityEngine_CI#603): the episodes captured at each committed
-  // step, in the instance's store. Capture is off by default; until the three
-  // voters serve it, RE_KLINE_CAPTURE=1 turns it on, and its controls are not
-  // on /api/engine/config, which is compared across engines. Guarded by
-  // spaceRuntimeMutex.
+  // step, in the instance's store. The controls klineCapture (default false
+  // until the PE half lands), klineFeedbackHops and klineStoreMaxBytes are on
+  // /api/engine/config; RE_KLINE_CAPTURE=1 sets capture's initial value.
+  // Guarded by spaceRuntimeMutex.
   std::unique_ptr<kline::Tracker> klines;
   std::string corpusFingerprint;
   long fingerprintVersion = -1;
