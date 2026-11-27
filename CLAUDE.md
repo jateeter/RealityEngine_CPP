@@ -148,6 +148,18 @@ closes what the checkpoint holds first. The routes (`/api/klines`, `/open`,
 `/stats`, `/:id`, `POST /export`) are in `docs/openapi/reality-engine.yaml`.
 `bin/kline_tests` covers the boundaries and the store.
 
+The PE half (`src/isre.cpp`, `include/reality/isre.hpp`) records one
+`re-isre-composition/1` per completed push into `<INSTANCE_ISRE_DIR>/<pe_uuid>/`
+(the K-line store's format, keyed by the RE's commit): each input cell's winner
+from the same assembly the push sent (`PerceptionEngine::composition()`), named
+under `re-source-kinds/2` read from `<MACHINES_DIR>/../schemas/source-kinds/`;
+the fold's `kept: osre` and unwritten OSRE cells are `feedback`. A source's
+`causedBy` is the `RE-Clock` its last write presented (`currentRequestClock`,
+set by `participant_clock.hpp`). `isreCapture` (default `false`) and
+`isreStoreMaxBytes` are on `PATCH /api/config`; `RE_ISRE_CAPTURE=1` sets the
+initial value, and with it on a missing taxonomy refuses the boot. Routes:
+`GET /api/isre-composition`, `/stats`, `POST /export`. `bin/isre_tests`.
+
 ## Standing rules
 
 The standing rules are in

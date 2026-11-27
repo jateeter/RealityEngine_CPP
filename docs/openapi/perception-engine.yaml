@@ -336,6 +336,82 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: post_api_sources_bootstrap_from_machines
+  /api/isre-composition:
+    get:
+      tags:
+      - Sources
+      summary: 're-isre-composition/1 records, one per completed push, ascending by re.commit (RealityEngine_CI#603)'
+      parameters:
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 1000
+      responses:
+        '200':
+          description: '{"records": [re-isre-composition/1], "next": commit | null}'
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: from, to or limit is not a non-negative integer
+      operationId: get_api_isre_composition
+  /api/isre-composition/stats:
+    get:
+      tags:
+      - Sources
+      summary: 'ISRE composition store: records, segments, bytes, budget, warnings, isreCapture, taxonomy'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      operationId: get_api_isre_composition_stats
+  /api/isre-composition/export:
+    post:
+      tags:
+      - Sources
+      summary: 'A re-isre-bundle/1 as JSON Lines (header, then the records as stored); marks the covered segments exported'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from:
+                  type: integer
+                  minimum: 0
+                to:
+                  type: integer
+                  minimum: 0
+      responses:
+        '200':
+          description: JSON Lines; sha256 in the header covers every line after it
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+      operationId: post_api_isre_composition_export
   /api/sources/contention:
     get:
       tags:

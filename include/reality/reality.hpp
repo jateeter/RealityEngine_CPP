@@ -1024,7 +1024,15 @@ struct SourceConfig {
   // activated earliest keeps a contended cell. Not serialised on the source
   // listing; reported by GET /api/sources/contention.
   long long activatedAt = 0;
+  // The RE-Clock {instance, lamport} of the request that last wrote this
+  // source's value, or null (an MQTT delivery, a writer without a clock): the
+  // composition record's causedBy (RealityEngine_CI#603).
+  Json causedBy = nullptr;
 };
+
+// The RE-Clock {instance, lamport} the request being handled on this thread
+// presented, or null (participant_clock.hpp sets it before each route).
+extern thread_local Json currentRequestClock;
 
 // One contended cell from the most recent push assembly (§4.4b).
 struct SourceRef {
@@ -1109,6 +1117,17 @@ public:
   // `folds`, when given, receives every Source-vs-OSRE fold of this assembly,
   // ascending by cell. Only the push records them (record_contention).
   Vector assemble_vector(std::vector<FoldRecord>* folds = nullptr) const;
+  // Who won each input cell of the assembly record_contention() last resolved:
+  // a source (its id, kind, origin and causedBy) or the feedback term. Source
+  // cells the fold kept for OSRE, and OSRE cells no source wrote, are feedback
+  // (RealityEngine_CI#603, owner 2026-11-27).
+  struct CompositionCell {
+    int cell = 0;
+    bool feedback = false;
+    std::string id, kind, origin;
+    Json causedBy = nullptr;
+  };
+  std::vector<CompositionCell> composition() const;
   void update_from_perceptual_space(const Vector& values);
   void advance();
   void reset();

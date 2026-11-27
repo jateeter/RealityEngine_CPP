@@ -2,6 +2,7 @@
 
 #include "reality/http.hpp"
 #include "reality/instance_clock.hpp"
+#include "reality/reality.hpp"
 #include "reality/json.hpp"
 
 #include <algorithm>
@@ -72,6 +73,16 @@ inline void install_participant_clock(http::Server& server, InstanceClock& clock
     }
     clock.count_header(header ? InstanceClock::HeaderKind::Received : InstanceClock::HeaderKind::Missing);
     clock.receive(received);
+    // The presented clock, for a source write this request makes (its
+    // causedBy, RealityEngine_CI#603): {instance, lamport}, or null.
+    currentRequestClock = nullptr;
+    if (header && received) {
+      const auto i = header->find("instance=");
+      const auto semi = header->find(';');
+      if (i != std::string::npos && semi != std::string::npos && semi > i + 9)
+        currentRequestClock = json::Value::Object{{"instance", header->substr(i + 9, semi - i - 9)},
+                                                  {"lamport", static_cast<double>(*received)}};
+    }
     return std::nullopt;
   };
   server.afterResponse = [&clock](http::Response& res) {
