@@ -1242,7 +1242,10 @@ public:
       std::unique_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> spaceRuntimeLock(spaceRuntimeMutex);
       add_machine(m);
-      return ok(Json::Object{{"success", true}, {"machine", m.to_json(true)}, {"message", "Machine loaded successfully"}});
+      // The full form, as GET /api/machines/:id serves it; with
+      // machineJsonSummary on, the list form, as GET /api/machines lists it
+      // (RealityEngine_CI#886).
+      return ok(Json::Object{{"success", true}, {"machine", m.to_json(!machineJsonSummary)}, {"message", "Machine loaded successfully"}});
     });
     server.route("POST", "/api/machines/json/import", [this](const http::Request& req) {
       Machine m = load_machine_from_json_string(req.body);
@@ -2427,6 +2430,7 @@ private:
     controls.push_back(whole_number_control(
         "klineStoreMaxBytes", 2147483648LL, 9007199254740991LL, [this] { return klines->controls().storeMaxBytes; },
         [this](long long v) { klines->controls().storeMaxBytes = v; }));
+    controls.push_back(boolean_control("machineJsonSummary", &machineJsonSummary, false));
     controls.push_back(EngineControl{
       "phaseDetail", "engine",
       [this] { return control_json("phaseDetail", "engine", spaceRuntime.phase_detail(), false); },
@@ -2658,6 +2662,9 @@ private:
   // Defaults stay full so no existing caller changes shape and the parity
   // gates keep comparing identical key sets until a caller opts out.
   bool includeActiveRegionsDefault = true;
+  // GET /api/machines/json/:name serves the list form instead of the full form
+  // (RealityEngine_CI#886).
+  bool machineJsonSummary = false;
   bool samplerRunning = false;
   long samplerIntervalMs = 0;
   long long samplerSampleCount = 0;
