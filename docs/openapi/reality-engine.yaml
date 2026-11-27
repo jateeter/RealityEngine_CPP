@@ -700,6 +700,142 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: get_api_arbitration
+  /api/klines:
+    get:
+      tags:
+      - Engine
+      summary: 'Stored K-lines (re-kline/1), oldest first by close.commit; a page holds whole commits (RealityEngine_CI#603)'
+      parameters:
+      - name: outcome
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [completed, abandoned, subsumed, interrupted]
+      - name: machine
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: sequence
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: since
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+        description: The first close.commit to include; a page's `next` is the since of the following page.
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 1000
+        description: Default 100, capped at 1000.
+      responses:
+        '200':
+          description: '{"klines": [re-kline/1 record], "next": commit | null}'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '400':
+          description: since or limit is not a non-negative integer
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_klines
+  /api/klines/open:
+    get:
+      tags:
+      - Engine
+      summary: 'The open K-line table, now: {"commit", "open": [{id, focal, open, path, held}]}'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_klines_open
+  /api/klines/stats:
+    get:
+      tags:
+      - Engine
+      summary: 'K-line counts by outcome and machine; segments, bytes, budget, warnings'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_klines_stats
+  /api/klines/{id}:
+    get:
+      tags:
+      - Engine
+      summary: 'One stored K-line (re-kline/1), its sustain folded in'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: '<instance>:<lamport at open>'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Object'
+        '404':
+          description: '{"error": "no K-line <id>"}'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: get_api_klines_id
+  /api/klines/export:
+    post:
+      tags:
+      - Engine
+      summary: 'A re-kline-bundle/1 as JSON Lines (header, then the records as stored); marks the covered segments exported'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                outcome:
+                  type: array
+                  items:
+                    type: string
+                since:
+                  type: integer
+                  minimum: 0
+                machines:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: JSON Lines; sha256 in the header covers every line after it
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+        '500':
+          $ref: '#/components/responses/InternalError'
+      operationId: post_api_klines_export
   /api/engine/process:
     post:
       tags:

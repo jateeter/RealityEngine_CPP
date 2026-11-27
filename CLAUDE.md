@@ -139,11 +139,13 @@ running machines' active events, never re-deriving the transition rule, and
 appends closed K-lines (`re-kline/1`) and `sustain-end` events to the instance's
 store, `<INSTANCE_KLINE_DIR>/<uuid>/` (default the clock dir's sibling
 `klines/`), fsynced before the completion is published, with the open table
-checkpointed in `open.json`. A minted UUID keeps K-lines in memory only. Until
-LSP and Scala serve them, capture is off by default and turned on by
-`RE_KLINE_CAPTURE=1`; its controls are not on `/api/engine/config` and the
-routes (`/api/klines`, `/open`, `/stats`, `/:id`, `POST /export`) are not in the
-OpenAPI document, because both are compared across the voters.
+checkpointed in `open.json`. A minted UUID keeps K-lines in memory only. The
+controls `klineCapture` (default `false` until the PE half lands; owner,
+2026-11-26), `klineFeedbackHops` and `klineStoreMaxBytes` are on
+`/api/engine/config`, as on LSP and Scala; `RE_KLINE_CAPTURE=1` sets capture's
+initial value. Turning capture off leaves the store untouched; turning it on
+closes what the checkpoint holds first. The routes (`/api/klines`, `/open`,
+`/stats`, `/:id`, `POST /export`) are in `docs/openapi/reality-engine.yaml`.
 `bin/kline_tests` covers the boundaries and the store.
 
 ## Standing rules
