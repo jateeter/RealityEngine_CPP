@@ -255,6 +255,18 @@ void Store::index_line(const std::string& raw, const std::string& segment, std::
     m.line = line;
     byId_[m.id] = metas_.size();
     metas_.push_back(std::move(m));
+  } else if (format == "re-isre-composition/1") {
+    // The PE's composition records, one per committed step, keyed by the RE's
+    // commit (RealityEngine_CI#603, "The PE half").
+    Meta m;
+    m.closeCommit = static_cast<long long>(j.at("re").at("commit").as_number());
+    m.closeStep = static_cast<long>(j.at("re").at("step").as_number());
+    m.id = std::to_string(m.closeCommit);
+    m.segment = segment;
+    m.offset = offset;
+    m.line = line;
+    byId_[m.id] = metas_.size();
+    metas_.push_back(std::move(m));
   } else if (format == "re-kline-event/1") {
     events_[j.at("kline").as_string()].emplace_back(static_cast<long>(j.at("through").as_number()), raw);
   }

@@ -1,5 +1,6 @@
 #include "reality/http.hpp"
 #include "reality/participant_clock.hpp"
+#include "reality/isre.hpp"
 #include "reality/mqtt_bridge.hpp"
 #include "reality/reality.hpp"
 #include "reality/vector_aggregator.hpp"
@@ -155,6 +156,7 @@ SourceConfig source_from_json(const Json& j) {
   } else if (s.kind == "sensor") {
     s.sensorId = j.at("sensorId").as_string();
     s.lastValue = json::to_numbers(j.at("lastValue"));
+    s.causedBy = currentRequestClock;
     if (j.at("lastUpdated").is_number()) s.lastUpdated = static_cast<long long>(j.at("lastUpdated").as_number());
     s.ttlMs = static_cast<long>(j.at("ttlMs").as_number(5000));
     s.origin = j.at("origin").as_string("");
@@ -868,14 +870,68 @@ public:
     });
     server.route("PATCH", "/api/config", [this](const http::Request& req) {
       auto body = parse_body(req);
+      // The ISRE composition controls (RealityEngine_CI#603): validated before
+      // anything changes, so a refused request changes nothing.
+      const Json& capture = body.at("isreCapture");
+      const Json& maxBytes = body.at("isreStoreMaxBytes");
+      if (!capture.is_null() && !capture.is_bool())
+        return http::error_response("isreCapture requires a boolean", 400);
+      if (!maxBytes.is_null() && (!maxBytes.is_number() || maxBytes.as_number() < 0 ||
+                                  maxBytes.as_number() > 9007199254740991.0 ||
+                                  maxBytes.as_number() != std::floor(maxBytes.as_number())))
+        return http::error_response("isreStoreMaxBytes requires a whole number in [0, 9007199254740991]", 400);
       std::string algorithm;
+      bool captureNow = false;
+      long long bytesNow = 0;
       {
         std::lock_guard<std::mutex> lock(stateMutex);
         if (body.at("matchAlgorithm").is_string()) engine.matchAlgorithm = match_algorithm_from_string(body.at("matchAlgorithm").as_string());
         algorithm = to_string(engine.matchAlgorithm);
+        if (capture.is_bool()) {
+          if (capture.as_bool() && !isreRecorder->taxonomy())
+            return http::error_response("isreCapture requires re-source-kinds/" + std::to_string(isre::kTaxonomyVersion) +
+                                        " in the corpus", 409);
+          isreRecorder->controls().capture = capture.as_bool();
+        }
+        if (maxBytes.is_number()) isreRecorder->controls().storeMaxBytes = static_cast<long long>(maxBytes.as_number());
+        captureNow = isreRecorder->controls().capture;
+        bytesNow = isreRecorder->controls().storeMaxBytes;
       }
       broadcast_state();
-      return ok(Json::Object{{"success", true}, {"matchAlgorithm", algorithm}});
+      return ok(Json::Object{{"success", true}, {"matchAlgorithm", algorithm}, {"isreCapture", captureNow},
+                             {"isreStoreMaxBytes", static_cast<double>(bytesNow)}});
+    });
+    // The PE half of K-lines (RealityEngine_CI#603; SURFACE_SPEC "Routes (PE)").
+    server.route("GET", "/api/isre-composition/stats", [this](const http::Request&) {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      return ok(isreRecorder->stats());
+    });
+    server.route("POST", "/api/isre-composition/export", [this](const http::Request& req) {
+      Json body = parse_body(req);
+      const long long from = body.at("from").is_number() ? static_cast<long long>(body.at("from").as_number()) : 0;
+      const long long to = body.at("to").is_number() ? static_cast<long long>(body.at("to").as_number()) : -1;
+      std::lock_guard<std::mutex> lock(stateMutex);
+      http::Response r;
+      r.status = 200;
+      r.contentType = "application/x-ndjson";
+      r.body = isreRecorder->export_bundle(from, to);
+      return r;
+    });
+    server.route("GET", "/api/isre-composition", [this](const http::Request& req) {
+      auto q = [&](const char* key) -> std::string {
+        auto it = req.queryParams.find(key);
+        return it == req.queryParams.end() ? std::string() : it->second;
+      };
+      auto whole = [](const std::string& raw, long long fallback) -> long long {
+        if (raw.empty()) return fallback;
+        if (!std::all_of(raw.begin(), raw.end(), [](unsigned char c) { return std::isdigit(c); })) return -2;
+        try { return std::stoll(raw); } catch (...) { return -2; }
+      };
+      const long long from = whole(q("from"), 0), to = whole(q("to"), -1), limit = whole(q("limit"), 100);
+      if (from < 0 || to < -1 || limit < 0)
+        return http::error_response("from, to and limit are non-negative integers", 400);
+      std::lock_guard<std::mutex> lock(stateMutex);
+      return ok(isreRecorder->list(from, to, static_cast<int>(limit)));
     });
     server.route("POST", "/api/reset", [this](const http::Request&) {
       {
@@ -2703,6 +2759,7 @@ private:
         // MQTT path from being a second origin of activity.
         source.lastValue = values;
         source.lastUpdated = now_ms();
+        source.causedBy = currentRequestClock;
         source.origin = "mqtt";
         source = engine.add_source(source);
       }
@@ -2749,6 +2806,7 @@ private:
           source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
           source.lastValue = values;
           source.lastUpdated = now_ms();
+        source.causedBy = currentRequestClock;
           source.origin = signalOrigin;
           source = engine.add_source(source);
           updated = true;
@@ -2766,6 +2824,7 @@ private:
         source.ttlMs = static_cast<long>(body.at("ttlMs").as_number(30000));
         source.lastValue = values;
         source.lastUpdated = now_ms();
+        source.causedBy = currentRequestClock;
         source.origin = signalOrigin;
         source = engine.add_source(source);
         updated = true;
@@ -3354,6 +3413,8 @@ private:
   http::Response execute_push(bool includeMachineResults, const Json& only = Json()) {
     Vector vector;
     MatchAlgorithm matchAlgorithm;
+    std::vector<isre::Winner> isreCells;
+    Json isreFolds = Json::Array{};
     {
       std::lock_guard<std::mutex> lock(stateMutex);
       vector = engine.assemble_vector();
@@ -3361,6 +3422,13 @@ private:
       // of /api/state assembles too, and must not count (§4.4b).
       engine.record_contention();
       matchAlgorithm = engine.matchAlgorithm;
+      // The step's ISRE composition, taken from the assembly just resolved
+      // (RealityEngine_CI#603); recorded once the RE answers with its clock.
+      if (isreRecorder->controls().capture) {
+        for (const auto& c : engine.composition())
+          isreCells.push_back({c.cell, c.feedback, c.id, c.kind, c.origin, c.causedBy});
+        isreFolds = engine.contention_json().at("folds");
+      }
     }
     Json payload = Json::Object{
       {"vector", json::numbers(vector)},
@@ -3443,6 +3511,18 @@ private:
         }
         engine.advance();
         lastPushClock = participantClock.commit_step();  // a completed push is the PE's commit (#600)
+        // The composition record: a stored message, a tick of its own, flushed
+        // before the push is answered (#603).
+        if (isreRecorder->controls().capture && parsed.at("clock").is_object()) {
+          try {
+            const Json pe = Json::Object{{"instance", participantClock.instance()},
+                                         {"lamport", static_cast<double>(participantClock.send())}};
+            isreRecorder->record(parsed.at("clock"), pe, isreCells, isreFolds);
+          } catch (const std::exception& e) {
+            std::cerr << "ISRE composition capture stopped: " << e.what() << "\n";
+            isreRecorder->controls().capture = false;
+          }
+        }
         // The step itself, which already carries its own `timestamp`, so the
         // "when" this field used to hold is still readable as
         // `lastPush.timestamp`.
@@ -4241,6 +4321,45 @@ private:
   // push (stateMutex).
   InstanceClock participantClock = InstanceClock::boot("PE_INSTANCE_UUID");
   InstanceClock::Stamp lastPushClock{participantClock.lamport(), participantClock.commit()};
+  // The PE half of K-lines (RealityEngine_CI#603): one composition record per
+  // completed push, in <INSTANCE_ISRE_DIR>/<pe_uuid>/ (stateMutex).
+  std::unique_ptr<isre::Recorder> isreRecorder = make_isre_recorder();
+
+  std::unique_ptr<isre::Recorder> make_isre_recorder() {
+    namespace fs = std::filesystem;
+    const char* allocated = std::getenv("PE_INSTANCE_UUID");
+    std::string uuid = allocated ? allocated : "";
+    std::transform(uuid.begin(), uuid.end(), uuid.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    fs::path dir;
+    if (!uuid.empty() && uuid == participantClock.instance()) {
+      fs::path parent;
+      if (const char* d = std::getenv("INSTANCE_ISRE_DIR"); d && *d) parent = d;
+      else {
+        fs::path clockDir;
+        if (const char* c = std::getenv("INSTANCE_CLOCK_DIR"); c && *c) clockDir = c;
+        else {
+          const char* home = std::getenv("HOME");
+          clockDir = fs::path(home && *home ? home : ".") / ".reality-engine" / "clock";
+        }
+        parent = clockDir.parent_path() / "isre";
+      }
+      dir = parent / uuid;
+    }
+    const char* machinesEnv = std::getenv("MACHINES_DIR");
+    const auto taxonomyDir = isre::Taxonomy::dir_for(machinesEnv ? machinesEnv : "");
+    auto taxonomy = isre::Taxonomy::load(taxonomyDir);
+    const char* on = std::getenv("RE_ISRE_CAPTURE");
+    const bool capture = on && (std::string(on) == "1" || std::string(on) == "true");
+    // With capture on, a PE whose taxonomy version is missing refuses to boot
+    // (SURFACE_SPEC "The corpus carries the taxonomy").
+    if (capture && !taxonomy)
+      throw std::runtime_error("isreCapture is on and re-source-kinds/" + std::to_string(isre::kTaxonomyVersion) +
+                               " is not in the corpus (" + taxonomyDir.string() + ")");
+    auto recorder = std::make_unique<isre::Recorder>(participantClock.instance(), kline::Store(dir), std::move(taxonomy));
+    recorder->controls().capture = capture;
+    if (capture) std::cerr << "ISRE composition capture on — store " << (dir.empty() ? std::string("in memory") : dir.string()) << "\n";
+    return recorder;
+  }
 };
 
 } // namespace

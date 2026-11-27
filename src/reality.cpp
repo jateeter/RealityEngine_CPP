@@ -2145,10 +2145,13 @@ std::vector<SourceConfig> PerceptionEngine::get_sources() const {
   });
   return out;
 }
+thread_local Json currentRequestClock = nullptr;
+
 bool PerceptionEngine::update_sensor_value(const std::string& sensorId, const Vector& values) {
   for (auto& [_, s] : sources) if (s.kind == "sensor" && s.sensorId == sensorId) {
     s.lastValue = values;
     s.lastUpdated = now_ms();
+    s.causedBy = currentRequestClock;
     // A value earns activity (RealityEngine_CI#163 point 2b). Every sensor
     // ingress — POST /api/sensors/:id, POST /api/signals, the MQTT bridge, and
     // the HealthKit/CareKit/completion adapters that route through
@@ -2339,6 +2342,39 @@ int fold_provider_rank(const std::string& provider, const ArbitrationEntry& entr
   return it != entry.providerRanks.end() ? it->second : determinism_rank(determinism_of(provider));
 }
 }  // namespace
+std::vector<PerceptionEngine::CompositionCell> PerceptionEngine::composition() const {
+  // The writers assemble_vector found: the last writer in composition order.
+  const size_t n = persistentVector.size();
+  std::vector<const SourceConfig*> writer(n, nullptr);
+  for (const SourceConfig* sp : active_sources_canonical()) {
+    const SourceConfig& s = *sp;
+    auto vals = source_values(s);
+    for (int i = 0; i < s.region.length && i < static_cast<int>(vals.size()) && s.region.offset + i < static_cast<int>(n); ++i) {
+      if (s.region.offset + i < 0) continue;
+      writer[static_cast<size_t>(s.region.offset + i)] = sp;
+    }
+  }
+  std::map<int, std::string> kept;
+  for (const auto& f : lastFolds) kept[f.cell] = f.kept;
+  std::vector<CompositionCell> out;
+  for (size_t c = 0; c < n; ++c) {
+    const int cell = static_cast<int>(c);
+    const bool osreCell = osreFold.count(cell) > 0;
+    if (writer[c]) {
+      auto k = kept.find(cell);
+      if (osreCell && k != kept.end() && k->second == "osre") {
+        out.push_back({cell, true, "", "", "", nullptr});
+      } else {
+        const SourceConfig& s = *writer[c];
+        out.push_back({cell, false, s.id, s.kind, s.origin, s.causedBy});
+      }
+    } else if (osreCell) {
+      out.push_back({cell, true, "", "", "", nullptr});
+    }
+  }
+  return out;
+}
+
 Vector PerceptionEngine::assemble_vector(std::vector<FoldRecord>* folds) const {
   Vector out = persistentVector;
   // Which cells a source wrote this instant: only those are folded with the
