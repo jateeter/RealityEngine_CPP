@@ -188,9 +188,24 @@ public:
       return ok(klines->stats());
     });
     // ── Runtime snapshots (RealityEngine_CI#287; SURFACE_SPEC "Routes") ──
-    server.route("POST", "/api/runtime/snapshot", [this](const http::Request& req) {
+    // A store that cannot answer (Qdrant down or refusing, #900) is 503 on
+    // that request alone.
+    if (!snapshots.off_reason().empty()) std::cerr << snapshots.off_reason() << "\n";
+    else if (snapshots.mode() == "qdrant") std::cerr << "Snapshot store: Qdrant (RE_SNAPSHOT_STORE)\n";
+    auto store_guard = [](auto handler) {
+      return [handler](const http::Request& req) {
+        try {
+          return handler(req);
+        } catch (const snapshot::StoreUnavailable& e) {
+          return http::error_response(std::string("snapshot store unavailable: ") + e.what(), 503);
+        }
+      };
+    };
+    server.route("POST", "/api/runtime/snapshot", store_guard([this](const http::Request& req) {
       if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
       Json body = parse_body(req);
+      std::optional<Json> snap;
+      {
       snapshot::CaptureRequest cr;
       std::shared_lock<std::shared_mutex> registryLock(registryMutex);
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
@@ -220,29 +235,31 @@ public:
       cr.running = &running;
       snapshot_state(cr);
       snapshot::Error error;
-      auto snap = snapshot::capture(snapshotRetention, cr, error);
+      snap = snapshot::capture(snapshotRetention, cr, error);
       if (!snap) return http::json_response(json::stringify(error.body), error.status);
+      }
+      // Outside the runtime lock: a Qdrant round trip never holds up a step.
       const std::string id = snapshot::id_of(*snap);
       snapshots.put(id, *snap);
       return ok(Json::Object{{"id", id}, {"digest", snap->at("digest")}, {"span", snap->at("kline").at("span")}});
-    });
-    server.route("GET", "/api/runtime/snapshots", [this](const http::Request&) {
+    }));
+    server.route("GET", "/api/runtime/snapshots", store_guard([this](const http::Request&) {
       if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
       return ok(snapshots.list());
-    });
-    server.route("GET", "/api/runtime/snapshot/:id", [this](const http::Request& req) {
+    }));
+    server.route("GET", "/api/runtime/snapshot/:id", store_guard([this](const http::Request& req) {
       if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
       auto snap = snapshots.get(req.pathParams.at("id"));
       if (!snap) return http::error_response("no snapshot " + req.pathParams.at("id"), 404);
       return ok(*snap);
-    });
-    server.route("DELETE", "/api/runtime/snapshot/:id", [this](const http::Request& req) {
+    }));
+    server.route("DELETE", "/api/runtime/snapshot/:id", store_guard([this](const http::Request& req) {
       if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
       if (!snapshots.remove(req.pathParams.at("id")))
         return http::error_response("no snapshot " + req.pathParams.at("id"), 404);
       return ok(Json::Object{{"deleted", req.pathParams.at("id")}});
-    });
-    server.route("POST", "/api/runtime/restore", [this](const http::Request& req) {
+    }));
+    server.route("POST", "/api/runtime/restore", store_guard([this](const http::Request& req) {
       if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
       Json body = parse_body(req);
       Json snap;
@@ -272,7 +289,21 @@ public:
       const Json& kl = snap.at("kline");
       const long step = kl.at("scope").is_string() ? static_cast<long>(kl.at("span").at("to").as_number()) : completedStep;
       return ok(Json::Object{{"digest", snap.at("digest")}, {"step", static_cast<double>(step)}});
-    });
+    }));
+    server.route("POST", "/api/runtime/snapshots/nearest", store_guard([this](const http::Request& req) {
+      if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
+      Json body = parse_body(req);
+      auto query = snapshot::parse_state(body.at("isre"));
+      if (!query)
+        return http::json_response(json::stringify(Json::Object{{"error", "isre is {length, nonZero: [{index, value}]}"}}), 422);
+      double limit = 5;
+      if (!body.at("limit").is_null()) {
+        limit = body.at("limit").as_number(-1);
+        if (!body.at("limit").is_number() || limit < 1 || limit > 100 || limit != std::floor(limit))
+          return http::json_response(json::stringify(Json::Object{{"error", "limit is a whole number from 1 to 100"}}), 422);
+      }
+      return ok(snapshots.nearest(*query, static_cast<std::size_t>(limit)));
+    }));
     server.route("POST", "/api/klines/export", [this](const http::Request& req) {
       Json body = parse_body(req);
       std::set<std::string> outcomes, machinesSel;

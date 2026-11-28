@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <set>
 #include <string>
 #include <vector>
@@ -75,24 +76,50 @@ std::string digest_of(const Json& body);
 // The id a snapshot is stored under: its digest's hex.
 std::string id_of(const Json& body);
 
+// A store that cannot answer now: Qdrant unreachable, or answering an error.
+// The route answers 503 "snapshot store unavailable: <reason>" (#900).
+struct StoreUnavailable : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
+// A snapshot's state, cell -> value: the ISRE at span.to (SURFACE_SPEC "Nearest").
+using State = std::map<long, double>;
+State state_of(const Json& body);
+// {length, nonZero: [{index, value}]} as a state; nullopt when malformed.
+std::optional<State> parse_state(const Json& isre);
+// The sparse dot product, over the cells both hold.
+double score(const State& query, const State& state);
+
 class Store {
 public:
-  // RE_SNAPSHOT_STORE: memory (default), file:<dir>, off. qdrant:<url> is phase
-  // 3 and is off until then, never a boot failure.
+  // RE_SNAPSHOT_STORE: memory (default), file:<dir>, qdrant:<https url>, off.
+  // An unusable value is off, with the reason in off_reason(); never a boot failure.
   static Store from_environment();
   bool enabled() const { return mode_ != Mode::Off; }
   std::string mode() const;
+  const std::string& off_reason() const { return offReason_; }
+  // These throw StoreUnavailable when a qdrant store cannot answer.
   void put(const std::string& id, const Json& body);
   std::optional<Json> get(const std::string& id) const;
   bool remove(const std::string& id);
-  // {id, digest, scope, span, machines}, oldest first by clocks.to.lamport.
+  // {id, digest, scope, span, machines}, oldest first by clocks.to.lamport, then id.
   Json list() const;
+  // {snapshots: [{id, score, scope, span, machines}]}: score > 0, highest first, then id.
+  Json nearest(const State& query, std::size_t limit) const;
 
 private:
-  enum class Mode { Memory, File, Off };
+  enum class Mode { Memory, File, Qdrant, Off };
   Mode mode_ = Mode::Memory;
   std::filesystem::path dir_;
   std::map<std::string, Json> memory_;
+  // qdrant:<url> (#900): one collection, points filtered by this instance.
+  std::string url_, collection_, instance_, offReason_;
+  mutable bool collectionReady_ = false;
+  Json qdrant(const std::string& method, const std::string& path, const Json& body) const;
+  void ensure_collection() const;
+  std::string point_id(const std::string& id) const;
+  Json instance_filter() const;
+  std::vector<Json> bodies() const;
 };
 
 }  // namespace reality::snapshot
