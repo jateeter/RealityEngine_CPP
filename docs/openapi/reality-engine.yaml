@@ -861,7 +861,7 @@ paths:
               schema:
                 type: object
         '503':
-          description: Snapshots are disabled
+          description: Snapshots are disabled, or the store is unavailable (Qdrant unreachable or refusing)
   /api/runtime/snapshot/{id}:
     get:
       tags:
@@ -884,7 +884,7 @@ paths:
         '404':
           description: No snapshot with that id
         '503':
-          description: Snapshots are disabled
+          description: Snapshots are disabled, or the store is unavailable (Qdrant unreachable or refusing)
     delete:
       tags:
       - Engine
@@ -906,7 +906,7 @@ paths:
         '404':
           description: No snapshot with that id
         '503':
-          description: Snapshots are disabled
+          description: Snapshots are disabled, or the store is unavailable (Qdrant unreachable or refusing)
   /api/runtime/restore:
     post:
       tags:
@@ -937,7 +937,51 @@ paths:
         '422':
           description: Malformed body, unknown format, or a digest that does not match the body
         '503':
-          description: Snapshots are disabled
+          description: Snapshots are disabled, or the store is unavailable (Qdrant unreachable or refusing)
+  /api/runtime/snapshots/nearest:
+    post:
+      tags:
+      - Engine
+      summary: 'The stored snapshots whose state (the ISRE at span.to) is most like isre: sparse dot product, above 0, highest first, then id (RealityEngine_CI#900)'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - isre
+              properties:
+                isre:
+                  type: object
+                  properties:
+                    length:
+                      type: integer
+                    nonZero:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          index:
+                            type: integer
+                          value:
+                            type: number
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                  default: 5
+      responses:
+        '200':
+          description: '{snapshots: [{id, score, scope, span, machines}]}'
+          content:
+            application/json:
+              schema:
+                type: object
+        '422':
+          description: A missing or malformed isre, or a limit outside 1 to 100
+        '503':
+          description: Snapshots are disabled, or the store is unavailable (Qdrant unreachable or refusing)
   /api/klines/export:
     post:
       tags:

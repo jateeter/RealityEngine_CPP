@@ -1,5 +1,7 @@
 #include "reality/snapshot.hpp"
 
+#include "reality/http.hpp"
+
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
@@ -225,6 +227,88 @@ std::string id_of(const Json& body) {
   return d.rfind("sha256:", 0) == 0 ? d.substr(7) : d;
 }
 
+// ── a snapshot's state, and nearest (SURFACE_SPEC "Nearest", #900) ──────────
+
+State state_of(const Json& body) {
+  State out;
+  const Json& kline = body.at("kline");
+  const double to = kline.at("span").at("to").as_number(-1);
+  const Json& pairs = kline.at("pairs");
+  if (!pairs.is_array()) return out;
+  for (const auto& p : pairs.array()) {
+    if (p.at("stepNumber").as_number(-2) != to) continue;
+    const Json& nz = p.at("isre").at("nonZero");
+    if (nz.is_array())
+      for (const auto& c : nz.array()) out[static_cast<long>(c.at("index").as_number())] = c.at("value").as_number();
+  }
+  return out;
+}
+
+std::optional<State> parse_state(const Json& isre) {
+  if (!isre.is_object() || !isre.at("nonZero").is_array()) return std::nullopt;
+  State out;
+  for (const auto& c : isre.at("nonZero").array()) {
+    if (!c.at("index").is_number() || !c.at("value").is_number() || c.at("index").as_number() < 0)
+      return std::nullopt;
+    out[static_cast<long>(c.at("index").as_number())] = c.at("value").as_number();
+  }
+  return out;
+}
+
+double score(const State& query, const State& state) {
+  double sum = 0;
+  for (const auto& [cell, value] : query) {
+    auto it = state.find(cell);
+    if (it != state.end()) sum += value * it->second;
+  }
+  return sum;
+}
+
+namespace {
+
+Json summary(const Json& b) {
+  return Json::Object{{"id", id_of(b)}, {"digest", b.at("digest")}, {"scope", b.at("kline").at("scope")},
+                      {"span", b.at("kline").at("span")}, {"machines", b.at("corpus").at("machines")}};
+}
+
+double lamport_of(const Json& b) { return b.at("kline").at("clocks").at("to").at("lamport").as_number(); }
+
+// Oldest first by clocks.to.lamport, then id: every store lists alike.
+void order_by_clock(std::vector<Json>& bodies) {
+  std::sort(bodies.begin(), bodies.end(), [](const Json& a, const Json& b) {
+    if (lamport_of(a) != lamport_of(b)) return lamport_of(a) < lamport_of(b);
+    return id_of(a) < id_of(b);
+  });
+}
+
+Json ranked(std::vector<std::pair<double, Json>> scored, std::size_t limit) {
+  std::sort(scored.begin(), scored.end(), [](const auto& a, const auto& b) {
+    if (a.first != b.first) return a.first > b.first;
+    return id_of(a.second) < id_of(b.second);
+  });
+  Json::Array out;
+  for (const auto& [sc, b] : scored) {
+    if (out.size() >= limit) break;
+    Json e = summary(b);
+    e.object()["score"] = sc;
+    out.push_back(e);
+  }
+  return Json::Object{{"snapshots", out}};
+}
+
+Json sparse(const State& state) {
+  Json::Array indices, values;
+  for (const auto& [cell, value] : state) {
+    indices.push_back(static_cast<double>(cell));
+    values.push_back(value);
+  }
+  return Json::Object{{"indices", indices}, {"values", values}};
+}
+
+}  // namespace
+
+// ── the store ────────────────────────────────────────────────────────────────
+
 Store Store::from_environment() {
   Store s;
   const char* v = std::getenv("RE_SNAPSHOT_STORE");
@@ -238,15 +322,78 @@ Store Store::from_environment() {
     s.dir_ = mode.substr(5);
     std::error_code ec;
     fs::create_directories(s.dir_, ec);
+  } else if (mode.rfind("qdrant:", 0) == 0) {
+    std::string url = mode.substr(7);
+    while (!url.empty() && url.back() == '/') url.pop_back();
+    if (url.rfind("https://", 0) != 0) {
+      // Never a plaintext link (ENGINEERING_CONTRACT, data in motion).
+      s.mode_ = Mode::Off;
+      s.offReason_ = "RE_SNAPSHOT_STORE=qdrant: needs an https URL; the snapshot store is off";
+    } else {
+      s.mode_ = Mode::Qdrant;
+      s.url_ = url;
+      const char* c = std::getenv("RE_SNAPSHOT_COLLECTION");
+      s.collection_ = c && *c ? c : "re-snapshots";
+      const char* i = std::getenv("INSTANCE_UUID");
+      s.instance_ = i && *i ? i : "unidentified";
+    }
   } else {
-    // qdrant:<url> is phase 3: off until it exists, and never a boot failure.
     s.mode_ = Mode::Off;
+    s.offReason_ = "RE_SNAPSHOT_STORE=" + mode + " is not memory, file:<dir>, qdrant:<url> or off; the snapshot store is off";
   }
   return s;
 }
 
 std::string Store::mode() const {
-  return mode_ == Mode::Memory ? "memory" : mode_ == Mode::File ? "file" : "off";
+  switch (mode_) {
+    case Mode::Memory: return "memory";
+    case Mode::File: return "file";
+    case Mode::Qdrant: return "qdrant";
+    default: return "off";
+  }
+}
+
+// One Qdrant call: its `result`, or StoreUnavailable. The RE stamps no
+// outbound call (no client clock), so this never moves the engine's clock.
+Json Store::qdrant(const std::string& method, const std::string& path, const Json& body) const {
+  std::string raw;
+  try {
+    raw = http::request_json(method, url_ + path, body.is_null() ? "" : json::stringify(body));
+  } catch (const std::exception& e) {
+    throw StoreUnavailable(std::string("Qdrant: ") + e.what());
+  }
+  Json res;
+  try {
+    res = json::parse(raw);
+  } catch (const std::exception&) {
+    throw StoreUnavailable("Qdrant answered something that is not JSON");
+  }
+  if (res.at("status").as_string() != "ok") {
+    std::string why = res.at("status").at("error").as_string();
+    throw StoreUnavailable("Qdrant: " + (why.empty() ? std::string("an error") : why));
+  }
+  return res.at("result");
+}
+
+void Store::ensure_collection() const {
+  if (collectionReady_) return;
+  if (!qdrant("GET", "/collections/" + collection_ + "/exists", Json()).at("exists").as_bool()) {
+    qdrant("PUT", "/collections/" + collection_,
+           Json::Object{{"sparse_vectors", Json::Object{{"isre", Json::Object{}}}}});
+    qdrant("PUT", "/collections/" + collection_ + "/index?wait=true",
+           Json::Object{{"field_name", "instance"}, {"field_schema", "keyword"}});
+  }
+  collectionReady_ = true;
+}
+
+std::string Store::point_id(const std::string& id) const {
+  const std::string h = kline::sha256_hex(instance_ + ":" + id);
+  return h.substr(0, 8) + "-" + h.substr(8, 4) + "-" + h.substr(12, 4) + "-" + h.substr(16, 4) + "-" + h.substr(20, 12);
+}
+
+Json Store::instance_filter() const {
+  return Json::Object{{"must", Json::Array{Json::Object{{"key", "instance"},
+                                                        {"match", Json::Object{{"value", instance_}}}}}}};
 }
 
 void Store::put(const std::string& id, const Json& body) {
@@ -254,6 +401,15 @@ void Store::put(const std::string& id, const Json& body) {
     const fs::path tmp = dir_ / (id + ".json.tmp");
     { std::ofstream out(tmp, std::ios::binary | std::ios::trunc); out << kline::jcs(body) << "\n"; }
     fs::rename(tmp, dir_ / (id + ".json"));
+  } else if (mode_ == Mode::Qdrant) {
+    ensure_collection();
+    Json payload = Json::Object{{"instance", instance_}, {"id", id}, {"digest", body.at("digest")},
+                                {"scope", body.at("kline").at("scope")}, {"span", body.at("kline").at("span")},
+                                {"machines", body.at("corpus").at("machines")}, {"lamport", lamport_of(body)},
+                                {"body", kline::jcs(body)}};
+    Json point = Json::Object{{"id", point_id(id)}, {"vector", Json::Object{{"isre", sparse(state_of(body))}}},
+                              {"payload", payload}};
+    qdrant("PUT", "/collections/" + collection_ + "/points?wait=true", Json::Object{{"points", Json::Array{point}}});
   } else {
     memory_[id] = body;
   }
@@ -268,6 +424,16 @@ std::optional<Json> Store::get(const std::string& id) const {
     ss << in.rdbuf();
     return json::parse(ss.str());
   }
+  if (mode_ == Mode::Qdrant) {
+    ensure_collection();
+    Json res = qdrant("POST", "/collections/" + collection_ + "/points",
+                      Json::Object{{"ids", Json::Array{point_id(id)}}, {"with_payload", true}});
+    if (!res.is_array()) return std::nullopt;
+    for (const auto& pt : res.array())
+      if (pt.at("payload").at("instance").as_string() == instance_ && pt.at("payload").at("id").as_string() == id)
+        return json::parse(pt.at("payload").at("body").as_string());
+    return std::nullopt;
+  }
   auto it = memory_.find(id);
   return it == memory_.end() ? std::nullopt : std::optional<Json>(it->second);
 }
@@ -275,28 +441,70 @@ std::optional<Json> Store::get(const std::string& id) const {
 bool Store::remove(const std::string& id) {
   if (!get(id)) return false;
   if (mode_ == Mode::File) return fs::remove(dir_ / (id + ".json"));
+  if (mode_ == Mode::Qdrant) {
+    qdrant("POST", "/collections/" + collection_ + "/points/delete?wait=true",
+           Json::Object{{"points", Json::Array{point_id(id)}}});
+    return true;
+  }
   return memory_.erase(id) > 0;
 }
 
-Json Store::list() const {
-  std::vector<Json> bodies;
+std::vector<Json> Store::bodies() const {
+  std::vector<Json> out;
   if (mode_ == Mode::File) {
     std::error_code ec;
     for (const auto& e : fs::directory_iterator(dir_, ec))
       if (e.path().extension() == ".json")
-        if (auto b = get(e.path().stem().string())) bodies.push_back(*b);
+        if (auto b = get(e.path().stem().string())) out.push_back(*b);
+  } else if (mode_ == Mode::Qdrant) {
+    ensure_collection();
+    Json offset;  // null: the first page
+    for (;;) {
+      Json req = Json::Object{{"filter", instance_filter()}, {"limit", 256.0}, {"with_payload", true},
+                              {"with_vector", false}};
+      if (!offset.is_null()) req.object()["offset"] = offset;
+      Json res = qdrant("POST", "/collections/" + collection_ + "/points/scroll", req);
+      if (res.at("points").is_array())
+        for (const auto& pt : res.at("points").array()) out.push_back(json::parse(pt.at("payload").at("body").as_string()));
+      offset = res.at("next_page_offset");
+      if (offset.is_null()) break;
+    }
   } else {
-    for (const auto& [_, b] : memory_) bodies.push_back(b);
+    for (const auto& [_, b] : memory_) out.push_back(b);
   }
-  std::stable_sort(bodies.begin(), bodies.end(), [](const Json& a, const Json& b) {
-    return a.at("kline").at("clocks").at("to").at("lamport").as_number() <
-           b.at("kline").at("clocks").at("to").at("lamport").as_number();
-  });
+  return out;
+}
+
+Json Store::list() const {
+  std::vector<Json> all = bodies();
+  order_by_clock(all);
   Json::Array out;
-  for (const auto& b : bodies)
-    out.push_back(Json::Object{{"id", id_of(b)}, {"digest", b.at("digest")}, {"scope", b.at("kline").at("scope")},
-                               {"span", b.at("kline").at("span")}, {"machines", b.at("corpus").at("machines")}});
+  for (const auto& b : all) out.push_back(summary(b));
   return Json::Object{{"snapshots", out}};
+}
+
+Json Store::nearest(const State& query, std::size_t limit) const {
+  std::vector<std::pair<double, Json>> scored;
+  if (query.empty()) return ranked(std::move(scored), limit);
+  std::vector<Json> candidates;
+  if (mode_ == Mode::Qdrant) {
+    // Qdrant's candidates; the engine scores and orders them (ties at the
+    // limit-th place are Qdrant's to break, SURFACE_SPEC "Nearest").
+    ensure_collection();
+    Json res = qdrant("POST", "/collections/" + collection_ + "/points/query",
+                      Json::Object{{"query", sparse(query)}, {"using", "isre"}, {"filter", instance_filter()},
+                                   {"limit", static_cast<double>(limit)}, {"with_payload", true}});
+    if (res.at("points").is_array())
+      for (const auto& pt : res.at("points").array())
+        candidates.push_back(json::parse(pt.at("payload").at("body").as_string()));
+  } else {
+    candidates = bodies();
+  }
+  for (auto& b : candidates) {
+    const double sc = score(query, state_of(b));
+    if (sc > 0) scored.emplace_back(sc, std::move(b));
+  }
+  return ranked(std::move(scored), limit);
 }
 
 }  // namespace reality::snapshot

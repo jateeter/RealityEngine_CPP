@@ -94,7 +94,22 @@ int main() {
     setenv("RE_SNAPSHOT_STORE", "off", 1);
     CHECK(!snapshot::Store::from_environment().enabled(), "RE_SNAPSHOT_STORE=off disables the store");
     setenv("RE_SNAPSHOT_STORE", "qdrant:https://example.invalid", 1);
-    CHECK(!snapshot::Store::from_environment().enabled(), "qdrant (phase 3) is off, never a boot failure");
+    CHECK(snapshot::Store::from_environment().mode() == "qdrant", "qdrant:<https url> is the Qdrant store (#900)");
+    setenv("RE_SNAPSHOT_STORE", "qdrant:http://localhost:4333", 1);
+    {
+      snapshot::Store st = snapshot::Store::from_environment();
+      CHECK(!st.enabled() && !st.off_reason().empty(), "a plaintext Qdrant URL leaves the store off, with the reason");
+    }
+    setenv("RE_SNAPSHOT_STORE", "redis:x", 1);
+    CHECK(!snapshot::Store::from_environment().enabled(), "an unknown store is off, never a boot failure");
+    {
+      // Nothing listens on port 1: the request is 503-able, not a crash.
+      setenv("RE_SNAPSHOT_STORE", "qdrant:https://127.0.0.1:1", 1);
+      snapshot::Store st = snapshot::Store::from_environment();
+      bool unavailable = false;
+      try { st.list(); } catch (const snapshot::StoreUnavailable&) { unavailable = true; }
+      CHECK(unavailable, "an unreachable Qdrant is StoreUnavailable (503), not a boot failure");
+    }
     fs::path dir = fs::temp_directory_path() / ("snap-" + std::to_string(getpid()));
     setenv("RE_SNAPSHOT_STORE", ("file:" + dir.string()).c_str(), 1);
     snapshot::Store st = snapshot::Store::from_environment();
@@ -109,6 +124,40 @@ int main() {
     CHECK(st.remove(std::string(64, 'b')) && !st.get(std::string(64, 'b')), "and drops it");
     fs::remove_all(dir);
     unsetenv("RE_SNAPSHOT_STORE");
+  }
+  {
+    // Nearest (#900): the state at span.to, the sparse dot product, score > 0,
+    // highest first, then id.
+    auto body = [](char idc, double lamport, std::vector<std::pair<int, double>> cells) {
+      Json::Array nz;
+      for (auto [i, v] : cells) nz.push_back(Json::Object{{"index", static_cast<double>(i)}, {"value", v}});
+      Json::Array pairs{Json::Object{{"stepNumber", 3.0}, {"isre", Json::Object{{"length", 8.0}, {"nonZero", nz}}}},
+                        Json::Object{{"stepNumber", 2.0}, {"isre", Json::Object{{"length", 8.0},
+                          {"nonZero", Json::Array{Json::Object{{"index", 7.0}, {"value", 9.0}}}}}}}};
+      return Json(Json::Object{{"digest", "sha256:" + std::string(64, idc)}, {"corpus", Json::Object{{"machines", 1.0}}},
+                               {"kline", Json::Object{{"scope", "corpus"}, {"span", Json::Object{{"from", 2.0}, {"to", 3.0}}},
+                                                      {"clocks", Json::Object{{"to", Json::Object{{"lamport", lamport}}}}},
+                                                      {"pairs", pairs}}}});
+    };
+    unsetenv("RE_SNAPSHOT_STORE");
+    snapshot::Store st = snapshot::Store::from_environment();
+    Json a = body('a', 3, {{1, 1.0}, {2, 1.0}}), b = body('b', 2, {{1, 1.0}, {2, 1.0}}), c = body('c', 1, {{1, 0.5}}),
+         d = body('d', 4, {{5, 1.0}});
+    for (const Json* x : {&a, &b, &c, &d}) st.put(snapshot::id_of(*x), *x);
+    CHECK(snapshot::state_of(a).size() == 2 && !snapshot::state_of(a).count(7), "a snapshot's state is its ISRE at span.to");
+    auto q = snapshot::parse_state(Json::Object{{"length", 8.0}, {"nonZero", Json::Array{
+      Json::Object{{"index", 1.0}, {"value", 1.0}}, Json::Object{{"index", 2.0}, {"value", 1.0}}}}});
+    CHECK(q.has_value(), "a {length, nonZero} query parses");
+    CHECK(!snapshot::parse_state(Json::Object{{"nonZero", "x"}}).has_value(), "a malformed one does not");
+    Json n = st.nearest(*q, 5).at("snapshots");
+    CHECK(n.array().size() == 3, "only snapshots scoring above 0");
+    CHECK(n.array()[0].at("id").as_string() == std::string(64, 'a') && n.array()[1].at("id").as_string() == std::string(64, 'b'),
+          "equal scores ordered by id");
+    CHECK(n.array()[0].at("score").as_number() == 2.0 && n.array()[2].at("score").as_number() == 0.5, "the dot product");
+    CHECK(st.nearest(*q, 1).at("snapshots").array().size() == 1, "at most limit");
+    Json l = st.list().at("snapshots");
+    CHECK(l.array()[0].at("id").as_string() == std::string(64, 'c') && l.array()[3].at("id").as_string() == std::string(64, 'd'),
+          "list: oldest first by clocks.to.lamport");
   }
   std::cout << (failures == 0 ? "snapshot: all passed\n" : "snapshot: FAILURES\n");
   return failures == 0 ? 0 : 1;
