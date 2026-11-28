@@ -803,6 +803,141 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       operationId: get_api_klines_id
+  /api/runtime/snapshot:
+    post:
+      tags:
+      - Engine
+      summary: 'Capture a re-snapshot/1 over retained steps (RealityEngine_CI#287); stored under its digest'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  oneOf:
+                  - type: string
+                    enum: [corpus]
+                  - type: array
+                    items:
+                      type: string
+                from:
+                  type: integer
+                  minimum: 0
+                to:
+                  type: integer
+                  minimum: 0
+      responses:
+        '200':
+          description: '{id, digest, span}'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  digest:
+                    type: string
+                  span:
+                    type: object
+        '410':
+          description: A step of the span is no longer retained
+        '422':
+          description: Malformed scope or span
+        '503':
+          description: Snapshots are disabled (RE_SNAPSHOT_STORE=off)
+  /api/runtime/snapshots:
+    get:
+      tags:
+      - Engine
+      summary: 'Stored snapshots {id, digest, scope, span, machines}, oldest first by clocks.to.lamport'
+      responses:
+        '200':
+          description: '{snapshots: [...]}'
+          content:
+            application/json:
+              schema:
+                type: object
+        '503':
+          description: Snapshots are disabled
+  /api/runtime/snapshot/{id}:
+    get:
+      tags:
+      - Engine
+      summary: One snapshot body, in full
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[0-9a-f]+$'
+      responses:
+        '200':
+          description: The re-snapshot/1 body
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: No snapshot with that id
+        '503':
+          description: Snapshots are disabled
+    delete:
+      tags:
+      - Engine
+      summary: Drop one snapshot
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[0-9a-f]+$'
+      responses:
+        '200':
+          description: '{deleted: id}'
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: No snapshot with that id
+        '503':
+          description: Snapshots are disabled
+  /api/runtime/restore:
+    post:
+      tags:
+      - Engine
+      summary: 'Re-establish a snapshot ({id} or {snapshot}): controls, overrides, activeAfter; for a corpus scope the history and step count'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                snapshot:
+                  type: object
+      responses:
+        '200':
+          description: '{digest, step}'
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: No snapshot with that id
+        '409':
+          description: Corpus mismatch, naming both fingerprints
+        '422':
+          description: Malformed body, unknown format, or a digest that does not match the body
+        '503':
+          description: Snapshots are disabled
   /api/klines/export:
     post:
       tags:
