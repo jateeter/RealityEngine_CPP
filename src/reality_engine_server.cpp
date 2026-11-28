@@ -156,7 +156,7 @@ public:
       // contributions and clock, whether or not K-line capture is on.
       if (step >= 0) {
         if (const SimulationStep* sim = spaceRuntime.committing_step())
-          snapshotRetention.on_step(step, lastCommit.lamport, spaceRuntime.last_isre(), spaceRuntime.last_osre(), *sim,
+          snapshotRetention.on_step(step, clock.instance(), lastCommit.lamport, spaceRuntime.last_isre(), spaceRuntime.last_osre(), *sim,
                                     spaceRuntime.running_machines(), spaceRuntime.history_limit());
       } else {
         snapshotRetention.on_reset(spaceRuntime.running_machines());
@@ -218,6 +218,9 @@ public:
         for (const auto& n : names)
           if (!known.count(n)) return http::json_response(json::stringify(Json::Object{{"error", "no machine " + n}}), 422);
         cr.scope = names;
+        cr.scopeGiven = true;
+      } else if (body.at("scope").is_string() && body.at("scope").as_string() == "corpus") {
+        cr.scopeGiven = true;
       } else if (!body.at("scope").is_null() && body.at("scope").as_string() != "corpus") {
         return http::json_response(json::stringify(Json::Object{{"error", "scope is \"corpus\" or a list of machine names"}}), 422);
       }
@@ -229,7 +232,6 @@ public:
         (std::string(end) == "from" ? cr.from : cr.to) = static_cast<long>(v.as_number());
       }
       refresh_corpus_facts();
-      cr.instance = clock.instance();
       cr.fingerprint = corpusFingerprint;
       cr.machines = running.size();
       cr.running = &running;
@@ -2384,14 +2386,13 @@ private:
     if (corpus) for (const auto& [name, _] : idOf) scope.insert(name);
     else for (const auto& n : kl.at("scope").array()) scope.insert(n.as_string());
     std::map<std::string, std::vector<PerceptualSpaceRuntime::RestoreEntry>> byMachine;
-    std::vector<kline::ActiveEntry> after;
-    for (const auto& e : kl.at("activeAfter").array()) {
+    for (const auto& e : kl.at("activeAfter").array())
       byMachine[e.at("machine").as_string()].push_back(
           {e.at("sequence").as_string(), e.at("event").as_string(), e.at("justMatched").as_bool()});
-      after.push_back({e.at("machine").as_string(), e.at("sequence").as_string(), e.at("event").as_string(),
-                       e.at("justMatched").as_bool()});
-    }
     spaceRuntime.restore_active_lists(scope, byMachine);
+    // Any restore is a retention boundary (#904): the next step starts from the
+    // live list, and until it the restored snapshot is what a capture returns.
+    snapshotRetention.restore(snapshot::actives(spaceRuntime.running_machines()), kl, snap.at("arbitration"));
     if (corpus) {
       auto entry = [](const Json& j) {
         TrajectoryEntry t;
@@ -2405,7 +2406,6 @@ private:
       for (const auto& p : kl.at("pairs").array()) { isre.push_back(entry(p.at("isre"))); osre.push_back(entry(p.at("osre"))); }
       const int to = static_cast<int>(kl.at("span").at("to").as_number());
       spaceRuntime.restore_history(std::move(isre), std::move(osre), to);
-      snapshotRetention.restore(after);
       arbitrationSteps.clear();
       completedStep = to;
     }
