@@ -19,6 +19,7 @@
 #include "reality/reality.hpp"
 
 #include <filesystem>
+#include <mutex>
 #include <functional>
 #include <map>
 #include <memory>
@@ -51,6 +52,9 @@ struct Controls {
   bool capture = false;
   int feedbackHops = 3;
   long long storeMaxBytes = 2LL * 1024 * 1024 * 1024;
+  // The control that names storeMaxBytes, for the budget warning: the PE's
+  // composition store shares this store with its own (isreStoreMaxBytes).
+  std::string budgetName = "klineStoreMaxBytes";
 };
 
 // One machine's operation in a step's mergeBatch, by corpus name.
@@ -122,8 +126,18 @@ public:
   std::vector<std::string> warnings(const Controls& controls) const;
   void mark_exported(const std::set<std::string>& segments);
   void enforce_budget(const Controls& controls);
+  // The budget warnings as of the last budget check, export or control change,
+  // readable from any thread without the engine's lock: /api/health carries
+  // them (SURFACE_SPEC "The K-line store", budget), and health never waits on
+  // a step.
+  void refresh_warnings(const Controls& controls);
+  std::vector<std::string> cached_warnings() const;
 
 private:
+  struct WarnCache { mutable std::mutex m; std::vector<std::string> warnings; };
+  std::shared_ptr<WarnCache> warnCache_ = std::make_shared<WarnCache>();
+  Controls lastControls_;
+  void enforce_budget_now(const Controls& controls);
   struct Segment {
     std::string name;
     std::uint64_t bytes = 0;
@@ -162,6 +176,9 @@ public:
   const Controls& controls() const { return controls_; }
   Store& store() { return store_; }
   const Store& store() const { return store_; }
+  // The store's budget warnings for /api/health, without the engine's lock.
+  std::vector<std::string> health_warnings() const { return store_.cached_warnings(); }
+  void refresh_budget() { store_.refresh_warnings(controls_); }
 
   // At boot: closes every K-line in the checkpoint `interrupted` ("shutdown")
   // at the step it was checkpointed, and ends every sustain there.

@@ -253,6 +253,39 @@ int main() {
     fs::remove_all(dir);
   }
 
+  // The budget warning reaches /api/health through the store's cache, which
+  // any thread can read without the engine's lock (SURFACE_SPEC "The K-line
+  // store", budget): cached by a budget check, cleared once the segment is
+  // exported and evicted, and naming the budget's own control.
+  {
+    fs::path dir = fs::temp_directory_path() / ("kline-warn-" + std::to_string(getpid()));
+    fs::remove_all(dir);
+    kline::Store store(dir);
+    store.append({Json::Object{{"format", "re-kline/1"}, {"id", "a:1"}, {"close", Json::Object{{"commit", 1.0}}}}}, "fp-a", 1);
+    store.append({Json::Object{{"format", "re-kline/1"}, {"id", "a:2"}, {"close", Json::Object{{"commit", 2.0}}}}}, "fp-b", 2);
+    kline::Controls c;
+    c.storeMaxBytes = 0;
+    CHECK(store.cached_warnings().empty(), "no warning before a budget check");
+    store.enforce_budget(c);
+    auto w = store.cached_warnings();
+    CHECK(w.size() == 1 && w[0].rfind("klineStoreMaxBytes reached", 0) == 0,
+          "a sealed, unexported segment over budget is kept and warned about");
+    std::set<std::string> all;
+    for (const auto& m : store.records()) all.insert(m.segment);
+    store.mark_exported(all);
+    store.enforce_budget(c);
+    CHECK(store.cached_warnings().empty(), "exported and evicted, the warning clears");
+    kline::Controls pe = c;
+    pe.budgetName = "isreStoreMaxBytes";
+    kline::Store second(dir / "pe");
+    second.append({Json::Object{{"format", "re-isre-composition/1"}, {"re", Json::Object{{"commit", 1.0}}}}}, "f1", 1);
+    second.append({Json::Object{{"format", "re-isre-composition/1"}, {"re", Json::Object{{"commit", 2.0}}}}}, "f2", 2);
+    second.enforce_budget(pe);
+    CHECK(!second.cached_warnings().empty() && second.cached_warnings()[0].rfind("isreStoreMaxBytes reached", 0) == 0,
+          "the composition store names its own budget");
+    fs::remove_all(dir);
+  }
+
   std::cout << (failures == 0 ? "kline: all passed\n" : "kline: FAILURES\n");
   return failures == 0 ? 0 : 1;
 }

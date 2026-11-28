@@ -83,6 +83,14 @@ public:
   void record(const Json& re, const Json& pe, const std::vector<Winner>& cells, const Json& folds);
 
   Json list(long long from, long long to, int limit) const;
+  // The store's budget warnings for /api/health, without the engine's lock.
+  std::vector<std::string> health_warnings() const { return store_.cached_warnings(); }
+  void refresh_budget() {
+    kline::Controls kc;
+    kc.budgetName = "isreStoreMaxBytes";
+    kc.storeMaxBytes = controls_.storeMaxBytes;
+    store_.refresh_warnings(kc);
+  }
   Json stats() const;
   std::string export_bundle(long long from, long long to);
 

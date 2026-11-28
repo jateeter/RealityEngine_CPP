@@ -562,8 +562,15 @@ public:
                              {"step", static_cast<double>(engine.globalStep)},
                              {"headers", clock_headers_json(participantClock)}});
     });
-    server.route("GET", "/api/health", [](const http::Request&) {
-      return ok(Json::Object{{"status", "healthy"}});
+    server.route("GET", "/api/health", [this](const http::Request&) {
+      // The ISRE composition store's budget warnings, when there are any.
+      Json::Object body{{"status", "healthy"}};
+      if (isreRecorder) {
+        Json::Array w;
+        for (const auto& s : isreRecorder->health_warnings()) w.emplace_back(s);
+        if (!w.empty()) body["warnings"] = w;
+      }
+      return ok(body);
     });
     // Reads report state; they do not declare sources. See the note on
     // GET /api/sources below.
@@ -893,7 +900,10 @@ public:
                                         " in the corpus", 409);
           isreRecorder->controls().capture = capture.as_bool();
         }
-        if (maxBytes.is_number()) isreRecorder->controls().storeMaxBytes = static_cast<long long>(maxBytes.as_number());
+        if (maxBytes.is_number()) {
+          isreRecorder->controls().storeMaxBytes = static_cast<long long>(maxBytes.as_number());
+          isreRecorder->refresh_budget();
+        }
         captureNow = isreRecorder->controls().capture;
         bytesNow = isreRecorder->controls().storeMaxBytes;
       }
@@ -4357,6 +4367,7 @@ private:
                                " is not in the corpus (" + taxonomyDir.string() + ")");
     auto recorder = std::make_unique<isre::Recorder>(participantClock.instance(), kline::Store(dir), std::move(taxonomy));
     recorder->controls().capture = capture;
+    recorder->refresh_budget();  // an over-budget population from an earlier run warns from boot
     if (capture) std::cerr << "ISRE composition capture on — store " << (dir.empty() ? std::string("in memory") : dir.string()) << "\n";
     return recorder;
   }

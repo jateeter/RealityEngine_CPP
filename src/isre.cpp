@@ -103,6 +103,7 @@ void Recorder::record(const Json& re, const Json& pe, const std::vector<Winner>&
   const long long commit = static_cast<long long>(re.at("commit").as_number());
   store_.append({rec}, taxonomy_->name(), commit);
   kline::Controls kc;
+  kc.budgetName = "isreStoreMaxBytes";
   kc.storeMaxBytes = controls_.storeMaxBytes;
   store_.enforce_budget(kc);
 }
@@ -121,6 +122,7 @@ Json Recorder::list(long long from, long long to, int limit) const {
 
 Json Recorder::stats() const {
   kline::Controls kc;
+  kc.budgetName = "isreStoreMaxBytes";
   kc.storeMaxBytes = controls_.storeMaxBytes;
   Json s = store_.stats(kc);
   Json::Object o;
