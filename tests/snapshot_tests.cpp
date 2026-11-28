@@ -95,7 +95,7 @@ int main() {
     CHECK(!snapshot::Store::from_environment().enabled(), "RE_SNAPSHOT_STORE=off disables the store");
     setenv("RE_SNAPSHOT_STORE", "qdrant:https://example.invalid", 1);
     CHECK(snapshot::Store::from_environment().mode() == "qdrant", "qdrant:<https url> is the Qdrant store (#900)");
-    setenv("RE_SNAPSHOT_STORE", "qdrant:http://localhost:4333", 1);
+    setenv("RE_SNAPSHOT_STORE", "qdrant:http://qdrant.invalid:4333", 1);  // insecure-transport: negative-test
     {
       snapshot::Store st = snapshot::Store::from_environment();
       CHECK(!st.enabled() && !st.off_reason().empty(), "a plaintext Qdrant URL leaves the store off, with the reason");
