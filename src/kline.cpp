@@ -414,7 +414,7 @@ std::vector<std::string> Store::warnings(const Controls& controls) const {
   }
   std::vector<std::string> out;
   if (static_cast<long long>(sealed) > controls.storeMaxBytes && unexported > 0)
-    out.push_back("klineStoreMaxBytes reached: " + std::to_string(unexported) +
+    out.push_back(controls.budgetName + " reached: " + std::to_string(unexported) +
                   " unexported sealed segment(s) are kept; export them to free space");
   return out;
 }
@@ -422,9 +422,27 @@ std::vector<std::string> Store::warnings(const Controls& controls) const {
 void Store::mark_exported(const std::set<std::string>& names) {
   for (auto& s : segments_) if (names.count(s.name)) s.exported = true;
   write_manifest();
+  refresh_warnings(lastControls_);
+}
+
+void Store::refresh_warnings(const Controls& controls) {
+  lastControls_ = controls;
+  auto w = warnings(controls);
+  std::lock_guard<std::mutex> lock(warnCache_->m);
+  warnCache_->warnings = std::move(w);
+}
+
+std::vector<std::string> Store::cached_warnings() const {
+  std::lock_guard<std::mutex> lock(warnCache_->m);
+  return warnCache_->warnings;
 }
 
 void Store::enforce_budget(const Controls& controls) {
+  enforce_budget_now(controls);
+  refresh_warnings(controls);
+}
+
+void Store::enforce_budget_now(const Controls& controls) {
   auto sealedBytes = [&] {
     std::uint64_t b = 0;
     for (const auto& s : segments_) if (s.sealed && !s.archived) b += s.bytes;

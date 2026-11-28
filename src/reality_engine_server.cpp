@@ -139,6 +139,7 @@ public:
     // arbitration records already there (#296). A reset (-1) restarts the step
     // count and drops what was retained; the clock keeps its value.
     klines = make_kline_tracker();
+    klines->refresh_budget();  // a population over budget from an earlier run warns from boot
     spaceRuntime.onStepCommitted = [this](long step) {
       if (step >= 0) {
         // A committed step ticks commit and lamport together (#600).
@@ -209,8 +210,17 @@ public:
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
       return ok(klines->list(q("outcome"), q("machine"), q("sequence"), since, static_cast<int>(limit)));
     });
-    server.route("GET", "/api/health", [](const http::Request&) {
-      return ok(Json::Object{{"status", "healthy"}});
+    server.route("GET", "/api/health", [this](const http::Request&) {
+      // The K-line store's budget warnings, when there are any (SURFACE_SPEC
+      // "The K-line store"): an unexported population is kept, never dropped,
+      // and the engine says so here. The store still writes, so status stays.
+      Json::Object body{{"status", "healthy"}};
+      if (klines) {
+        Json::Array w;
+        for (const auto& s : klines->health_warnings()) w.emplace_back(s);
+        if (!w.empty()) body["warnings"] = w;
+      }
+      return ok(body);
     });
     server.route("GET", "/api/config", [this](const http::Request&) {
       // The dimension a caller asks for here is the width of the perceptual
@@ -2429,7 +2439,7 @@ private:
         [this](long long v) { klines->controls().feedbackHops = static_cast<int>(v); }));
     controls.push_back(whole_number_control(
         "klineStoreMaxBytes", 2147483648LL, 9007199254740991LL, [this] { return klines->controls().storeMaxBytes; },
-        [this](long long v) { klines->controls().storeMaxBytes = v; }));
+        [this](long long v) { klines->controls().storeMaxBytes = v; klines->refresh_budget(); }));
     controls.push_back(boolean_control("machineJsonSummary", &machineJsonSummary, false));
     controls.push_back(EngineControl{
       "phaseDetail", "engine",
