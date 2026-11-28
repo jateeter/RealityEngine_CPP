@@ -281,6 +281,12 @@ public:
   // The events by id, without a copy: the K-line tracker reads the running
   // state each committed step (RealityEngine_CI#603).
   const std::map<std::string, RealityEvent>& event_map() const { return vectors; }
+  // A restore re-establishes an event's state by id (RealityEngine_CI#287).
+  RealityEvent* event_for_restore(const std::string& id) {
+    auto it = vectors.find(id);
+    return it == vectors.end() ? nullptr : &it->second;
+  }
+  std::map<std::string, RealityEvent>& events_for_restore() { return vectors; }
   // Ids of this sequence's Initial Reality Events, sorted by id.
   //
   // Public because `GET /api/machines` reports it on the *summary* form of a
@@ -379,6 +385,7 @@ public:
   std::vector<CriticalEventSequence> all_sequences() const;
   // The sequences by id, without a copy (RealityEngine_CI#603).
   const std::map<std::string, CriticalEventSequence>& sequence_map() const { return sequences; }
+  std::map<std::string, CriticalEventSequence>& sequences_for_restore() { return sequences; }
   std::vector<std::string> sequence_ids() const;
   int sequence_count() const;
   int total_vector_count() const;
@@ -902,6 +909,17 @@ public:
   // disagreement is the answer they exist to give.
   std::vector<TrajectoryEntry> osre_history() const;
   std::vector<TrajectoryEntry> isre_history() const;
+  // Snapshot restore (RealityEngine_CI#287; SURFACE_SPEC "Routes", restore).
+  // Each named machine's events take exactly the listed active state; an event
+  // not listed is inactive and not just-matched. Restored events start a fresh
+  // predecessor chain: a snapshot carries no provenance, which OSRE values do
+  // not depend on. Returns the names it found.
+  struct RestoreEntry { std::string sequence, event; bool justMatched = false; };
+  std::set<std::string> restore_active_lists(const std::set<std::string>& machineNames,
+                                             const std::map<std::string, std::vector<RestoreEntry>>& byMachine);
+  // A corpus-scope restore: the trajectory history becomes the snapshot's
+  // pairs and the next /api/perceive commits step `lastStep + 1`.
+  void restore_history(std::vector<TrajectoryEntry> isre, std::vector<TrajectoryEntry> osre, int lastStep);
   // The arbitration records of the most recent committed step -- what
   // GET /api/arbitration serves with retention off. Empty before the first
   // step and after a reset (RealityEngine_CI#296).

@@ -2,6 +2,7 @@
 #include "reality/http.hpp"
 #include "reality/instance_clock.hpp"
 #include "reality/kline.hpp"
+#include "reality/snapshot.hpp"
 #include "reality/participant_clock.hpp"
 #include "reality/reality.hpp"
 
@@ -151,6 +152,15 @@ public:
       } else {
         arbitrationSteps.clear();
       }
+      // Snapshot retention (#287): every retained step's active list,
+      // contributions and clock, whether or not K-line capture is on.
+      if (step >= 0) {
+        if (const SimulationStep* sim = spaceRuntime.committing_step())
+          snapshotRetention.on_step(step, lastCommit.lamport, spaceRuntime.last_isre(), spaceRuntime.last_osre(), *sim,
+                                    spaceRuntime.running_machines(), spaceRuntime.history_limit());
+      } else {
+        snapshotRetention.on_reset(spaceRuntime.running_machines());
+      }
       // K-lines that closed at this step are stored before its completion is
       // published (#603): the same place arbitration retention commits.
       capture_klines(step);
@@ -176,6 +186,92 @@ public:
     server.route("GET", "/api/klines/stats", [this](const http::Request&) {
       std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
       return ok(klines->stats());
+    });
+    // ── Runtime snapshots (RealityEngine_CI#287; SURFACE_SPEC "Routes") ──
+    server.route("POST", "/api/runtime/snapshot", [this](const http::Request& req) {
+      if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
+      Json body = parse_body(req);
+      snapshot::CaptureRequest cr;
+      std::shared_lock<std::shared_mutex> registryLock(registryMutex);
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      const auto& running = spaceRuntime.running_machines();
+      if (body.at("scope").is_array()) {
+        std::set<std::string> names;
+        for (const auto& n : body.at("scope").array()) names.insert(n.as_string());
+        std::set<std::string> known;
+        for (const auto& [_, m] : running) known.insert(m.name);
+        for (const auto& n : names)
+          if (!known.count(n)) return http::json_response(json::stringify(Json::Object{{"error", "no machine " + n}}), 422);
+        cr.scope = names;
+      } else if (!body.at("scope").is_null() && body.at("scope").as_string() != "corpus") {
+        return http::json_response(json::stringify(Json::Object{{"error", "scope is \"corpus\" or a list of machine names"}}), 422);
+      }
+      for (const char* end : {"from", "to"}) {
+        const Json& v = body.at(end);
+        if (v.is_null()) continue;
+        if (!v.is_number() || v.as_number() < 0 || v.as_number() != std::floor(v.as_number()))
+          return http::json_response(json::stringify(Json::Object{{"error", std::string(end) + " is a step number"}}), 422);
+        (std::string(end) == "from" ? cr.from : cr.to) = static_cast<long>(v.as_number());
+      }
+      refresh_corpus_facts();
+      cr.instance = clock.instance();
+      cr.fingerprint = corpusFingerprint;
+      cr.machines = running.size();
+      cr.running = &running;
+      snapshot_state(cr);
+      snapshot::Error error;
+      auto snap = snapshot::capture(snapshotRetention, cr, error);
+      if (!snap) return http::json_response(json::stringify(error.body), error.status);
+      const std::string id = snapshot::id_of(*snap);
+      snapshots.put(id, *snap);
+      return ok(Json::Object{{"id", id}, {"digest", snap->at("digest")}, {"span", snap->at("kline").at("span")}});
+    });
+    server.route("GET", "/api/runtime/snapshots", [this](const http::Request&) {
+      if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
+      return ok(snapshots.list());
+    });
+    server.route("GET", "/api/runtime/snapshot/:id", [this](const http::Request& req) {
+      if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
+      auto snap = snapshots.get(req.pathParams.at("id"));
+      if (!snap) return http::error_response("no snapshot " + req.pathParams.at("id"), 404);
+      return ok(*snap);
+    });
+    server.route("DELETE", "/api/runtime/snapshot/:id", [this](const http::Request& req) {
+      if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
+      if (!snapshots.remove(req.pathParams.at("id")))
+        return http::error_response("no snapshot " + req.pathParams.at("id"), 404);
+      return ok(Json::Object{{"deleted", req.pathParams.at("id")}});
+    });
+    server.route("POST", "/api/runtime/restore", [this](const http::Request& req) {
+      if (!snapshots.enabled()) return http::error_response("snapshots are disabled", 503);
+      Json body = parse_body(req);
+      Json snap;
+      if (body.at("snapshot").is_object()) {
+        snap = body.at("snapshot");
+      } else if (body.at("id").is_string()) {
+        auto stored = snapshots.get(body.at("id").as_string());
+        if (!stored) return http::error_response("no snapshot " + body.at("id").as_string(), 404);
+        snap = *stored;
+      } else {
+        return http::json_response(json::stringify(Json::Object{{"error", "body is {id} or {snapshot}"}}), 422);
+      }
+      if (snap.at("format").as_string() != "re-snapshot/1")
+        return http::json_response(json::stringify(Json::Object{{"error", "unknown format"}}), 422);
+      if (!snap.at("digest").is_string() || snapshot::digest_of(snap) != snap.at("digest").as_string())
+        return http::json_response(json::stringify(Json::Object{{"error", "the digest does not match the body"}}), 422);
+      std::unique_lock<std::shared_mutex> registryLock(registryMutex);
+      std::lock_guard<std::mutex> lock(spaceRuntimeMutex);
+      refresh_corpus_facts();
+      const std::string expected = snap.at("corpus").at("fingerprint").as_string();
+      if (expected != corpusFingerprint)
+        return http::json_response(json::stringify(Json::Object{{"error", "corpus mismatch"}, {"expected", expected},
+                                                                {"actual", corpusFingerprint}}), 409);
+      std::string error;
+      if (!restore_snapshot(snap, error))
+        return http::json_response(json::stringify(Json::Object{{"error", error}}), 422);
+      const Json& kl = snap.at("kline");
+      const long step = kl.at("scope").is_string() ? static_cast<long>(kl.at("span").at("to").as_number()) : completedStep;
+      return ok(Json::Object{{"digest", snap.at("digest")}, {"step", static_cast<double>(step)}});
     });
     server.route("POST", "/api/klines/export", [this](const http::Request& req) {
       Json body = parse_body(req);
@@ -2174,6 +2270,118 @@ private:
 
   // The fingerprint and longest path of the resident corpus, recomputed when
   // machines are added or removed.
+  // A snapshot's controls, machine controls, overrides and arbitration, by
+  // corpus machine name (SURFACE_SPEC "The snapshot body"). Callers hold both locks.
+  void snapshot_state(snapshot::CaptureRequest& cr) {
+    Json::Object controls, machineControls, overrides;
+    std::map<std::string, std::string> nameOf;
+    for (const auto& [id, m] : spaceRuntime.running_machines()) nameOf[id] = m.name;
+    for (auto& c : engine_controls()) {
+      Json read = c.read();
+      if (c.scope == "engine") {
+        controls[c.name] = read.at("value");
+      } else if (read.at("value").is_object()) {
+        for (const auto& [id, v] : read.at("value").object()) {
+          auto n = nameOf.find(id);
+          if (n == nameOf.end()) continue;
+          Json& per = machineControls[n->second];
+          if (!per.is_object()) per = Json::Object{};
+          per.object()[c.name] = v;
+        }
+      }
+    }
+    for (const auto& [id, m] : machines) {
+      if (!nameOf.count(id)) continue;
+      overrides[m.name] = Json::Object{{"arbiterRule", to_string(m.arbiter_rule())},
+                                       {"outputMergeTransformation", to_string(m.outputMergeTransformation)},
+                                       {"outputMergeLocked", m.outputMergeLocked}};
+    }
+    cr.controls = controls;
+    cr.machineControls = machineControls;
+    cr.machineOverrides = overrides;
+    cr.arbitration = nullptr;
+    if (arbitrationRetention) {
+      const long from = cr.from.value_or(cr.to.value_or(completedStep));
+      const long to = cr.to.value_or(from);
+      Json::Array steps;
+      for (const auto& [step, retained] : arbitrationSteps)
+        if (step >= from && step <= to) steps.push_back(arbitration_step_json(step, retained));
+      cr.arbitration = steps;
+    }
+  }
+
+  // Re-establish a snapshot (SURFACE_SPEC "Routes", restore): controls, machine
+  // controls, overrides, then activeAfter; for a corpus scope also the history
+  // and the step count. A restore is a reset for K-line capture: open K-lines
+  // close interrupted/reset. It commits no step, so lamport does not tick.
+  bool restore_snapshot(const Json& snap, std::string& error) {
+    std::map<std::string, std::string> idOf;
+    for (const auto& [id, m] : spaceRuntime.running_machines()) idOf[m.name] = id;
+    for (auto& c : engine_controls()) {
+      if (c.scope != "engine" || !snap.at("controls").is_object()) continue;
+      const Json& v = snap.at("controls").at(c.name);
+      if (v.is_null()) continue;
+      int status = 200;
+      if (!c.write(Json::Object{{"value", v}}, error, status)) return false;
+    }
+    if (snap.at("machineControls").is_object())
+      for (const auto& [name, per] : snap.at("machineControls").object()) {
+        auto id = idOf.find(name);
+        if (id == idOf.end() || !per.at("transitionsInhibited").is_bool()) continue;
+        spaceRuntime.set_transitions_inhibited(id->second, per.at("transitionsInhibited").as_bool());
+      }
+    if (snap.at("machineOverrides").is_object())
+      for (const auto& [name, o] : snap.at("machineOverrides").object()) {
+        auto id = idOf.find(name);
+        if (id == idOf.end()) continue;
+        auto reg = machines.find(id->second);
+        if (o.at("outputMergeTransformation").is_string()) {
+          OutputMergeTransformation t;
+          try { t = output_merge_from_string(o.at("outputMergeTransformation").as_string()); }
+          catch (const std::exception& e) { error = e.what(); return false; }
+          if (reg != machines.end()) reg->second.outputMergeTransformation = t;
+          spaceRuntime.set_output_merge_transformation(id->second, t);
+        }
+        if (o.at("outputMergeLocked").is_bool()) {
+          if (reg != machines.end()) reg->second.outputMergeLocked = o.at("outputMergeLocked").as_bool();
+          spaceRuntime.set_output_merge_locked(id->second, o.at("outputMergeLocked").as_bool());
+        }
+      }
+    const Json& kl = snap.at("kline");
+    std::set<std::string> scope;
+    const bool corpus = kl.at("scope").is_string();
+    if (corpus) for (const auto& [name, _] : idOf) scope.insert(name);
+    else for (const auto& n : kl.at("scope").array()) scope.insert(n.as_string());
+    std::map<std::string, std::vector<PerceptualSpaceRuntime::RestoreEntry>> byMachine;
+    std::vector<kline::ActiveEntry> after;
+    for (const auto& e : kl.at("activeAfter").array()) {
+      byMachine[e.at("machine").as_string()].push_back(
+          {e.at("sequence").as_string(), e.at("event").as_string(), e.at("justMatched").as_bool()});
+      after.push_back({e.at("machine").as_string(), e.at("sequence").as_string(), e.at("event").as_string(),
+                       e.at("justMatched").as_bool()});
+    }
+    spaceRuntime.restore_active_lists(scope, byMachine);
+    if (corpus) {
+      auto entry = [](const Json& j) {
+        TrajectoryEntry t;
+        t.stepNumber = static_cast<int>(j.at("stepNumber").as_number());
+        t.length = static_cast<int>(j.at("length").as_number());
+        for (const auto& c : j.at("nonZero").array())
+          t.nonZero.push_back({static_cast<int>(c.at("index").as_number()), c.at("value").as_number()});
+        return t;
+      };
+      std::vector<TrajectoryEntry> isre, osre;
+      for (const auto& p : kl.at("pairs").array()) { isre.push_back(entry(p.at("isre"))); osre.push_back(entry(p.at("osre"))); }
+      const int to = static_cast<int>(kl.at("span").at("to").as_number());
+      spaceRuntime.restore_history(std::move(isre), std::move(osre), to);
+      snapshotRetention.restore(after);
+      arbitrationSteps.clear();
+      completedStep = to;
+    }
+    if (klines && klines->controls().capture) klines->on_reset();
+    return true;
+  }
+
   void refresh_corpus_facts() {
     if (fingerprintVersion == spaceRuntime.mapping_version()) return;
     std::vector<std::pair<std::string, Json>> declared;
@@ -2607,6 +2815,9 @@ private:
   bool arbitrationRetention = false;
   long arbitrationWindow = kArbitrationWindowDefault;
   std::map<long, RetainedArbitration> arbitrationSteps;
+  // Runtime snapshots (#287): what each retained step needs, and the store.
+  snapshot::Retention snapshotRetention;
+  snapshot::Store snapshots = snapshot::Store::from_environment();
   mutable std::mutex vectorMutex;
   mutable std::mutex sequenceMutex;
   mutable std::mutex checkpointMutex;

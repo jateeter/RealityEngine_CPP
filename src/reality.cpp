@@ -1972,6 +1972,38 @@ void PerceptualSpaceRuntime::set_history_limit(size_t limit) {
 size_t PerceptualSpaceRuntime::history_limit() const { return maxHistory; }
 std::vector<TrajectoryEntry> PerceptualSpaceRuntime::osre_history() const { return osreHistory; }
 std::vector<TrajectoryEntry> PerceptualSpaceRuntime::isre_history() const { return isreHistory; }
+
+std::set<std::string> PerceptualSpaceRuntime::restore_active_lists(
+    const std::set<std::string>& machineNames,
+    const std::map<std::string, std::vector<RestoreEntry>>& byMachine) {
+  std::set<std::string> found;
+  for (auto& [_, m] : machines) {
+    if (!machineNames.count(m.name)) continue;
+    found.insert(m.name);
+    for (auto& [__, seq] : m.sequences_for_restore())
+      for (auto& [___, ev] : seq.events_for_restore()) { ev.clear_active(); ev.clear_was_just_matched(); }
+    auto it = byMachine.find(m.name);
+    if (it == byMachine.end()) continue;
+    for (const auto& e : it->second) {
+      auto s = m.sequences_for_restore().find(e.sequence);
+      if (s == m.sequences_for_restore().end()) continue;
+      if (RealityEvent* ev = s->second.event_for_restore(e.event)) {
+        ev->set_active();
+        if (e.justMatched) ev->set_was_just_matched();
+      }
+    }
+  }
+  return found;
+}
+
+void PerceptualSpaceRuntime::restore_history(std::vector<TrajectoryEntry> isre, std::vector<TrajectoryEntry> osre,
+                                             int lastStep) {
+  isreHistory = std::move(isre);
+  osreHistory = std::move(osre);
+  steps.clear();
+  lastArbitration.clear();
+  immediateStepCount = lastStep + 1;
+}
 const std::vector<ArbitrationRecord>& PerceptualSpaceRuntime::last_arbitration() const { return lastArbitration; }
 void PerceptualSpaceRuntime::set_trajectory_limit(size_t limit) {
   maxTrajectory = limit;
