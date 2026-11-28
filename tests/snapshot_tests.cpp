@@ -30,11 +30,12 @@ struct Rig {
   PerceptualSpaceRuntime rt{16};
   snapshot::Retention retention;
   long long lamport = 100;
+  std::string instance = "01a2aaaa-0000-7000-8000-0000000f4001";
   Rig() {
     rt.add_machine(load_machine_from_json_string(kMachine));
     rt.onStepCommitted = [this](long step) {
       if (step < 0) { retention.on_reset(rt.running_machines()); return; }
-      retention.on_step(step, ++lamport, rt.last_isre(), rt.last_osre(), *rt.committing_step(), rt.running_machines(), 250);
+      retention.on_step(step, instance, ++lamport, rt.last_isre(), rt.last_osre(), *rt.committing_step(), rt.running_machines(), 250);
     };
   }
   void step(double a, double b) {
@@ -42,10 +43,11 @@ struct Rig {
     v[0] = a; v[1] = b;
     rt.process_immediate(v);
   }
-  Json snap(std::optional<long> from = std::nullopt, std::optional<long> to = std::nullopt) {
+  Json snap(std::optional<long> from = std::nullopt, std::optional<long> to = std::nullopt,
+            std::optional<std::set<std::string>> scope = std::nullopt) {
     snapshot::CaptureRequest cr;
     cr.from = from; cr.to = to;
-    cr.instance = "01a2aaaa-0000-7000-8000-0000000f4001";
+    cr.scope = scope; cr.scopeGiven = scope.has_value();
     cr.fingerprint = std::string(64, 'f');
     cr.machines = 1;
     cr.controls = Json::Object{}; cr.machineControls = Json::Object{}; cr.machineOverrides = Json::Object{};
@@ -89,6 +91,56 @@ int main() {
           "restore puts the active list back exactly");
     r.step(1, 1);
     CHECK(r.rt.isre_history().back().stepNumber == 2, "and the next step is span.to + 1");
+  }
+  {
+    // Restore then capture is an identity (RealityEngine_CI#904), and the
+    // clocks name the instance that committed the steps, not the restorer.
+    Rig src;
+    src.step(1, 0);
+    src.step(0, 0);
+    src.step(0, 0);
+    Json s = src.snap(1, 2);
+    CHECK(s.at("kline").at("clocks").at("to").at("instance").as_string() == src.instance,
+          "a captured step's clock names the instance that committed it");
+    Rig replica;
+    replica.instance = "01a2aaaa-0000-7000-8000-0000000f4999";
+    replica.step(0, 0);
+    CHECK(replica.snap().at("kline").at("clocks").at("to").at("instance").as_string() == replica.instance,
+          "and its own steps name it");
+    {
+      std::map<std::string, std::vector<PerceptualSpaceRuntime::RestoreEntry>> by;
+      for (const auto& a : s.at("kline").at("activeAfter").array())
+        by[a.at("machine").as_string()].push_back({a.at("sequence").as_string(), a.at("event").as_string(), a.at("justMatched").as_bool()});
+      replica.rt.restore_active_lists({"Linear"}, by);
+      replica.rt.restore_history({}, {}, 2);
+    }
+    replica.retention.restore(snapshot::actives(replica.rt.running_machines()), s.at("kline"), s.at("arbitration"));
+    Json again = replica.snap();
+    CHECK(again.at("digest").as_string() == s.at("digest").as_string(), "a capture right after a restore is the restored snapshot");
+    CHECK(kline::jcs(again) == kline::jcs(s), "byte for byte, its clocks included");
+    CHECK(again.at("kline").at("clocks").at("from").at("instance").as_string() == src.instance,
+          "the restored steps keep the source's instance on a replica");
+    CHECK(replica.snap(1, 2).at("digest").as_string() == s.at("digest").as_string(), "naming the restored span is the same");
+    CHECK(replica.snap(2, 2).at("status").as_number() == 410, "another span is 410 until the next step");
+    CHECK(replica.snap(std::nullopt, std::nullopt, std::set<std::string>{"Linear"}).at("status").as_number() == 410,
+          "and so is another scope");
+    replica.step(0, 0);
+    Json next = replica.snap();
+    CHECK(next.at("kline").at("clocks").at("to").at("instance").as_string() == replica.instance,
+          "the next step is the replica's own");
+    CHECK(kline::jcs(next.at("kline").at("activeBefore")) == kline::jcs(s.at("kline").at("activeAfter")),
+          "and starts from the restored state");
+  }
+  {
+    // A narrowed restore is capturable too: the sandbox's re-establishing.
+    Rig r;
+    r.step(1, 0);
+    Json s = r.snap(0, 0, std::set<std::string>{"Linear"});
+    r.step(0, 0);
+    r.retention.restore(snapshot::actives(r.rt.running_machines()), s.at("kline"), s.at("arbitration"));
+    CHECK(r.snap().at("digest").as_string() == s.at("digest").as_string(), "a narrowed restore captures back as itself");
+    CHECK(r.snap(std::nullopt, std::nullopt, std::nullopt).at("kline").at("scope").is_array(),
+          "with its scope as the default");
   }
   {
     setenv("RE_SNAPSHOT_STORE", "off", 1);

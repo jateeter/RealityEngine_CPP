@@ -25,8 +25,8 @@ Json entry_json(const TrajectoryEntry& e, const std::vector<RegionMapping>* keep
                       {"nonZero", nz}};
 }
 
-Json clock_json(const std::string& instance, const Retained& r) {
-  return Json::Object{{"instance", instance}, {"lamport", static_cast<double>(r.lamport)},
+Json clock_json(const Retained& r) {
+  return Json::Object{{"instance", r.instance}, {"lamport", static_cast<double>(r.lamport)},
                       {"step", static_cast<double>(r.step)}};
 }
 
@@ -69,9 +69,10 @@ void Retention::on_reset(const std::map<std::string, Machine>&) {
   base_.clear();
   baseSet_ = false;
   steps_.clear();
+  restored_.reset();
 }
 
-void Retention::on_step(long step, long long lamport, const TrajectoryEntry* isre, const TrajectoryEntry* osre,
+void Retention::on_step(long step, const std::string& instance, long long lamport, const TrajectoryEntry* isre, const TrajectoryEntry* osre,
                         const SimulationStep& sim, const std::map<std::string, Machine>& running, size_t limit) {
   if (steps_.empty() && !baseSet_) {
     base_.clear();
@@ -81,8 +82,10 @@ void Retention::on_step(long step, long long lamport, const TrajectoryEntry* isr
           if (ev.isInitial) base_.push_back({m.name, sid, eid, false});
     baseSet_ = true;
   }
+  restored_.reset();
   Retained r;
   r.step = step;
+  r.instance = instance;
   r.lamport = lamport;
   if (isre) r.isre = *isre;
   if (osre) r.osre = *osre;
@@ -96,10 +99,11 @@ void Retention::on_step(long step, long long lamport, const TrajectoryEntry* isr
   }
 }
 
-void Retention::restore(std::vector<kline::ActiveEntry> base) {
-  base_ = std::move(base);
+void Retention::restore(std::vector<kline::ActiveEntry> live, Json kline, Json arbitration) {
+  base_ = std::move(live);
   baseSet_ = true;
   steps_.clear();
+  restored_ = RestorePoint{std::move(kline), std::move(arbitration)};
 }
 
 const Retained* Retention::at(long step) const {
@@ -114,7 +118,49 @@ std::optional<std::vector<kline::ActiveEntry>> Retention::before(long step) cons
   return std::nullopt;
 }
 
+namespace {
+
+Json body_of(const CaptureRequest& req, Json kline, Json arbitration) {
+  Json body = Json::Object{
+    {"format", "re-snapshot/1"},
+    {"corpus", Json::Object{{"algorithm", "sha256/resident-declared-v1"}, {"fingerprint", req.fingerprint},
+                            {"machines", static_cast<double>(req.machines)}}},
+    {"controls", req.controls},
+    {"machineControls", req.machineControls},
+    {"machineOverrides", req.machineOverrides},
+    {"kline", std::move(kline)},
+    {"arbitration", std::move(arbitration)}};
+  body.object()["digest"] = digest_of(body);
+  return body;
+}
+
+// Right after a restore (#904): the restored K-line, when the request asks for
+// its scope and span or leaves them out.
+std::optional<Json> capture_restored(const RestorePoint& rp, const CaptureRequest& req, Error& error) {
+  const Json& kl = rp.kline;
+  bool same = true;
+  if (req.scope) {
+    std::set<std::string> restored;
+    if (kl.at("scope").is_array()) for (const auto& n : kl.at("scope").array()) restored.insert(n.as_string());
+    same = kl.at("scope").is_array() && restored == *req.scope;
+  } else if (req.scopeGiven) {
+    same = kl.at("scope").is_string();
+  }
+  const long from = static_cast<long>(kl.at("span").at("from").as_number());
+  const long to = static_cast<long>(kl.at("span").at("to").as_number());
+  if (req.from && *req.from != from) same = false;
+  if (req.to && *req.to != to) same = false;
+  if (!same) {
+    error = {410, Json::Object{{"error", "no step is retained since the restore; only the restored snapshot is capturable"}}};
+    return std::nullopt;
+  }
+  return body_of(req, kl, rp.arbitration);
+}
+
+}  // namespace
+
 std::optional<Json> capture(const Retention& r, const CaptureRequest& req, Error& error) {
+  if (r.steps().empty() && r.restored()) return capture_restored(*r.restored(), req, error);
   if (r.steps().empty()) {
     error = {410, Json::Object{{"error", "no step is retained"}}};
     return std::nullopt;
@@ -190,24 +236,14 @@ std::optional<Json> capture(const Retention& r, const CaptureRequest& req, Error
   Json::Array sharedJson;
   for (int c : shared) sharedJson.emplace_back(static_cast<double>(c));
 
-  Json body = Json::Object{
-    {"format", "re-snapshot/1"},
-    {"corpus", Json::Object{{"algorithm", "sha256/resident-declared-v1"}, {"fingerprint", req.fingerprint},
-                            {"machines", static_cast<double>(req.machines)}}},
-    {"controls", req.controls},
-    {"machineControls", req.machineControls},
-    {"machineOverrides", req.machineOverrides},
-    {"kline", Json::Object{
+  return body_of(req, Json::Object{
       {"scope", scopeJson},
       {"span", Json::Object{{"from", static_cast<double>(from)}, {"to", static_cast<double>(to)}}},
-      {"clocks", Json::Object{{"from", clock_json(req.instance, *r.at(from))}, {"to", clock_json(req.instance, *r.at(to))}}},
+      {"clocks", Json::Object{{"from", clock_json(*r.at(from))}, {"to", clock_json(*r.at(to))}}},
       {"activeBefore", actives_json(only(*before, req.scope))},
       {"pairs", pairs},
       {"activeAfter", actives_json(only(r.at(to)->after, req.scope))},
-      {"sharedCells", sharedJson}}},
-    {"arbitration", req.arbitration}};
-  body.object()["digest"] = digest_of(body);
-  return body;
+      {"sharedCells", sharedJson}}, req.arbitration);
 }
 
 std::string digest_of(const Json& body) {

@@ -24,6 +24,9 @@ namespace reality::snapshot {
 
 struct Retained {
   long step = 0;
+  // The clock the step committed under: the instance that committed it and
+  // its lamport (RealityEngine_CI#904).
+  std::string instance;
   long long lamport = 0;
   TrajectoryEntry isre, osre;
   std::vector<kline::Op> ops;
@@ -35,15 +38,26 @@ std::vector<kline::ActiveEntry> actives(const std::map<std::string, Machine>& ru
 // The canonical active-list JSON: ordered by (machine, sequence, event) bytes.
 Json actives_json(std::vector<kline::ActiveEntry> list);
 
+// What a restore re-established (RealityEngine_CI#904): until the next step a
+// capture returns it, so restore then capture is an identity. Its clocks keep
+// the instance that committed those steps, which on a sandbox replica is the
+// source, never the replica.
+struct RestorePoint {
+  Json kline;
+  Json arbitration;
+};
+
 class Retention {
 public:
   // At boot and after a reset: the state the first retained step starts from.
   void on_reset(const std::map<std::string, Machine>& running);
-  void on_step(long step, long long lamport, const TrajectoryEntry* isre, const TrajectoryEntry* osre,
+  void on_step(long step, const std::string& instance, long long lamport, const TrajectoryEntry* isre, const TrajectoryEntry* osre,
                const SimulationStep& sim, const std::map<std::string, Machine>& running, size_t limit);
-  // After a corpus restore: nothing retained, and the restored list is the base.
-  void restore(std::vector<kline::ActiveEntry> base);
+  // After any restore: nothing retained, the live list is the base of the next
+  // step, and the restored snapshot is the restore point until that step.
+  void restore(std::vector<kline::ActiveEntry> live, Json kline, Json arbitration);
   const std::deque<Retained>& steps() const { return steps_; }
+  const std::optional<RestorePoint>& restored() const { return restored_; }
   const Retained* at(long step) const;
   // The list before `step`: after step-1, or the base when it is the first.
   std::optional<std::vector<kline::ActiveEntry>> before(long step) const;
@@ -52,6 +66,7 @@ private:
   std::vector<kline::ActiveEntry> base_;
   bool baseSet_ = false;  // a restore sets it; otherwise the initial events at the first step
   std::deque<Retained> steps_;
+  std::optional<RestorePoint> restored_;
 };
 
 struct Error {
@@ -61,8 +76,8 @@ struct Error {
 
 struct CaptureRequest {
   std::optional<std::set<std::string>> scope;  // nullopt: the corpus
+  bool scopeGiven = false;                      // the request named its scope ("corpus" or a list)
   std::optional<long> from, to;
-  std::string instance;
   std::string fingerprint;
   size_t machines = 0;
   Json controls, machineControls, machineOverrides, arbitration;
